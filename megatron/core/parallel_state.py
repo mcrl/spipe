@@ -50,12 +50,15 @@ _DATA_PARALLEL_GLOBAL_RANKS = None
 # Memory buffers to avoid dynamic memory allocation
 _GLOBAL_MEMORY_BUFFER = None
 
+# Whether spiral pipeline parallel is enable or not
+_SPIRAL_PIPELINE_PARALLEL = None
 
 def initialize_model_parallel(
     tensor_model_parallel_size: int = 1,
     pipeline_model_parallel_size: int = 1,
     virtual_pipeline_model_parallel_size: Optional[int] = None,
     pipeline_model_parallel_split_rank: Optional[int] = None,
+    spiral_pipeline_parallel: bool = False,
     use_fp8: bool = False,
 ) -> None:
     """Initialize model data parallel groups.
@@ -143,6 +146,10 @@ def initialize_model_parallel(
         global _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
         _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = 0
         _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = virtual_pipeline_model_parallel_size
+
+    if spiral_pipeline_parallel:
+        global _SPIRAL_PIPELINE_PARALLEL
+        _SPIRAL_PIPELINE_PARALLEL = True
 
     if pipeline_model_parallel_split_rank is not None:
         global _PIPELINE_MODEL_PARALLEL_SPLIT_RANK
@@ -486,6 +493,13 @@ def is_pipeline_stage_at_split():
             is_pipeline_stage_after_split(rank+1)
 
 
+def is_spiral_pipeline_parallel():
+    """Return true if spiral pipeline parallel is enabled."""
+    if _SPIRAL_PIPELINE_PARALLEL is None:
+        return False
+    return True
+
+
 def get_virtual_pipeline_model_parallel_rank():
     """Return the virtual pipeline-parallel rank."""
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
@@ -611,3 +625,5 @@ def destroy_model_parallel():
     _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
+    global _SPIRAL_PIPELINE_PARALLEL
+    _SPIRAL_PIPELINE_PARALLEL = None

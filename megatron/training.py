@@ -231,17 +231,37 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         assert model_type != ModelType.encoder_and_decoder, \
             "Interleaved schedule not supported for model with both encoder and decoder"
         model = []
-        for i in range(args.virtual_pipeline_model_parallel_size):
-            mpu.set_virtual_pipeline_model_parallel_rank(i)
-            # Set pre_process and post_process only after virtual rank is set.
-            pre_process = mpu.is_pipeline_first_stage()
-            post_process = mpu.is_pipeline_last_stage()
-            this_model = model_provider_func(
-                pre_process=pre_process,
-                post_process=post_process
-            )
-            this_model.model_type = model_type
-            model.append(this_model)
+
+        if mpu.is_spiral_pipeline_parallel():
+            # TODO(mcrl) This codeblock is temporary to test the spiral scheduler execution.
+            origin_pipeline_parallel_rank = mpu.get_pipeline_model_parallel_rank()
+            for i in range(args.virtual_pipeline_model_parallel_size):
+                mpu.set_virtual_pipeline_model_parallel_rank(i)
+
+                for j in range(mpu.get_pipeline_model_parallel_world_size()):
+                    mpu.set_pipeline_model_parallel_rank(j)
+                    # Set pre_process and post_process only after virtual rank is set.
+                    pre_process = mpu.is_pipeline_first_stage()
+                    post_process = mpu.is_pipeline_last_stage()
+                    this_model = model_provider_func(
+                        pre_process=pre_process,
+                        post_process=post_process
+                    )
+                    this_model.model_type = model_type
+                    model.append(this_model)
+            mpu.set_pipeline_model_parallel_rank(origin_pipeline_parallel_rank)
+        else:
+            for i in range(args.virtual_pipeline_model_parallel_size):
+                mpu.set_virtual_pipeline_model_parallel_rank(i)
+                # Set pre_process and post_process only after virtual rank is set.
+                pre_process = mpu.is_pipeline_first_stage()
+                post_process = mpu.is_pipeline_last_stage()
+                this_model = model_provider_func(
+                    pre_process=pre_process,
+                    post_process=post_process
+                )
+                this_model.model_type = model_type
+                model.append(this_model)
     else:
         pre_process = mpu.is_pipeline_first_stage()
         post_process = mpu.is_pipeline_last_stage()

@@ -3,6 +3,7 @@
 import contextlib
 from typing import Callable, Iterator, List, Optional, Union
 
+import nvtx
 import torch
 from torch.autograd.variable import Variable
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -126,7 +127,9 @@ def get_forward_backward_func():
     """
     pipeline_model_parallel_size = parallel_state.get_pipeline_model_parallel_world_size()
     if pipeline_model_parallel_size > 1:
-        if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:
+        if parallel_state.is_spiral_pipeline_parallel():
+            forward_backward_func = forward_backward_pipelining_with_spiral
+        elif parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:
             forward_backward_func = forward_backward_pipelining_with_interleaving
         else:
             forward_backward_func = forward_backward_pipelining_without_interleaving
@@ -189,9 +192,7 @@ def custom_backward(output, grad_output):
     )
 
 
-
-
-
+@nvtx.annotate("Forward", color="green")
 def forward_step(forward_step_func,
                  data_iterator,
                  model,
@@ -201,7 +202,8 @@ def forward_step(forward_step_func,
                  timers,
                  collect_non_loss_data=False,
                  autocast_dtype=torch.float,
-                 enable_autocast=False):
+                 enable_autocast=False,
+                 is_last_stage=None):
     """Forward step for passed-in model.
 
     If first stage, input tensor is obtained from data_iterator, otherwise
@@ -226,7 +228,10 @@ def forward_step(forward_step_func,
     with context_manager:
         output_tensor, loss_func = forward_step_func(data_iterator, model)
 
-    if parallel_state.is_pipeline_last_stage():
+    if is_last_stage is None:
+        is_last_stage = parallel_state.is_pipeline_last_stage()
+
+    if is_last_stage:
         if not collect_non_loss_data:
             output_tensor = loss_func(output_tensor)
             loss, loss_reduced = output_tensor
@@ -252,6 +257,7 @@ def forward_step(forward_step_func,
     return [output_tensor]
 
 
+@nvtx.annotate("Backward", color="yellow")
 def backward_step(grad_scaler, input_tensor, output_tensor,
                   output_tensor_grad, model_type, timers, deallocate_pipeline_outputs=False):
     """Backward step through passed-in output tensor.
@@ -1218,5 +1224,259 @@ def forward_backward_pipelining_without_interleaving(*,
         enable_grad_sync()
         if grad_sync_func is not None:
             grad_sync_func(model.parameters())
+
+    return forward_data_store
+
+
+def forward_backward_pipelining_with_spiral(*,
+                                            forward_step_func,
+                                            data_iterator: Union[Iterator, List[Iterator]],
+                                            model: Union[torch.nn.Module, List[torch.nn.Module]],
+                                            num_microbatches: int,
+                                            dtype: torch.dtype,
+                                            tensor_shape: Shape,
+                                            decoder_seq_length: Optional[int] = None,
+                                            grad_scaler: Callable = None,
+                                            sequence_parallel: bool = False,
+                                            overlap_p2p_comm: bool = False,
+                                            batch_p2p_comm: bool = True,
+                                            forward_only: bool = False,
+                                            timers: Callable = None,
+                                            collect_non_loss_data: bool = False,
+                                            enable_autocast: bool = False,
+                                            deallocate_pipeline_outputs: bool = False,
+                                            no_sync_func: Optional[Callable] = None,
+                                            grad_sync_func: Optional[Callable] = None,
+                                            param_sync_func: Optional[Callable] = None,
+                                            ):
+    """Run sprial schedule, with communication between pipeline stages as needed.
+
+    Returns dictionary with losses if the last stage, empty dict otherwise."""
+    assert isinstance(model, list), \
+        "Spiral pipeline parallelism expected model chunking by stage"
+    assert isinstance(data_iterator, list), \
+        "Spiral pipeline parallelism expected each model chunk to have a data iterator"
+
+    if overlap_p2p_comm:
+        raise ValueError(
+            "Spiral pipeline parallelism does not support overlapping p2p communication")
+
+    if not batch_p2p_comm:
+        raise ValueError(
+            "Spiral pipeline parallelism only supports using batched p2p communication")
+
+    forward_data_store = []
+    if not forward_only:
+        input_tensor_ckpts = [[] for _ in range(len(model))]
+
+    pipeline_parallel_size = parallel_state.get_pipeline_model_parallel_world_size()
+    pipeline_parallel_rank = parallel_state.get_pipeline_model_parallel_rank()
+
+    if sequence_parallel:
+        seq_length, batch_size, hidden = tensor_shape
+        tensor_shape = (
+            seq_length // parallel_state.get_tensor_model_parallel_world_size(),
+            batch_size,
+            hidden,
+        )
+
+    model_type = get_model_type(model[0])
+    if model_type == ModelType.encoder_and_decoder:
+        raise RuntimeError(
+            "Spiral is not supported with an encoder and decoder model.")
+
+    if decoder_seq_length is not None and decoder_seq_length != tensor_shape[0]:
+        raise RuntimeError(
+            "Spiral is not supported with a different decoder sequence length.")
+
+    # model list holds all stages (Assume that stage is already prefetched)
+    num_total_stages = len(model)
+    num_chunks_per_pipeline_parallel_rank = num_total_stages // pipeline_parallel_size  # chunk per worker
+    num_forward_steps_per_minibatch = num_backward_steps_per_minibatch = num_microbatches * \
+        num_chunks_per_pipeline_parallel_rank
+
+    def get_stage_id(step_id, forward, rank=pipeline_parallel_rank):
+        """Helper method to get the model stage ID given the step number.
+        TODO(mcrl) need to consider multi-node
+        """
+        chunk_id = (step_id // num_microbatches) % num_chunks_per_pipeline_parallel_rank
+        stage_id = pipeline_parallel_size * chunk_id + rank
+        if not forward:
+            stage_id = (num_total_stages - stage_id - 1)
+        return stage_id
+
+    # activation checkpointing for recomputation in backward pass
+    if not forward_only:
+        # rank that execute backward of the current rank's forward stage
+        collated_rank = pipeline_parallel_size - pipeline_parallel_rank - 1
+        # rank that send input_tensor_ckpt (prev_rank of collated_rank)
+        ckpt_rank = (collated_rank - 1) % pipeline_parallel_size
+
+        # recv input_tensor_ckpt before start forward
+        num_pre_ckpt = pipeline_parallel_rank - ckpt_rank
+        for k in range(num_pre_ckpt):
+            input_tensor_ckpt = p2p_communication.recv_ckpt(ckpt_rank,
+                                                            tensor_shape,
+                                                            dtype=dtype,
+                                                            timers=timers)
+            # TODO(mcrl) need to consider when num_micro_batches < pipeline_size
+            input_tensor_ckpts[collated_rank].append(input_tensor_ckpt)
+
+    # Receive first input_tensor before forward pass
+    parallel_state.set_virtual_pipeline_model_parallel_rank(0)
+    input_tensor = p2p_communication.recv_forward(tensor_shape,
+                                                  dtype=dtype,
+                                                  timers=timers)
+
+    # Run forward passes.
+    for k in range(num_forward_steps_per_minibatch):
+        torch.cuda.nvtx.range_push(f'forward{k}')
+
+        stage_id = get_stage_id(k, forward=True)
+        chunk_id = stage_id // pipeline_parallel_size
+        parallel_state.set_virtual_pipeline_model_parallel_rank(chunk_id)
+
+        # forward step
+        # TODO(mcrl) if use torch.no_grad(), error occur in backward_step (x.retain_grad())
+        output_tensor = forward_step(forward_step_func,
+                                     data_iterator[stage_id],
+                                     model[stage_id],
+                                     num_microbatches,
+                                     input_tensor,
+                                     forward_data_store,
+                                     timers,
+                                     collect_non_loss_data,
+                                     dtype,
+                                     enable_autocast)
+
+        # activation checkpointing for recomputation in backward pass
+        if not forward_only:
+            # send input_tensor_ckpt
+            if k + num_pre_ckpt < 0 or k + num_pre_ckpt >= num_forward_steps_per_minibatch:
+                ckpt_src_rank = None
+            else:
+                ckpt_src_rank = ckpt_rank
+                ckpt_stage_id = get_stage_id(k + num_pre_ckpt, forward=True, rank=ckpt_src_rank) + 1
+            ckpt_dest_rank = ckpt_rank
+
+            if pipeline_parallel_rank == ckpt_rank:
+                if ckpt_stage_id < num_total_stages:
+                    input_tensor_ckpts[ckpt_stage_id].append(output_tensor)
+            else:
+                input_tensor_ckpt = p2p_communication.send_ckpt_recv_ckpt(
+                    output_tensor,
+                    recv_rank_id=ckpt_src_rank,
+                    send_rank_id=ckpt_dest_rank,
+                    tensor_shape=tensor_shape,
+                    dtype=dtype,
+                    timers=timers)
+
+                if input_tensor_ckpt is not None:
+                    input_tensor_ckpts[ckpt_stage_id].append(input_tensor_ckpt)
+
+        # Determine if tensor should be received from previous stage.
+        next_forward_stage_id = get_stage_id(k + 1, forward=True)
+        recv_prev = True
+        if pipeline_parallel_rank == 0:
+            if next_forward_stage_id == 0:
+                # if next stage is 0, use data_iter instead of input_tensor
+                recv_prev = False
+        if k == (num_forward_steps_per_minibatch - 1):
+            # if last forward step, only send without recv
+            recv_prev = False
+
+        # Don't send tensor downstream if on last stage.
+        if stage_id == num_total_stages - 1:
+            output_tensor = None
+
+        # send forward
+        input_tensor = p2p_communication.send_forward_recv_forward(
+            output_tensor, recv_prev=recv_prev,
+            tensor_shape=tensor_shape,
+            dtype=dtype,
+            timers=timers)
+        # deallocate_output_tensor(output_tensor, deallocate_pipeline_outputs)
+
+        torch.cuda.nvtx.range_pop()
+
+    if forward_only:
+        return forward_data_store
+
+    # Receive first output_tensor_grad before backward pass
+    parallel_state.set_virtual_pipeline_model_parallel_rank(0)  # TODO(mcrl) temporary working
+    output_tensor_grad = p2p_communication.recv_forward(tensor_shape,
+                                                        dtype=dtype,
+                                                        timers=timers)
+
+    # Run backward passes.
+    for k in range(num_backward_steps_per_minibatch):
+        torch.cuda.nvtx.range_push(f'back{k}')
+
+        stage_id = get_stage_id(k, forward=False)
+        chunk_id = stage_id // pipeline_parallel_size
+        parallel_state.set_virtual_pipeline_model_parallel_rank(chunk_id)
+
+        # recv remain input_tensor_ckpt
+        if num_pre_ckpt < 0:
+            input_tensor_ckpt = p2p_communication.recv_ckpt(ckpt_rank,
+                                                            tensor_shape,
+                                                            dtype=dtype,
+                                                            timers=timers)
+            # TODO(mcrl) need to consider when num_micro_batches < pipeline_size
+            input_tensor_ckpts[stage_id].append(input_tensor_ckpt)
+            num_pre_ckpt += 1
+
+        if stage_id == 0:
+            # if stage is 0, use data_iter instead of input_tensor
+            input_tensor_ckpt = None
+        else:
+            input_tensor_ckpt = input_tensor_ckpts[stage_id].pop(0)
+
+        # recompute forward
+        is_last_stage = stage_id == num_total_stages - 1
+        output_tensor = forward_step(forward_step_func,
+                                     data_iterator[stage_id],
+                                     model[stage_id],
+                                     num_microbatches,
+                                     input_tensor_ckpt,
+                                     [],
+                                     timers,
+                                     collect_non_loss_data,
+                                     dtype,
+                                     enable_autocast,
+                                     is_last_stage=is_last_stage)
+
+        # backward step
+        input_tensor_grad = backward_step(grad_scaler,
+                                          input_tensor_ckpt,
+                                          output_tensor,
+                                          output_tensor_grad,
+                                          model_type,
+                                          timers,
+                                          deallocate_pipeline_outputs)
+
+        # Determine if tensor should be received from previous stage.
+        next_backward_stage_id = get_stage_id(k + 1, forward=False)
+        recv_prev = True
+        if pipeline_parallel_rank == 0:
+            if next_backward_stage_id == num_total_stages - 1:
+                # if next stage is last stage, output_tensor_grad is not required
+                recv_prev = False
+        if k == (num_backward_steps_per_minibatch - 1):
+            # if last backward step, only send without recv
+            recv_prev = False
+
+        # Don't send tensor downstream if on last stage (stage 0 in backward)
+        if stage_id == 0:
+            input_tensor_grad = None
+
+        # send forward
+        output_tensor_grad = p2p_communication.send_forward_recv_forward(
+            input_tensor_grad, recv_prev=recv_prev,
+            tensor_shape=tensor_shape,
+            dtype=dtype,
+            timers=timers)
+
+        torch.cuda.nvtx.range_pop()
 
     return forward_data_store

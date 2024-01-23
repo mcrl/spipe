@@ -4,6 +4,7 @@ from functools import reduce
 import operator
 from typing import Optional, List, Union, Callable, Tuple
 
+import nvtx
 import torch
 
 from megatron import core
@@ -359,6 +360,7 @@ def _communicate(*, tensor_send_next: Optional[torch.Tensor],
     return tensor_recv_prev, tensor_recv_next, reqs
 
 
+@nvtx.annotate("recv_forward", color="cyan")
 def recv_forward(tensor_shape: Shape,
                  dtype: torch.dtype,
                  batch_p2p_comm: bool = True,
@@ -387,6 +389,7 @@ def recv_forward(tensor_shape: Shape,
     return input_tensor
 
 
+@nvtx.annotate("recv_backward", color="cyan")
 def recv_backward(tensor_shape: Shape,
                   dtype: torch.dtype,
                   batch_p2p_comm: bool = True,
@@ -413,6 +416,7 @@ def recv_backward(tensor_shape: Shape,
     return output_tensor_grad
 
 
+@nvtx.annotate("send_forward", color="cyan")
 def send_forward(output_tensor: torch.Tensor,
                  batch_p2p_comm: bool = True,
                  timers: Callable = None) -> None:
@@ -436,6 +440,7 @@ def send_forward(output_tensor: torch.Tensor,
             timers('forward-send').stop()
 
 
+@nvtx.annotate("send_backward", color="cyan")
 def send_backward(input_tensor_grad: torch.Tensor,
                   batch_p2p_comm: bool = True,
                   timers: Callable = None) -> None:
@@ -458,6 +463,7 @@ def send_backward(input_tensor_grad: torch.Tensor,
             timers('backward-send').stop()
 
 
+@nvtx.annotate("send_forward_recv_backward", color="cyan")
 def send_forward_recv_backward(output_tensor: torch.Tensor,
                                tensor_shape: Shape,
                                dtype: torch.dtype,
@@ -485,6 +491,7 @@ def send_forward_recv_backward(output_tensor: torch.Tensor,
     return output_tensor_grad
 
 
+@nvtx.annotate("send_backward_recv_forward", color="cyan")
 def send_backward_recv_forward(input_tensor_grad: torch.Tensor,
                                tensor_shape: Shape,
                                dtype: torch.dtype,
@@ -512,6 +519,7 @@ def send_backward_recv_forward(input_tensor_grad: torch.Tensor,
     return input_tensor
 
 
+@nvtx.annotate("send_forward_recv_forward", color="cyan")
 def send_forward_recv_forward(output_tensor: torch.Tensor,
                               recv_prev: bool,
                               tensor_shape: Shape,
@@ -541,6 +549,7 @@ def send_forward_recv_forward(output_tensor: torch.Tensor,
     return input_tensor
 
 
+@nvtx.annotate("send_backward_recv_backward", color="cyan")
 def send_backward_recv_backward(input_tensor_grad: torch.Tensor,
                                 recv_next: bool,
                                 tensor_shape: Shape,
@@ -570,6 +579,7 @@ def send_backward_recv_backward(input_tensor_grad: torch.Tensor,
     return output_tensor_grad
 
 
+@nvtx.annotate("send_forward_backward_recv_forward_backward", color="cyan")
 def send_forward_backward_recv_forward_backward(
         output_tensor: torch.Tensor,
         input_tensor_grad: torch.Tensor,
@@ -597,3 +607,83 @@ def send_forward_backward_recv_forward_backward(
     if timers is not None:
         timers('forward-backward-send-forward-backward-recv').stop()
     return input_tensor, output_tensor_grad
+
+
+def _communicate_by_rank_id(send_tensor: torch.Tensor,
+                            recv_rank_id: int,
+                            send_rank_id: int,
+                            tensor_shape: Shape,
+                            dtype: torch.dtype,
+                            batch_p2p_comm: bool = True,
+                            overlap_p2p_comm: bool = False) -> torch.Tensor:
+    """Batched recv from recv_rank_id and send to send_rank_id in pipeline.
+    TODO(mcrl) Additional implement needed to support overlap_p2p_comm
+    """
+    ops = []
+    group = get_pipeline_model_parallel_group()
+    recv_tensor = None
+
+    if send_tensor is not None and send_rank_id is not None:
+        send_handle = torch.distributed.P2POp(torch.distributed.isend,
+                                              send_tensor, send_rank_id, group)
+        ops.append(send_handle)
+
+    if recv_rank_id is not None:
+        recv_tensor = torch.empty(tensor_shape,
+                                  requires_grad=True,
+                                  device=torch.cuda.current_device(),
+                                  dtype=dtype)
+
+        recv_handle = torch.distributed.P2POp(torch.distributed.irecv,
+                                              recv_tensor, recv_rank_id, group)
+        ops.append(recv_handle)
+
+    if len(ops) > 0:
+        reqs = torch.distributed.batch_isend_irecv(ops)
+    else:
+        reqs = []
+
+    for req in reqs:
+        req.wait()
+
+    return recv_tensor
+
+
+@nvtx.annotate("recv_ckpt", color="cyan")
+def recv_ckpt(recv_rank_id: int,
+              tensor_shape: Shape,
+              dtype: torch.dtype,
+              timers: Callable = None) -> torch.Tensor:
+    """ Receive tensor from recv_rank_id in pipeline
+    """
+    if timers is not None:
+        timers('recv_ckpt', log_level=2).start()
+    input_tensor_ckpt = _communicate_by_rank_id(send_tensor=None,
+                                                recv_rank_id=recv_rank_id,
+                                                send_rank_id=None,
+                                                tensor_shape=tensor_shape,
+                                                dtype=dtype)
+    if timers is not None:
+        timers('recv_ckpt').stop()
+    return input_tensor_ckpt
+
+
+@nvtx.annotate("send_ckpt_recv_ckpt", color="cyan")
+def send_ckpt_recv_ckpt(send_tensor: torch.Tensor,
+                        recv_rank_id: int,
+                        send_rank_id: int,
+                        tensor_shape: Shape,
+                        dtype: torch.dtype,
+                        timers: Callable = None) -> torch.Tensor:
+    """Batched recv from recv_rank_id and send to send_rank_id in pipeline.
+    """
+    if timers is not None:
+        timers('send_ckpt_recv_ckpt', log_level=2).start()
+    input_tensor_ckpt = _communicate_by_rank_id(send_tensor=send_tensor,
+                                                recv_rank_id=recv_rank_id,
+                                                send_rank_id=send_rank_id,
+                                                tensor_shape=tensor_shape,
+                                                dtype=dtype)
+    if timers is not None:
+        timers('send_ckpt_recv_ckpt').stop()
+    return input_tensor_ckpt
