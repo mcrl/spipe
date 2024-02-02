@@ -20,7 +20,7 @@ from megatron.checkpointing import load_args_from_checkpoint
 from megatron.global_vars import set_global_variables
 from megatron.model.transformer import bias_dropout_add_fused_train
 from megatron.model.fused_bias_gelu import bias_gelu
-
+from megatron.spiral import SpiralBackend
 
 def initialize_megatron(extra_args_provider=None, args_defaults={},
                         ignore_unknown_args=False, allow_no_cuda=False):
@@ -39,6 +39,9 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
     # Parse arguments
     args = parse_args(extra_args_provider, ignore_unknown_args)
 
+    # Check MPI
+    _mpi_check(args)
+    
     if args.use_checkpoint_args or args_defaults.get('use_checkpoint_args', False):
         assert args.load is not None, '--use-checkpoints-args requires --load argument'
         load_args_from_checkpoint(args)
@@ -80,6 +83,9 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
 
         # Compile dependencies.
         _compile_dependencies()
+
+        # Init spiral backend
+        _spiral_backend_init()
 
         # No continuation function
         return None
@@ -299,3 +305,56 @@ def _warmup_jit_function():
             output = bias_dropout_add_fused_train(input, bias, residual, dropout_rate)
     del bias, input, residual, output
     torch.cuda.empty_cache()
+
+def _mpi_check(args):
+    if hasattr(args, 'megatron_mpi') and args.megatron_mpi:
+        from mpi4py import MPI
+        import subprocess
+        comm = MPI.COMM_WORLD
+        rank = comm.Get_rank()
+        world_size = comm.Get_size()
+
+        if hasattr(args, 'master_addr') and args.master_addr:
+            master_addr = args.master_addr
+        else:
+            master_addr = None
+            if rank == 0:
+                hostname_cmd = ["hostname -I"]
+                result = subprocess.check_output(hostname_cmd, shell=True)
+                master_addr = result.decode('utf-8').split()[0]
+            master_addr = comm.bcast(master_addr, root=0)
+        
+        if hasattr(args, 'master_port') and args.master_port:
+            master_port = args.master_port
+        else:
+            master_port = 29500
+
+        # Determine local rank by assuming hostnames are unique
+        proc_name = MPI.Get_processor_name()
+        all_procs = comm.allgather(proc_name)
+        local_rank = sum([i == proc_name for i in all_procs[:rank]])
+
+        os.environ['RANK'] = str(rank)
+        os.environ['WORLD_SIZE'] = str(world_size)
+        os.environ['LOCAL_RANK'] = str(local_rank)
+        args.rank = rank
+        args.world_size = world_size
+        args.local_rank = local_rank
+        os.environ['MASTER_ADDR'] = master_addr
+        os.environ['MASTER_PORT'] = str(master_port)
+
+        from megatron.utils import spiral_debug
+        spiral_debug(
+            "Discovered MPI settings of world_rank={}, local_rank={}, world_size={}, master_addr={}, master_port={}"
+            .format(os.environ['RANK'],
+                    os.environ['LOCAL_RANK'],
+                    os.environ['WORLD_SIZE'],
+                    os.environ['MASTER_ADDR'],
+                    os.environ['MASTER_PORT']))
+
+
+def _spiral_backend_init():
+    """ Initialize spiral backend """
+    args = get_args()
+    if hasattr(args, 'spiral_pipeline_parallel') and args.spiral_pipeline_parallel:
+        SpiralBackend()

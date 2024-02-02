@@ -681,7 +681,7 @@ def _add_training_args(parser):
                        '                      <batch size incerement> '
                        '                      <ramp-up samples> '
                        'For example:'
-                       '   --rampup-batch-size 16 8 300000 \ '
+                       '   --rampup-batch-size 16 8 300000 '
                        '   --global-batch-size 1024'
                        'will start with global batch size 16 and over '
                        ' (1024 - 16) / 8 = 126 intervals will increase'
@@ -988,7 +988,16 @@ def _add_distributed_args(parser):
                        'affects the encoder embedding.)')
     group.add_argument('--use-distributed-optimizer', action='store_true',
                        help='Use distributed optimizer.')
-
+    group.add_argument('--megatron-mpi', default=False, action='store_true',
+                       help='Run via MPI, this will attempt to discover the '
+                       'necessary variables to initialize torch distributed '
+                       'from the MPI environment')
+    group.add_argument('--master-port', default=29500, type=int,
+                        help='(optional) Port used by PyTorch distributed for '
+                        'communication during training.')
+    group.add_argument('--master-addr', default='', type=str,
+                       help='(optional) IP address of node 0, will be '
+                       'inferred via \'hostname -I\' if not specified.')
     return parser
 
 
