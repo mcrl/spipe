@@ -22,6 +22,10 @@ from megatron.model.transformer import bias_dropout_add_fused_train
 from megatron.model.fused_bias_gelu import bias_gelu
 from megatron.spiral import SpiralBackend
 
+import spiral_helper
+from megatron.spiral.debug import spiral_print
+
+
 def initialize_megatron(extra_args_provider=None, args_defaults={},
                         ignore_unknown_args=False, allow_no_cuda=False):
     """Set global variables, initialize distributed, and
@@ -182,6 +186,14 @@ def _initialize_distributed():
         world_size=args.world_size, rank=args.rank,
         timeout=timedelta(minutes=args.distributed_timeout_minutes))
 
+    spiral_pipeline_parallel_forward_virtual_size = None
+    spiral_pipeline_parallel_backward_virtual_size = None
+    # TODO (mcrl) Do some stage partitioning here or somewhere else
+    if args.spiral_pipeline_parallel:
+        spiral_pipeline_parallel_forward_virtual_size = 2
+        spiral_pipeline_parallel_backward_virtual_size = 2
+
+
     # Set the tensor model-parallel, pipeline model-parallel, and
     # data-parallel communicators.
     if device_count > 0:
@@ -192,7 +204,9 @@ def _initialize_distributed():
                                           args.pipeline_model_parallel_size,
                                           args.virtual_pipeline_model_parallel_size,
                                           args.pipeline_model_parallel_split_rank,
-                                          args.spiral_pipeline_parallel)
+                                          args.spiral_pipeline_parallel,
+                                          spiral_pipeline_parallel_forward_virtual_size,
+                                          spiral_pipeline_parallel_backward_virtual_size,)
             if args.rank == 0:
                 print(f'> initialized tensor model parallel with size '
                       f'{mpu.get_tensor_model_parallel_world_size()}')
@@ -343,8 +357,7 @@ def _mpi_check(args):
         os.environ['MASTER_ADDR'] = master_addr
         os.environ['MASTER_PORT'] = str(master_port)
 
-        from megatron.utils import spiral_debug
-        spiral_debug(
+        spiral_print(
             "Discovered MPI settings of world_rank={}, local_rank={}, world_size={}, master_addr={}, master_port={}"
             .format(os.environ['RANK'],
                     os.environ['LOCAL_RANK'],
@@ -357,4 +370,7 @@ def _spiral_backend_init():
     """ Initialize spiral backend """
     args = get_args()
     if hasattr(args, 'spiral_pipeline_parallel') and args.spiral_pipeline_parallel:
-        SpiralBackend()
+        torch_group = mpu.get_pipeline_model_parallel_group()
+        ranks = frozenset(torch.distributed.get_process_group_ranks(torch_group))
+        SpiralBackend(ranks)
+        spiral_helper.LazyConfigure(True) # logging

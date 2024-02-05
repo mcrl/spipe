@@ -39,7 +39,17 @@ from megatron.data.data_samplers import build_pretraining_data_loader
 from megatron.utils import calc_params_l2_norm
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
+
+from megatron.spiral import get_thunder_group, SpiralInitContext, ContextManagers
+from megatron.spiral.debug import spiral_print
+
+
+""" TODO (mcrl)
+SpiralPipe: Temporary comment out for now, due to latest torchvision support only python <= 3.11
+
 from megatron.model.vision.knn_monitor import compute_feature_bank
+
+"""
 
 
 def print_datetime(string):
@@ -146,6 +156,18 @@ def pretrain(train_valid_test_dataset_provider,
                                for data_iterators in all_data_iterators]
         test_data_iterator = [data_iterators[2]
                               for data_iterators in all_data_iterators]
+    elif mpu.is_spiral_pipeline_parallel():
+        all_data_iterators = [
+            build_train_valid_test_data_iterators(
+                train_valid_test_dataset_provider)
+            for _ in range(mpu.get_spiral_pipeline_parallel_forward_virtual_size())
+        ]
+        train_data_iterator = [data_iterators[0]
+                                 for data_iterators in all_data_iterators]
+        valid_data_iterator = [data_iterators[1]
+                                for data_iterators in all_data_iterators]
+        test_data_iterator = [data_iterators[2]
+                                for data_iterators in all_data_iterators]
     else:
         train_data_iterator, valid_data_iterator, test_data_iterator \
             = build_train_valid_test_data_iterators(
@@ -232,27 +254,42 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             "Interleaved schedule not supported for model with both encoder and decoder"
         model = []
 
-        if mpu.is_spiral_pipeline_parallel():
-            # TODO(mcrl) This codeblock is temporary to test the spiral scheduler execution.
-            origin_pipeline_parallel_rank = mpu.get_pipeline_model_parallel_rank()
-            for i in range(args.virtual_pipeline_model_parallel_size):
-                mpu.set_virtual_pipeline_model_parallel_rank(i)
+        for i in range(args.virtual_pipeline_model_parallel_size):
+            mpu.set_virtual_pipeline_model_parallel_rank(i)
+            # Set pre_process and post_process only after virtual rank is set.
+            pre_process = mpu.is_pipeline_first_stage()
+            post_process = mpu.is_pipeline_last_stage()
+            this_model = model_provider_func(
+                pre_process=pre_process,
+                post_process=post_process
+            )
+            this_model.model_type = model_type
+            model.append(this_model)
+    elif mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_spiral_pipeline_parallel():
+        assert model_type != ModelType.encoder_and_decoder, \
+            "SpiralPipe schedule not supported for model with both encoder and decoder"
+        
+        get_thunder_group().SetSpiralCPUAllocator()
+        init_contexts = [SpiralInitContext(enabled=True, dtype=args.params_dtype)]
+        model = []
 
-                for j in range(mpu.get_pipeline_model_parallel_world_size()):
-                    mpu.set_pipeline_model_parallel_rank(j)
-                    # Set pre_process and post_process only after virtual rank is set.
-                    pre_process = mpu.is_pipeline_first_stage()
-                    post_process = mpu.is_pipeline_last_stage()
-                    this_model = model_provider_func(
-                        pre_process=pre_process,
-                        post_process=post_process
-                    )
-                    this_model.model_type = model_type
-                    model.append(this_model)
-            mpu.set_pipeline_model_parallel_rank(origin_pipeline_parallel_rank)
-        else:
-            for i in range(args.virtual_pipeline_model_parallel_size):
-                mpu.set_virtual_pipeline_model_parallel_rank(i)
+        # Example: 
+        # _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = 3
+        # _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = 3
+        # _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = 4
+        #
+        #     | fvr 0 | fvr 1 | fvr 2 | bvr 2 | bvr 1 | bvr 0 |
+        # r0  | prep  |       |       | postp |       |       |
+        # r1  |       |       |       |       |       |       |
+        # r2  |       |       |       |       |       |       |
+        # r3  |       |       | postp |       |       | prep  |
+
+        with ContextManagers(init_contexts):
+            # Build forward
+            spiral_print(f"Building forward stages")
+            for i in range(mpu.get_spiral_pipeline_parallel_forward_virtual_size()):
+                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(i)
+
                 # Set pre_process and post_process only after virtual rank is set.
                 pre_process = mpu.is_pipeline_first_stage()
                 post_process = mpu.is_pipeline_last_stage()
@@ -262,6 +299,35 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                 )
                 this_model.model_type = model_type
                 model.append(this_model)
+                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(None)
+            
+            # Sync after forward building
+            spiral_print(f"Done building forward stages")
+            torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
+
+            # Build backward
+            spiral_print(f"Building backward stages")
+            for i in range(mpu.get_spiral_pipeline_parallel_backward_virtual_size() - 1, -1, -1):
+                mpu.set_spiral_pipeline_parallel_backward_virtual_rank(i)
+
+                # Set pre_process and post_process only after virtual rank is set.
+                pre_process = mpu.is_pipeline_first_stage()
+                post_process = mpu.is_pipeline_last_stage()
+                this_model = model_provider_func(
+                    pre_process=pre_process,
+                    post_process=post_process
+                )
+                this_model.model_type = model_type
+                model.append(this_model)
+
+                mpu.set_spiral_pipeline_parallel_backward_virtual_rank(None)
+
+            # Sync after backward building
+            spiral_print(f"Done building backward stages")
+            torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
+        
+        get_thunder_group().UnsetSpiralCPUAllocator()
+        
     else:
         pre_process = mpu.is_pipeline_first_stage()
         post_process = mpu.is_pipeline_last_stage()
@@ -326,6 +392,9 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         model = [Float16Module(model_module, args) for model_module in model]
 
     if wrap_with_ddp:
+        if mpu.is_spiral_pipeline_parallel():
+            import warnings
+            warnings.warn("SpiralPipe currently does not support DDP. Correctness is not guaranteed.")
         if args.DDP_impl == 'torch':
             i = torch.cuda.current_device()
             model = [torchDDP(model_module, device_ids=[i], output_device=i,
@@ -830,9 +899,13 @@ def evaluate(forward_step_func,
     """Evaluation."""
     args = get_args()
 
+
+    """ TODO (mcrl)
+    SpiralPipe: Temporary comment out for now, due to latest torchvision support only python <= 3.11
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
         compute_feature_bank(model)
-
+    """
+    
     # Turn on evaluation mode which disables dropout.
     for model_module in model:
         model_module.eval()

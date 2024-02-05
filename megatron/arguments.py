@@ -366,6 +366,19 @@ def validate_args(args, defaults={}):
                     args.retro_num_retrieved_chunks * \
                     retro_args.retro_gpt_chunk_length
                 set_retro_args(retro_args)
+    
+    # SpiralPipe checks
+    if args.spiral_pipeline_parallel:
+        if args.standalone_embedding_stage:
+            raise RuntimeError(
+                "Standalone embedding stage is not supported with SpiralPipe")
+        if args.virtual_pipeline_model_parallel_size is not None:
+            raise RuntimeError(
+                "Virtual pipeline model parallel size is not supported with SpiralPipe")
+        if args.params_dtype != torch.float:
+            raise RuntimeError(
+                "SpiralPipe only supports fp32")
+            
 
     # Print arguments.
     _print_args("arguments", args)

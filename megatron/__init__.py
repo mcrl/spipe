@@ -15,6 +15,4 @@ from .initialize  import initialize_megatron
 
 from .utils import (print_rank_0,
                     is_last_rank,
-                    print_rank_last,
-                    spiral_debug,
-                    spiral_report_memory)
+                    print_rank_last,)

@@ -19,7 +19,8 @@
 
 const char* sharedMemoryName = "/thunder";
 
-const size_t kCpuBufferSize = 1L << 30; // 1GB, per host
+// const size_t kCpuBufferSize = 1L << 30; // 1GB, per host
+const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
 
 #define USE_MPI_SHARED_MEMORY 0
 

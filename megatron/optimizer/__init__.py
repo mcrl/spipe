@@ -1,9 +1,14 @@
 # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
 
+import warnings
+
 from apex.optimizers import FusedAdam as Adam
 from apex.optimizers import FusedSGD as SGD
 
 from megatron import get_args
+from megatron.core import mpu
+from megatron.spiral.init_context import SpiralParamStatus
+from megatron.spiral.utils import is_spiral_param
 
 from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
@@ -23,18 +28,34 @@ def get_param_groups(modules,
     wd_scale_lr = []
     no_wd_no_scale_lr = []
     no_wd_scale_lr = []
+
     for module in modules:
+        
+        # NOTE (mcrl) Skip forward stages since only the backward stages should be dealt with optimizer.
+        if mpu.is_spiral_pipeline_parallel():
+            if hasattr(module, "is_spiral_pipeline_parallel_forward_stage") and getattr(module, "is_spiral_pipeline_parallel_forward_stage") == True:
+                continue
+
         for name, param in module.named_parameters():
             if not param.requires_grad:
                 continue
 
             if no_weight_decay_cond is not None:
+                if mpu.is_spiral_pipeline_parallel():
+                    warnings.warn("no_weight_decay_cond is not supported in spiral pipeline parallelism. Consequencies are not known.")
                 no_wd = no_weight_decay_cond(name, param)
             else:
                 # do not regularize biases nor Norm parameters
                 no_wd = name.endswith(".bias") or len(param.shape) == 1
+                if mpu.is_spiral_pipeline_parallel():
+                    assert(is_spiral_param(param))
+                    assert(param.spiral_status is not SpiralParamStatus.INFLIGHT)
+                    if param.spiral_status == SpiralParamStatus.REMOTE:
+                        no_wd = name.endswith(".bias") or len(param.spiral_shape) == 1
 
             if scale_lr_cond is not None:
+                if mpu.is_spiral_pipeline_parallel():
+                    warnings.warn("scale_lr_cond is not supported in spiral pipeline parallelism. Consequencies are not known.")
                 scale_lr = scale_lr_cond(name, param)
             else:
                 scale_lr = False
@@ -67,6 +88,7 @@ def get_megatron_optimizer(model,
     args = get_args()
 
     # Base optimizer.
+    # NOTE (mcrl) param_groups currently contains only the assigned bwd stage's parameters. 
     param_groups = get_param_groups(model,
                                     no_weight_decay_cond,
                                     scale_lr_cond,
@@ -97,7 +119,8 @@ def get_megatron_optimizer(model,
     #   from the MixedPrecisionOptimizer, which manages any optimizer where
     #   the model params and main params are distinct.
     if args.fp16 or args.bf16 or args.use_distributed_optimizer:
-
+        if mpu.is_spiral_pipeline_parallel():
+            raise RuntimeError("SpiralPipe currently only supports FP32 optimizer.")
         # Grad scaler:
         #    if loss-scale is provided, instantiate the constant scaler.
         #    if we are using fp16 and loss-scale is not present, use a

@@ -16,6 +16,8 @@ from .transformer import ParallelTransformer
 from .utils import get_linear_layer
 from .utils import init_method_normal, scaled_init_method_normal
 
+from megatron.spiral.debug import spiral_print
+
 
 def parallel_lm_logits(input_, word_embeddings_weight, parallel_output,
                        bias=None):
@@ -54,6 +56,8 @@ def get_language_model(num_tokentypes, add_pooler,
                        add_decoder=False,
                        decoder_attn_mask_type=AttnMaskType.causal,
                        pre_process=True, post_process=True):
+    spiral_print(f"get_language_model(pre_process={pre_process}, post_process={post_process})")
+
     """Build language model and return along with the key to save."""
     args = get_args()
 
@@ -145,6 +149,8 @@ class Embedding(MegatronModule):
                  init_method,
                  num_tokentypes=0,
                  embedding_weights_in_fp32=False):
+        spiral_print(f"Embedding:__init__")
+
         super(Embedding, self).__init__()
 
         self.hidden_size = hidden_size
@@ -168,6 +174,7 @@ class Embedding(MegatronModule):
         # Position embedding (serial).
         self.add_position_embedding = args.add_position_embedding
         if self.add_position_embedding:
+            spiral_print(f"Position Embedding:__init__")
             self.position_embeddings = torch.nn.Embedding(
                 max_sequence_length, self.hidden_size)
             self._position_embeddings_key = 'position_embeddings'
@@ -348,6 +355,8 @@ class TransformerLanguageModel(MegatronModule):
                  add_pooler=False,
                  pre_process=True,
                  post_process=True):
+        spiral_print(f"TransformerLanguageModel:__init__(pre_process={pre_process}, post_process={post_process})")    
+    
         args = get_args()
         # TODO: passing share_word_embeddings=False will not work correctly for T5 and embeddings will not be synced. Fix later for T5.
         if args.untie_embeddings_and_output_weights: assert not add_decoder

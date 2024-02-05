@@ -3,8 +3,6 @@
 """General utilities."""
 
 import sys
-import psutil
-import os
 
 import torch
 from torch.nn.parallel import DistributedDataParallel as torchDDP
@@ -213,68 +211,3 @@ def print_rank_last(message):
             print(message, flush=True)
     else:
         print(message, flush=True)
-
-
-""" SpiralPipe utilities """
-
-def spiral_debug(message):
-    """ SpiralPipe debug logger """
-    if True:
-        if torch.distributed.is_initialized():
-            print(f'[Spiral] [{torch.distributed.get_rank()}] ' + message, flush=True)
-        else:
-            print(f'[Spiral] ' + message, flush=True)
-
-
-def spiral_report_memory(message, gpu=True, cpu=False):
-    """ SpiralPipe memory report """
-    giga_bytes = 1024 ** 3
-
-    string = message
-    if gpu:
-        string += ' | GPU: {} GB'.format(
-            round(torch.cuda.memory_allocated() / giga_bytes, 2))
-        string += ' | MAX_GPU: {} GB'.format(
-            round(torch.cuda.max_memory_allocated() / giga_bytes, 2))
-    if cpu:
-        rss_used = psutil.Process(os.getpid()).memory_info().rss
-        string += ' | CPU: {} GB'.format(
-            round(rss_used / giga_bytes, 2))
-    spiral_debug(string)
-
-
-def test_spiral_report_memory():
-    """ Test spiral_report_memory 
-    
-    Expected output:
-        [Spiral] [0] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [2] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [3] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [1] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-
-        [Spiral] [0] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 2.01 GB
-        [Spiral] [1] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [2] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [3] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-
-        [Spiral] [0] after gpu transfer | GPU: 0.37 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [1] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [2] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [3] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB    
-    """
-
-    spiral_report_memory('before', gpu=True, cpu=True)
-
-    torch.distributed.barrier()
-
-    if torch.distributed.get_rank() == 0:
-        tmp_tensor = torch.zeros(10**8, dtype=torch.float32).cpu()
-    
-    torch.distributed.barrier()
-    spiral_report_memory('after cpu alloc', gpu=True, cpu=True)
-
-    if torch.distributed.get_rank() == 0:
-        tmp_tensor = tmp_tensor.cuda()
-    
-    torch.distributed.barrier()
-    spiral_report_memory('after gpu transfer', gpu=True, cpu=True)

@@ -18,7 +18,7 @@ public:
   void free(void* const ptr);
   at::DeleterFnPtr raw_deleter() const override;
 
-  static constexpr bool debug = true; // TODO (mcrl) remove when release
+  static constexpr bool debug = false; // TODO (mcrl) remove when release
 
 private:
   struct Block {

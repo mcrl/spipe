@@ -3,8 +3,12 @@ from collections.abc import Mapping
 import concurrent.futures
 import os
 import sys
+import warnings
 
 import torch
+
+from megatron.core import mpu
+
 
 def add_arguments(parser):
     group = parser.add_argument_group(title='Megatron saver')
@@ -20,6 +24,9 @@ def add_arguments(parser):
                        'in the input checkpoint if provided by the loader, otherwise to 1')
 
 def save_checkpoint(queue, args):
+    # TODO (mcrl) add support for checkpointing
+    if mpu.is_spiral_pipeline_parallel():
+        warnings.warn("SpiralPipe currently does not guarantee correct checkpointing.")
 
     # Search in directory above this
     sys.path.append(os.path.abspath(

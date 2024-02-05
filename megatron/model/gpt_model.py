@@ -14,6 +14,8 @@ from .language_model import get_language_model
 from .utils import init_method_normal
 from .utils import scaled_init_method_normal
 
+from megatron.spiral.debug import spiral_print
+
 
 def post_language_model_processing(lm_output, labels, logit_weights,
                                    parallel_output,
@@ -50,6 +52,8 @@ class GPTModel(MegatronModule):
                  parallel_output=True,
                  pre_process=True,
                  post_process=True):
+        spiral_print(f"GPTModel:__init__")
+
         args = get_args()
         super(GPTModel, self).__init__(share_word_embeddings=not args.untie_embeddings_and_output_weights)
 

@@ -8,6 +8,7 @@ from torch.nn.parameter import Parameter
 
 from megatron import get_args
 from megatron.core import mpu, tensor_parallel
+from megatron.spiral.debug import spiral_print
 
 
 _FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor)
@@ -100,22 +101,43 @@ class MegatronModule(torch.nn.Module):
                 MegatronModule.embedding_warning_printed = True
             return
 
-        # Ensure that first and last stages have the same initial parameter
-        # values.
-        if mpu.is_rank_in_embedding_group():
-            torch.distributed.all_reduce(self.word_embeddings_weight().data,
-                                         group=mpu.get_embedding_group())
+        if not mpu.is_spiral_pipeline_parallel():
+            # Ensure that first and last stages have the same initial parameter
+            # values.
+            if mpu.is_rank_in_embedding_group():
+                torch.distributed.all_reduce(self.word_embeddings_weight().data,
+                                            group=mpu.get_embedding_group())
+        else:
+            # Sync between prep-postp stages
+            if mpu.is_rank_in_embedding_group(ignore_virtual=True):
+                # TODO (mcrl) Resolve circular waiting with position embedding sync
+                spiral_print("TODO (mcrl) implement sync word embedding between stages")
 
-        # Ensure that encoder(first stage) and decoder(split stage) position
-        # embeddings have the same initial parameter values
-        # NOTE: We don't currently support T5 with the interleaved schedule.
-        if mpu.is_rank_in_position_embedding_group() and \
-                args.pipeline_model_parallel_split_rank is not None:
-            # TODO: Support tokentype embedding.
-            self.language_model.embedding.cuda()
-            position_embeddings = self.language_model.embedding.position_embeddings
-            torch.distributed.all_reduce(position_embeddings.weight.data,
-                                         group=mpu.get_position_embedding_group())
+                # torch.distributed.all_reduce(self.word_embeddings_weight().spiral_tensor.data,
+                #                             group=mpu.get_spiral_embedding_group_gloo())
+                # spiral_print("word_embeddings sync between stages done")
+
+        if not mpu.is_spiral_pipeline_parallel():
+            # Ensure that encoder(first stage) and decoder(split stage) position
+            # embeddings have the same initial parameter values
+            # NOTE: We don't currently support T5 with the interleaved schedule.
+            if mpu.is_rank_in_position_embedding_group() and \
+                    args.pipeline_model_parallel_split_rank is not None:
+                # TODO: Support tokentype embedding.
+                self.language_model.embedding.cuda()
+                position_embeddings = self.language_model.embedding.position_embeddings
+                torch.distributed.all_reduce(position_embeddings.weight.data,
+                                            group=mpu.get_position_embedding_group())
+        else:
+            # Sync between prep stages
+            if mpu.is_rank_in_position_embedding_group() and mpu.is_pipeline_first_stage():
+                # TODO (mcrl) Resolve circular waiting with word embedding sync
+                spiral_print("TODO (mcrl) implement sync position embedding between prep stages")
+
+                # position_embeddings = self.language_model.embedding.position_embeddings
+                # torch.distributed.all_reduce(position_embeddings.weight.spiral_tensor.data,
+                #                             group=mpu.get_spiral_position_embedding_group_gloo())
+                # spiral_print("position_embeddings sync between postp stages done")
 
 
 def conversion_helper(val, conversion):

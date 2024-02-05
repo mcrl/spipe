@@ -15,8 +15,12 @@ _PIPELINE_MODEL_PARALLEL_GROUP = None
 _MODEL_PARALLEL_GROUP = None
 # Embedding group.
 _EMBEDDING_GROUP = None
+_SPIRAL_EMBEDDING_GROUP = None
+_SPIRAL_EMBEDDING_GROUP_GLOO = None
 # Position embedding group.
 _POSITION_EMBEDDING_GROUP = None
+_SPIRAL_POSITION_EMBEDDING_GROUP = None
+_SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = None
 _DATA_PARALLEL_GROUP_GLOO = None
@@ -35,9 +39,11 @@ _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
 
 # A list of ranks that have a copy of the embedding.
 _EMBEDDING_GLOBAL_RANKS = None
+_SPIRAL_EMBEDDING_GLOBAL_RANKS = None
 
 # A list of ranks that have a copy of the position embedding.
 _POSITION_EMBEDDING_GLOBAL_RANKS = None
+_SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None
 
 # A list of global ranks for each pipeline group to ease calculation of the source
 # rank when broadcasting from the first or last pipeline stage.
@@ -52,6 +58,10 @@ _GLOBAL_MEMORY_BUFFER = None
 
 # Whether spiral pipeline parallel is enable or not
 _SPIRAL_PIPELINE_PARALLEL = None
+_SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = None # should set rank value only when active
+_SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = None # should set rank value only when active
+_SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = None
+_SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = None
 
 def initialize_model_parallel(
     tensor_model_parallel_size: int = 1,
@@ -59,6 +69,8 @@ def initialize_model_parallel(
     virtual_pipeline_model_parallel_size: Optional[int] = None,
     pipeline_model_parallel_split_rank: Optional[int] = None,
     spiral_pipeline_parallel: bool = False,
+    spiral_pipeline_parallel_forward_virtual_size: Optional[int] = None,
+    spiral_pipeline_parallel_backward_virtual_size: Optional[int] = None,
     use_fp8: bool = False,
 ) -> None:
     """Initialize model data parallel groups.
@@ -98,6 +110,15 @@ def initialize_model_parallel(
             pipeline_model_parallel_size is 8 and
             pipeline_model_parallel_split_rank is 3, then ranks 0-2
             will be the encoder and ranks 3-7 will be the decoder.
+        
+        spiral_pipeline_parallel (bool, default = False):
+            Whether to use spiral pipeline parallel.
+        
+        spiral_pipeline_parallel_forward_virtual_size (int, optional):
+            The number of forward virtual stages that each spiral pipeline rank will have
+        
+        spiral_pipeline_parallel_backward_virtual_size (int, optional):
+            The number of backward virtual stages that each spiral pipeline rank will have
 
         use_fp8 (bool, default = False):
             Construct GPU groups needed for FP8 training, namely for
@@ -148,8 +169,20 @@ def initialize_model_parallel(
         _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = virtual_pipeline_model_parallel_size
 
     if spiral_pipeline_parallel:
+        if virtual_pipeline_model_parallel_size is not None:
+            raise RuntimeError("virtual pipeline parallel is not compatible with spiral pipeline parallel")
         global _SPIRAL_PIPELINE_PARALLEL
         _SPIRAL_PIPELINE_PARALLEL = True
+        global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
+        global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
+        global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
+        global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
+        _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = None
+        _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = None
+        if spiral_pipeline_parallel_forward_virtual_size is not None:
+            _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = spiral_pipeline_parallel_forward_virtual_size
+        if spiral_pipeline_parallel_backward_virtual_size is not None:
+            _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = spiral_pipeline_parallel_backward_virtual_size
 
     if pipeline_model_parallel_split_rank is not None:
         global _PIPELINE_MODEL_PARALLEL_SPLIT_RANK
@@ -204,10 +237,16 @@ def initialize_model_parallel(
     assert _PIPELINE_MODEL_PARALLEL_GROUP is None, \
         'pipeline model parallel group is already initialized'
     global _EMBEDDING_GROUP
+    global _SPIRAL_EMBEDDING_GROUP
+    global _SPIRAL_EMBEDDING_GROUP_GLOO
     global _EMBEDDING_GLOBAL_RANKS
+    global _SPIRAL_EMBEDDING_GLOBAL_RANKS
     assert _EMBEDDING_GROUP is None, 'embedding group is already initialized'
     global _POSITION_EMBEDDING_GROUP
+    global _SPIRAL_POSITION_EMBEDDING_GROUP
+    global _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO
     global _POSITION_EMBEDDING_GLOBAL_RANKS
+    global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
     assert _POSITION_EMBEDDING_GROUP is None, \
         'position embedding group is already initialized'
     for i in range(num_pipeline_model_parallel_groups):
@@ -229,6 +268,9 @@ def initialize_model_parallel(
                 if ranks[pipeline_model_parallel_split_rank] not in position_embedding_ranks:
                     position_embedding_ranks = [ranks[0],
                                        ranks[pipeline_model_parallel_split_rank]]
+            if _SPIRAL_PIPELINE_PARALLEL:
+                spiral_embedding_ranks = [ranks[0], ranks[-1]]
+                spiral_position_embedding_ranks = [ranks[0], ranks[-1]] # since forward and backward both have a prep stage
         else:
             embedding_ranks = ranks
             position_embedding_ranks = ranks
@@ -239,11 +281,29 @@ def initialize_model_parallel(
         if rank in ranks:
             _EMBEDDING_GLOBAL_RANKS = embedding_ranks
 
+        if _SPIRAL_PIPELINE_PARALLEL:
+            group = torch.distributed.new_group(spiral_embedding_ranks)
+            group_gloo = torch.distributed.new_group(spiral_embedding_ranks, backend="gloo")
+            if rank in spiral_embedding_ranks:
+                _SPIRAL_EMBEDDING_GROUP = group
+                _SPIRAL_EMBEDDING_GROUP_GLOO = group_gloo
+            if rank in ranks:
+                _SPIRAL_EMBEDDING_GLOBAL_RANKS = spiral_embedding_ranks
+
         group = torch.distributed.new_group(position_embedding_ranks)
         if rank in position_embedding_ranks:
             _POSITION_EMBEDDING_GROUP = group
         if rank in ranks:
             _POSITION_EMBEDDING_GLOBAL_RANKS = position_embedding_ranks
+
+        if _SPIRAL_PIPELINE_PARALLEL:
+            group = torch.distributed.new_group(spiral_position_embedding_ranks)
+            group_gloo = torch.distributed.new_group(spiral_position_embedding_ranks, backend="gloo")
+            if rank in spiral_position_embedding_ranks:
+                _SPIRAL_POSITION_EMBEDDING_GROUP = group
+                _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = group_gloo
+            if rank in ranks:
+                _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = spiral_position_embedding_ranks
 
     # Build the FP8 groups.
     global _AMAX_REDUCTION_GROUP
@@ -323,11 +383,39 @@ def get_embedding_group():
     return _EMBEDDING_GROUP
 
 
+def get_spiral_embedding_group():
+    """Get the embedding group the caller rank belongs to."""
+    assert _SPIRAL_EMBEDDING_GROUP is not None, \
+        'spiral embedding group is not initialized'
+    return _SPIRAL_EMBEDDING_GROUP
+
+
+def get_spiral_embedding_group_gloo():
+    """Get the embedding group-gloo the caller rank belongs to."""
+    assert _SPIRAL_EMBEDDING_GROUP_GLOO is not None, \
+        'spiral embedding group-gloo is not initialized'
+    return _SPIRAL_EMBEDDING_GROUP_GLOO
+
+
 def get_position_embedding_group():
     """Get the position embedding group the caller rank belongs to."""
     assert _POSITION_EMBEDDING_GROUP is not None, \
         'position embedding group is not initialized'
     return _POSITION_EMBEDDING_GROUP
+
+
+def get_spiral_position_embedding_group():
+    """Get the position embedding group the caller rank belongs to."""
+    assert _SPIRAL_POSITION_EMBEDDING_GROUP is not None, \
+        'spiral position embedding group is not initialized'
+    return _SPIRAL_POSITION_EMBEDDING_GROUP
+
+
+def get_spiral_position_embedding_group_gloo():
+    """Get the position embedding group-gloo the caller rank belongs to."""
+    assert _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO is not None, \
+        'spiral position embedding group-gloo is not initialized'
+    return _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO
 
 
 def get_amax_reduction_group():
@@ -411,6 +499,16 @@ def get_pipeline_model_parallel_split_rank():
 
 def is_pipeline_first_stage(ignore_virtual=False):
     """Return True if in the first pipeline model-parallel stage, False otherwise."""
+
+    # For spiral pipeline, lowest idx forward virtual stage and lowest idx backward virtual stage is the first stage
+    if is_spiral_pipeline_parallel():
+        _is_forward_virtual_first_stage = get_spiral_pipeline_parallel_forward_virtual_rank() == 0 and \
+        get_pipeline_model_parallel_rank() == 0
+        _is_backward_virtual_first_stage = get_spiral_pipeline_parallel_backward_virtual_rank() == 0 and \
+        get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
+        return _is_forward_virtual_first_stage or _is_backward_virtual_first_stage
+
+    # NOTE (mcrl) below is original logic
     if not ignore_virtual:
         if get_virtual_pipeline_model_parallel_world_size() is not None and \
             get_virtual_pipeline_model_parallel_rank() != 0:
@@ -420,6 +518,16 @@ def is_pipeline_first_stage(ignore_virtual=False):
 
 def is_pipeline_last_stage(ignore_virtual=False):
     """Return True if in the last pipeline model-parallel stage, False otherwise."""
+
+    # For spiral pipeline, highest idx forward virtual stage and highest idx backward virtual stage is the last stage
+    if is_spiral_pipeline_parallel():
+        _is_forward_virtual_last_stage = get_spiral_pipeline_parallel_forward_virtual_rank() == get_spiral_pipeline_parallel_forward_virtual_size() - 1 and \
+        get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
+        _is_backward_virtual_last_stage = get_spiral_pipeline_parallel_backward_virtual_rank() == get_spiral_pipeline_parallel_backward_virtual_size() - 1 and \
+        get_pipeline_model_parallel_rank() == 0
+        return _is_forward_virtual_last_stage or _is_backward_virtual_last_stage
+    
+    # NOTE (mcrl) below is original logic
     if not ignore_virtual:
         virtual_pipeline_model_parallel_world_size = \
             get_virtual_pipeline_model_parallel_world_size()
@@ -498,6 +606,62 @@ def is_spiral_pipeline_parallel():
     if _SPIRAL_PIPELINE_PARALLEL is None:
         return False
     return True
+
+
+def is_spiral_pipeline_parallel_forward_stage():
+    """Return true if current stage is a forward stage in spiral pipeline parallel."""
+    if not is_spiral_pipeline_parallel():
+        raise RuntimeError("is_spiral_pipeline_parallel_forward_stage is only valid when spiral pipeline parallel is enabled")
+    return get_spiral_pipeline_parallel_forward_virtual_rank() is not None and \
+        get_spiral_pipeline_parallel_backward_virtual_rank() is None
+
+
+def is_spiral_pipeline_parallel_backward_stage():
+    """Return true if current stage is a backward stage in spiral pipeline parallel."""
+    if not is_spiral_pipeline_parallel():
+        raise RuntimeError("is_spiral_pipeline_parallel_backward_stage is only valid when spiral pipeline parallel is enabled")
+    return get_spiral_pipeline_parallel_backward_virtual_rank() is not None and \
+        get_spiral_pipeline_parallel_forward_virtual_rank() is None
+
+
+def get_spiral_pipeline_parallel_forward_virtual_rank():
+    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
+    return _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
+
+
+def set_spiral_pipeline_parallel_forward_virtual_rank(rank):
+    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
+    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = rank
+
+
+def get_spiral_pipeline_parallel_backward_virtual_rank():
+    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
+    return _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
+
+
+def set_spiral_pipeline_parallel_backward_virtual_rank(rank):
+    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
+    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = rank
+
+
+def get_spiral_pipeline_parallel_forward_virtual_size():
+    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
+    return _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
+
+
+def set_spiral_pipeline_parallel_forward_virtual_size(size):
+    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
+    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = size
+
+
+def get_spiral_pipeline_parallel_backward_virtual_size():
+    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
+    return _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
+
+
+def set_spiral_pipeline_parallel_backward_virtual_world_size(size):
+    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
+    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = size
 
 
 def get_virtual_pipeline_model_parallel_rank():
@@ -605,12 +769,21 @@ def destroy_model_parallel():
     _PIPELINE_MODEL_PARALLEL_GROUP = None
     global _DATA_PARALLEL_GROUP
     _DATA_PARALLEL_GROUP = None
+    global _DATA_PARALLEL_GROUP_GLOO
+    _DATA_PARALLEL_GROUP_GLOO = None
+
     global _EMBEDDING_GROUP
     _EMBEDDING_GROUP = None
     global _POSITION_EMBEDDING_GROUP
     _POSITION_EMBEDDING_GROUP = None
+    global _EMBEDDING_GLOBAL_RANKS
+    _EMBEDDING_GLOBAL_RANKS = None
+    global _POSITION_EMBEDDING_GLOBAL_RANKS
+    _POSITION_EMBEDDING_GLOBAL_RANKS = None
+
     global _AMAX_REDUCTION_GROUP
     _AMAX_REDUCTION_GROUP = None
+
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK
     _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = None
     global _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE
@@ -625,5 +798,28 @@ def destroy_model_parallel():
     _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
+
+    # SpiralPipe
     global _SPIRAL_PIPELINE_PARALLEL
     _SPIRAL_PIPELINE_PARALLEL = None
+    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
+    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = None
+    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
+    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = None
+    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
+    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = None
+    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_WORLD_SIZE
+    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_WORLD_SIZE = None
+
+    global _SPIRAL_EMBEDDING_GROUP
+    _SPIRAL_EMBEDDING_GROUP = None
+    global _SPIRAL_EMBEDDING_GROUP_GLOO
+    _SPIRAL_EMBEDDING_GROUP_GLOO = None
+    global _SPIRAL_POSITION_EMBEDDING_GROUP
+    _SPIRAL_POSITION_EMBEDDING_GROUP = None
+    global _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO
+    _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
+    global _SPIRAL_EMBEDDING_GLOBAL_RANKS
+    _SPIRAL_EMBEDDING_GLOBAL_RANKS = None
+    global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
+    _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None

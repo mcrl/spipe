@@ -16,7 +16,7 @@ export LD_LIBRARY_PATH=${NCCL_LIB_PATH}
 
 export MASTER_ADDR="b4"
 export MASTER_PORT=6002
-export GPUS_PER_NODE=4
+export GPUS_PER_NODE=2
 
 export TP_SIZE=1
 export PP_SIZE=$GPUS_PER_NODE
@@ -44,11 +44,16 @@ DATA_PATH=/data/z0/heehoon/openwebtext-mg/openwebtext_text_document
 
 MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
 
+# TODO (mcrl) fp16 currently removed. no-initialization is added.
 GPT_ARGS="
     --tensor-model-parallel-size $TP_SIZE \
     --pipeline-model-parallel-size $PP_SIZE \
+    --spiral-pipeline-parallel \
+    --no-initialization \
+    --untie-embeddings-and-output-weights \
+    --distributed-backend nccl \
     --sequence-parallel \
-    --num-layers 24 \
+    --num-layers 4 \
     --hidden-size 1024 \
     --num-attention-heads 16 \
     --seq-length 1024 \
@@ -63,7 +68,6 @@ GPT_ARGS="
     --weight-decay 1e-2 \
     --lr-warmup-fraction .01 \
     --clip-grad 1.0 \
-    --fp16 \
     --no-gradient-accumulation-fusion
 "
 
