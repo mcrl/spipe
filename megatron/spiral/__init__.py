@@ -1,5 +1,6 @@
 from .initialize import SpiralBackend, get_thunder_group
 from .init_context import SpiralInitContext, SpiralParamStatus
+from .wrapper_init_context import SpiralWrapperInitContext
 from .generic import ContextManagers
 
 from .debug import (debug_extract_module_and_param_names,

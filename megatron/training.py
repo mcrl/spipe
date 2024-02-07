@@ -40,7 +40,7 @@ from megatron.utils import calc_params_l2_norm
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
 
-from megatron.spiral import get_thunder_group, SpiralInitContext, ContextManagers
+from megatron.spiral import get_thunder_group, SpiralInitContext, SpiralWrapperInitContext, ContextManagers
 from megatron.spiral.debug import spiral_print
 
 
@@ -392,27 +392,32 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         model = [Float16Module(model_module, args) for model_module in model]
 
     if wrap_with_ddp:
+        init_contexts = []
+
         if mpu.is_spiral_pipeline_parallel():
             import warnings
-            warnings.warn("SpiralPipe currently does not support DDP. Correctness is not guaranteed.")
-        if args.DDP_impl == 'torch':
-            i = torch.cuda.current_device()
-            model = [torchDDP(model_module, device_ids=[i], output_device=i,
-                              process_group=mpu.get_data_parallel_group())
-                     for model_module in model]
+            warnings.warn("SpiralPipe does not guaranteed DDP correctness.")
+            init_contexts = [SpiralWrapperInitContext(enabled=True)] # DDP wrapper copies spiral attributes from `model_module`
 
-        elif args.DDP_impl == 'local':
-            model = [LocalDDP(model_module,
-                              args.accumulate_allreduce_grads_in_fp32,
-                              args.use_contiguous_buffers_in_local_ddp)
-                     for model_module in model]
-            # broad cast params from data parallel src rank to other data parallel ranks
-            if args.data_parallel_random_init:
-                for model_module in model:
-                    model_module.broadcast_params()
-        else:
-            raise NotImplementedError('Unknown DDP implementation specified: '
-                                      '{}. Exiting.'.format(args.DDP_impl))
+        with ContextManagers(init_contexts):
+            if args.DDP_impl == 'torch':
+                i = torch.cuda.current_device()
+                model = [torchDDP(model_module, device_ids=[i], output_device=i,
+                                process_group=mpu.get_data_parallel_group())
+                        for model_module in model]
+
+            elif args.DDP_impl == 'local':
+                model = [LocalDDP(model_module,
+                                args.accumulate_allreduce_grads_in_fp32,
+                                args.use_contiguous_buffers_in_local_ddp)
+                        for model_module in model]
+                # broad cast params from data parallel src rank to other data parallel ranks
+                if args.data_parallel_random_init:
+                    for model_module in model:
+                        model_module.broadcast_params()
+            else:
+                raise NotImplementedError('Unknown DDP implementation specified: '
+                                        '{}. Exiting.'.format(args.DDP_impl))
 
     return model
 

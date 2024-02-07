@@ -332,6 +332,9 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.offload()
                 # param.borrow()
                 param.free()
+
+        module.spiral_fetch = lambda async_op=False: self._fetch_module(module, async_op=async_op)
+        module.spiral_free = lambda: self._free_module(module)
     
 
     def _is_spiral_param(self, param):
@@ -356,8 +359,12 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         def _offload_param(param):
             """Offload a parameter to remote device."""
             assert param.spiral_status == SpiralParamStatus.ACTIVE
-
-            param.spiral_tensor = param.data.to(self.remote_device)
+            
+            if param.spiral_tensor is None:
+                param.spiral_tensor = param.data.to(self.remote_device)
+            else:
+                assert param.spiral_tensor.shape == param.spiral_shape, "Offload tensor shape mismatch"
+                param.spiral_tensor.copy_(param.data)
             param.spiral_status = SpiralParamStatus.REMOTE
 
         def _borrow_param(param):
@@ -368,13 +375,28 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         # TODO (mcrl) implement async fetch
         def _fetch_param(param, async_op=False):
             assert param.spiral_status == SpiralParamStatus.REMOTE
-            assert param.spiral_tensor is not None
-            assert param.spiral_tensor.shape == param.spiral_shape
+            assert param.spiral_tensor is not None, "Fetch tensor is None"
+            assert param.spiral_tensor.shape == param.spiral_shape, "Fetch tensor shape mismatch"
 
-            param.data = param.spiral_tensor.to(self.local_device).view(param.spiral_shape)
+            if param.numel() == 0:
+                param.data = param.spiral_tensor.to(self.local_device).view(param.spiral_shape)
+            else:
+                param.data.copy_(param.spiral_tensor).view(param.spiral_shape)
             param.spiral_status = SpiralParamStatus.ACTIVE
 
         param.free = lambda: _free_param(param)
         param.offload = lambda: _offload_param(param)
         param.borrow = lambda: _borrow_param(param)
-        param.fetch = lambda: _fetch_param(param)
+        param.fetch = lambda async_op=False: _fetch_param(param, async_op)    
+
+
+    def _fetch_module(self, module, async_op=False):
+        for param in module.parameters(recurse=False):
+            if self._is_spiral_param(param):
+                param.fetch(async_op=async_op)
+    
+
+    def _free_module(self, module):
+        for param in module.parameters(recurse=False):
+            if self._is_spiral_param(param):
+                param.free()
