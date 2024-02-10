@@ -8,7 +8,6 @@ from torch.nn.parameter import Parameter
 
 from megatron import get_args
 from megatron.core import mpu, tensor_parallel
-from megatron.spiral.debug import spiral_print
 
 
 _FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor)
@@ -111,8 +110,7 @@ class MegatronModule(torch.nn.Module):
             # Sync between prep-postp stages
             if mpu.is_rank_in_embedding_group(ignore_virtual=True):
                 # TODO (mcrl) Resolve circular waiting with position embedding sync
-                spiral_print("TODO (mcrl) implement sync word embedding between stages")
-
+                pass
                 # torch.distributed.all_reduce(self.word_embeddings_weight().spiral_tensor.data,
                 #                             group=mpu.get_spiral_embedding_group_gloo())
                 # spiral_print("word_embeddings sync between stages done")
@@ -132,8 +130,7 @@ class MegatronModule(torch.nn.Module):
             # Sync between prep stages
             if mpu.is_rank_in_position_embedding_group() and mpu.is_pipeline_first_stage():
                 # TODO (mcrl) Resolve circular waiting with word embedding sync
-                spiral_print("TODO (mcrl) implement sync position embedding between prep stages")
-
+                pass
                 # position_embeddings = self.language_model.embedding.position_embeddings
                 # torch.distributed.all_reduce(position_embeddings.weight.spiral_tensor.data,
                 #                             group=mpu.get_spiral_position_embedding_group_gloo())

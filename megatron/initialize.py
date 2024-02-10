@@ -20,7 +20,7 @@ from megatron.checkpointing import load_args_from_checkpoint
 from megatron.global_vars import set_global_variables
 from megatron.model.transformer import bias_dropout_add_fused_train
 from megatron.model.fused_bias_gelu import bias_gelu
-from megatron.spiral import SpiralBackend
+from megatron.spiral import SpiralBackend, get_thunder_group
 
 import spiral_helper
 from megatron.spiral.debug import spiral_print
@@ -68,7 +68,9 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
         _set_random_seed(args.seed, args.data_parallel_random_init)
 
     args = get_args()
-    if  args.lazy_mpu_init:
+    if args.lazy_mpu_init:
+        assert not args.spiral_pipeline_parallel, "SpiralPipe does not support lazy mpu init"
+
         # TODO is this still a necessary option?
         args.use_cpu_initialization=True
         # delayed initialization of DDP-related stuff
@@ -368,9 +370,17 @@ def _mpi_check(args):
 
 def _spiral_backend_init():
     """ Initialize spiral backend """
+
+    def _set_comm_info():
+        thunder_group_info = get_thunder_group().GetCommInfo()
+        mpu.set_spiral_pipeline_parallel_intra_rank(thunder_group_info['intra_rank'])
+        mpu.set_spiral_pipeline_parallel_intra_size(thunder_group_info['intra_size'])
+        mpu.set_spiral_pipeline_parallel_is_host_leader(thunder_group_info['is_host_leader'])
+
     args = get_args()
     if hasattr(args, 'spiral_pipeline_parallel') and args.spiral_pipeline_parallel:
         torch_group = mpu.get_pipeline_model_parallel_group()
         ranks = frozenset(torch.distributed.get_process_group_ranks(torch_group))
         SpiralBackend(ranks)
-        spiral_helper.LazyConfigure(True) # logging
+        spiral_helper.LazyConfigure(True) # TODO (mcrl) this should be set from arg
+        _set_comm_info()

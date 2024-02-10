@@ -15,8 +15,9 @@ export NCCL_LIB_PATH="$HOME/asplos2025/nccl-branches/nccl-$(echo $MACHINE | tr '
 export LD_LIBRARY_PATH=${NCCL_LIB_PATH}
 
 export MASTER_ADDR="b4"
-export MASTER_PORT=6002
-export GPUS_PER_NODE=2
+export MASTER_PORT=6003
+export GPUS_PER_NODE=3
+export CUDA_VISIBLE_DEVICES=1,2,3
 
 export TP_SIZE=1
 export PP_SIZE=$GPUS_PER_NODE
@@ -25,8 +26,8 @@ export PP_SIZE=$GPUS_PER_NODE
 
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
-MICRO_BSZ=6 # change
-GLOBAL_BSZ=24 # change
+MICRO_BSZ=1 # change
+GLOBAL_BSZ=4 # change
 
 DDP_IMPL=torch # local or torch
 
@@ -52,8 +53,9 @@ GPT_ARGS="
     --no-initialization \
     --untie-embeddings-and-output-weights \
     --distributed-backend nccl \
+    --overlap-p2p-communication \
     --sequence-parallel \
-    --num-layers 4 \
+    --num-layers 6 \
     --hidden-size 1024 \
     --num-attention-heads 16 \
     --seq-length 1024 \
@@ -79,5 +81,5 @@ DATA_ARGS="
     --split 949,50,1
 "
 
-mpirun -n $GPUS_PER_NODE -x LD_LIBRARY_PATH $MPI_OPTIONS \
+mpirun -n $GPUS_PER_NODE -x LD_LIBRARY_PATH $MPI_OPTIONS -x CUDA_VISIBLE_DEVICES \
     python $MEGATRON_PATH/pretrain_gpt.py --megatron-mpi $GPT_ARGS $DATA_ARGS $OUTPUT_ARGS --load $MODEL_PATH

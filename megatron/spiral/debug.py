@@ -36,11 +36,21 @@ def debug_module2name(module):
 
 
 def debug_module2name_id(module):
-    return f"name={debug_module2name(module)} id={module.id}"
+    if hasattr(module, "spiral_forward_stage_id") and hasattr(module, "spiral_backward_stage_id"):
+        return f"name={debug_module2name(module)} fid={module.spiral_forward_stage_id} bid={module.spiral_backward_stage_id}"
+    else:
+        return f"name={debug_module2name(module)} id={module.id}"
 
 
 def debug_module2name_class(module):
     return f"name={debug_module2name(module)} {module.__class__.__name__}"
+
+
+def debug_module2class_id(module):
+    if hasattr(module, "spiral_forward_stage_id") and hasattr(module, "spiral_backward_stage_id"):
+        return f"class={module.__class__.__name__} fid={module.spiral_forward_stage_id} bid={module.spiral_backward_stage_id}"
+    else:
+        return f"class={module.__class__.__name__} id={module.id}"
 
 
 def debug_param2name(param):

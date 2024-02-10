@@ -6,11 +6,12 @@ from typing import Callable, Iterable
 from enum import Enum
 import functools
 
+import nvtx
 import torch
 from torch import Tensor
 from torch.nn import Module, Parameter
 
-from megatron.spiral.debug import spiral_print
+from megatron.spiral.debug import spiral_print, spiral_report_memory, debug_module2class_id
 from megatron.spiral.utils import is_spiral_param
 
 
@@ -311,11 +312,11 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
 
         # Attach spiral stage attribute
         from megatron.core import mpu
-        if not hasattr(module, "is_spiral_pipeline_parallel_forward_stage"):
-            setattr(module, "is_spiral_pipeline_parallel_forward_stage", mpu.is_spiral_pipeline_parallel_forward_stage())
-        if not hasattr(module, "is_spiral_pipeline_parallel_backward_stage"):
-            setattr(module, "is_spiral_pipeline_parallel_backward_stage", mpu.is_spiral_pipeline_parallel_backward_stage())
-        assert module.is_spiral_pipeline_parallel_forward_stage ^ module.is_spiral_pipeline_parallel_backward_stage, f"{module.__class__.__name__} is neither forward nor backward stage"
+        if not hasattr(module, "spiral_forward_stage_id"):
+            setattr(module, "spiral_forward_stage_id", mpu.get_spiral_pipeline_parallel_forward_virtual_rank())
+        if not hasattr(module, "spiral_backward_stage_id"):
+            setattr(module, "spiral_backward_stage_id", mpu.get_spiral_pipeline_parallel_backward_virtual_rank())
+        assert module.spiral_forward_stage_id is not None or module.spiral_backward_stage_id is not None, f"{module.__class__.__name__} is neither forward nor backward stage"
 
         # Convert and offload module's parameters
         for param in module.parameters(recurse=False):
@@ -352,7 +353,8 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
 
         def _free_param(param: Parameter) -> None:
             """Free underlying storage of a parameter."""
-            param.data = torch.empty(0, dtype=param.dtype, device=param.device)
+            # TODO (mcrl) un-comment below line after CPU optimizer is implemented
+            # param.data = torch.empty(0, dtype=param.dtype, device=param.device)
             if param.spiral_tensor is not None:
                 param.spiral_status = SpiralParamStatus.REMOTE
 
@@ -390,13 +392,19 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         param.fetch = lambda async_op=False: _fetch_param(param, async_op)    
 
 
+    @nvtx.annotate("fetch_module", color="orange")
     def _fetch_module(self, module, async_op=False):
-        for param in module.parameters(recurse=False):
+        spiral_report_memory(f"before fetch module {debug_module2class_id(module)}")
+        for param in module.parameters(recurse=True):
             if self._is_spiral_param(param):
                 param.fetch(async_op=async_op)
-    
+        spiral_report_memory(f"after fetch module {debug_module2class_id(module)}")
 
+
+    @nvtx.annotate("free_module", color="darkgreen")
     def _free_module(self, module):
-        for param in module.parameters(recurse=False):
+        spiral_report_memory(f"before free module {debug_module2class_id(module)}")
+        for param in module.parameters(recurse=True):
             if self._is_spiral_param(param):
                 param.free()
+        spiral_report_memory(f"after free module {debug_module2class_id(module)}")

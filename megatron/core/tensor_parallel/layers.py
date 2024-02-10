@@ -37,8 +37,6 @@ from .utils import (
     VocabUtility,
 )
 
-from megatron.spiral.debug import spiral_print
-
 
 _grad_accum_fusion_available = True
 try:
@@ -154,7 +152,6 @@ class VocabParallelEmbedding(torch.nn.Module):
                  params_dtype: torch.dtype=torch.float32,
                  use_cpu_initialization: bool=False,
                  perform_initialization: bool=True):
-        spiral_print(f"VocabParallelEmbedding:__init__")
 
         super(VocabParallelEmbedding, self).__init__()
         # Keep the input dimensions.

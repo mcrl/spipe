@@ -111,6 +111,8 @@ public:
 
   void BorrowTensor(torch::Tensor& tensor, uintptr_t addr, int from);
 
+  const py::dict GetCommInfo() const;
+
   static bool debug;
 
 private:
@@ -122,14 +124,17 @@ private:
                         // across hosts
   MPI_Comm intra_comm_; // Communicator for all ranks in the same host
 
-  int mpi_rank_;   // Rank in mpi_comm_
-  int inter_rank_; // Rank in inter_comm_
-  int intra_rank_; // Rank in intra_comm_
+  struct CommInfo {
+    int mpi_rank_;   // Rank in mpi_comm_
+    int inter_rank_; // Rank in inter_comm_
+    int intra_rank_; // Rank in intra_comm_
 
-  int mpi_size_;   // Size of mpi_comm_
-  int inter_size_; // Size of inter_comm_
-  int intra_size_; // Size of intra_comm_
-  bool is_host_leader_;
+    int mpi_size_;   // Size of mpi_comm_
+    int inter_size_; // Size of inter_comm_
+    int intra_size_; // Size of intra_comm_
+    bool is_host_leader_;
+  };
+  CommInfo comm_info_;
 
   int fd_;
   MPI_Win win_;
@@ -161,20 +166,20 @@ Comm::Comm(std::vector<int> ranks) {
   CHECK_MPI(MPI_Group_free(&world_group));
   CHECK_MPI(MPI_Group_free(&new_group));
 
-  intra_rank_ = GetLocalRank(mpi_comm_);
-  inter_rank_ = GetHostId(mpi_comm_);
+  comm_info_.intra_rank_ = GetLocalRank(mpi_comm_);
+  comm_info_.inter_rank_ = GetHostId(mpi_comm_);
 
-  CHECK_MPI(MPI_Comm_split(mpi_comm_, inter_rank_, intra_rank_, &intra_comm_));
-  CHECK_MPI(MPI_Comm_split(mpi_comm_, intra_rank_, inter_rank_, &inter_comm_));
-  CHECK_MPI(MPI_Comm_size(intra_comm_, &intra_size_));
-  CHECK_MPI(MPI_Comm_size(inter_comm_, &inter_size_));
-  CHECK_MPI(MPI_Comm_size(mpi_comm_, &mpi_size_));
-  CHECK_MPI(MPI_Comm_rank(mpi_comm_, &mpi_rank_));
-  is_host_leader_ = intra_rank_ == 0;
+  CHECK_MPI(MPI_Comm_split(mpi_comm_, comm_info_.inter_rank_, comm_info_.intra_rank_, &intra_comm_));
+  CHECK_MPI(MPI_Comm_split(mpi_comm_, comm_info_.intra_rank_, comm_info_.inter_rank_, &inter_comm_));
+  CHECK_MPI(MPI_Comm_size(intra_comm_, &comm_info_.intra_size_));
+  CHECK_MPI(MPI_Comm_size(inter_comm_, &comm_info_.inter_size_));
+  CHECK_MPI(MPI_Comm_size(mpi_comm_, &comm_info_.mpi_size_));
+  CHECK_MPI(MPI_Comm_rank(mpi_comm_, &comm_info_.mpi_rank_));
+  comm_info_.is_host_leader_ = comm_info_.intra_rank_ == 0;
 
   // Open shared memory
   if (!USE_MPI_SHARED_MEMORY) {
-    if (is_host_leader_) {
+    if (comm_info_.is_host_leader_) {
       fd_ = shm_open(sharedMemoryName, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
       assert(fd_ != -1);
       CHECK_ERRNO(ftruncate(fd_, kCpuBufferSize));
@@ -187,7 +192,7 @@ Comm::Comm(std::vector<int> ranks) {
       assert(sb.st_size == kCpuBufferSize);
     }
     CHECK_MPI(MPI_Barrier(intra_comm_));
-    if (!is_host_leader_) {
+    if (!comm_info_.is_host_leader_) {
       fd_ = shm_open(sharedMemoryName, O_RDWR, 0);
       assert(fd_ != -1);
 
@@ -206,13 +211,13 @@ Comm::Comm(std::vector<int> ranks) {
 
   // Open shared memory via MPI
   if (USE_MPI_SHARED_MEMORY) {
-    CHECK_MPI(MPI_Win_allocate_shared(is_host_leader_ ? kCpuBufferSize : 0,
+    CHECK_MPI(MPI_Win_allocate_shared(comm_info_.is_host_leader_ ? kCpuBufferSize : 0,
                                       1,
                                       MPI_INFO_NULL,
                                       intra_comm_,
                                       shared_ptr_,
                                       &win_));
-    if (!is_host_leader_) {
+    if (!comm_info_.is_host_leader_) {
       MPI_Aint size;
       int disp_unit;
       CHECK_MPI(MPI_Win_shared_query(win_, 0, &size, &disp_unit, &shared_ptr_));
@@ -221,24 +226,24 @@ Comm::Comm(std::vector<int> ranks) {
   }
 
   // Collect bases
-  bases_ = (uintptr_t*)malloc(sizeof(uintptr_t) * mpi_size_);
-  bases_[mpi_rank_] = (uintptr_t)shared_ptr_;
+  bases_ = (uintptr_t*)malloc(sizeof(uintptr_t) * comm_info_.mpi_size_);
+  bases_[comm_info_.mpi_rank_] = (uintptr_t)shared_ptr_;
 #if __WORDSIZE == 64
-  CHECK_MPI(MPI_Allgather(&bases_[mpi_rank_], 1, MPI_UNSIGNED_LONG, bases_, 1, MPI_UNSIGNED_LONG, mpi_comm_));
+  CHECK_MPI(MPI_Allgather(&bases_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED_LONG, bases_, 1, MPI_UNSIGNED_LONG, mpi_comm_));
 #else
-  CHECK_MPI(MPI_Allgather(&bases_[mpi_rank_], 1, MPI_UNSIGNED, bases_, 1, MPI_UNSIGNED, mpi_comm_));
+  CHECK_MPI(MPI_Allgather(&bases_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED, bases_, 1, MPI_UNSIGNED, mpi_comm_));
 #endif
   
   // test
   if (Comm::debug) {
-    for (int i = 0; i < mpi_size_; i++) {
+    for (int i = 0; i < comm_info_.mpi_size_; i++) {
       spdlog::info("rank = {} base = {}", i, bases_[i]);
     }
   }
 
   // Initialize allocator
   assert(allocator_ == nullptr); // allocator_ must be nullptr before first calling instance
-  allocator_ = c10::SpiralCPUAllocator::instance((uintptr_t)shared_ptr_, kCpuBufferSize / intra_size_ * intra_rank_, kCpuBufferSize / intra_size_, sizeof(float)); // Shared memory is divided equally among host processes
+  allocator_ = c10::SpiralCPUAllocator::instance((uintptr_t)shared_ptr_, kCpuBufferSize / comm_info_.intra_size_ * comm_info_.intra_rank_, kCpuBufferSize / comm_info_.intra_size_, sizeof(float)); // Shared memory is divided equally among host processes
   
   CHECK_MPI(MPI_Barrier(mpi_comm_));
 }
@@ -265,7 +270,7 @@ Comm::~Comm() {
   }
   if (shared_ptr_ != nullptr) {
     CHECK_ERRNO(munmap(shared_ptr_, kCpuBufferSize));
-    if (is_host_leader_) {
+    if (comm_info_.is_host_leader_) {
       CHECK_ERRNO(shm_unlink(sharedMemoryName));
     }
   }
@@ -309,9 +314,21 @@ void Comm::UnsetSpiralCPUAllocator() {
  */
 void Comm::BorrowTensor(torch::Tensor& tensor, uintptr_t addr, int from) {
   std::ptrdiff_t offset = addr - bases_[from];
-  void* srcptr = (void*)(bases_[intra_rank_] + offset);
+  void* srcptr = (void*)(bases_[comm_info_.intra_rank_] + offset);
   c10::DataPtr srcdataptr = { srcptr, srcptr, nullptr, at::Device(at::DeviceType::CPU) }; // disallow delete
   tensor.storage().set_data_ptr_noswap(std::move(srcdataptr));
+}
+
+const py::dict Comm::GetCommInfo() const {
+  py::dict info;
+  info["mpi_rank"] = comm_info_.mpi_rank_;
+  info["inter_rank"] = comm_info_.inter_rank_;
+  info["intra_rank"] = comm_info_.intra_rank_;
+  info["mpi_size"] = comm_info_.mpi_size_;
+  info["inter_size"] = comm_info_.inter_size_;
+  info["intra_size"] = comm_info_.intra_size_;
+  info["is_host_leader"] = comm_info_.is_host_leader_;
+  return info;
 }
 
 void LazyConfigure(bool debug) { Comm::debug = debug; }
@@ -324,5 +341,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def(py::init<std::vector<int>>())
     .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
     .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
-    .def("BorrowTensor", &Comm::BorrowTensor);
+    .def("BorrowTensor", &Comm::BorrowTensor)
+    .def("GetCommInfo", &Comm::GetCommInfo);
 }

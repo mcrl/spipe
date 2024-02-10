@@ -43,13 +43,7 @@ from megatron.utils import report_memory
 from megatron.spiral import get_thunder_group, SpiralInitContext, SpiralWrapperInitContext, ContextManagers
 from megatron.spiral.debug import spiral_print
 
-
-""" TODO (mcrl)
-SpiralPipe: Temporary comment out for now, due to latest torchvision support only python <= 3.11
-
 from megatron.model.vision.knn_monitor import compute_feature_bank
-
-"""
 
 
 def print_datetime(string):
@@ -904,12 +898,8 @@ def evaluate(forward_step_func,
     """Evaluation."""
     args = get_args()
 
-
-    """ TODO (mcrl)
-    SpiralPipe: Temporary comment out for now, due to latest torchvision support only python <= 3.11
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
         compute_feature_bank(model)
-    """
     
     # Turn on evaluation mode which disables dropout.
     for model_module in model:

@@ -63,6 +63,12 @@ _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = None # should set rank value o
 _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = None
 _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = None
 
+# Below spiral variables are lazily set after spiral backend init using CommInfo
+_SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE = None
+_SPIRAL_PIPELINE_PARALLEL_INTRA_RANK = None
+_SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER = None
+
+
 def initialize_model_parallel(
     tensor_model_parallel_size: int = 1,
     pipeline_model_parallel_size: int = 1,
@@ -758,6 +764,30 @@ def get_global_memory_buffer():
     assert _GLOBAL_MEMORY_BUFFER is not None, 'global memory buffer is not initialized'
     return _GLOBAL_MEMORY_BUFFER
 
+def get_spiral_pipeline_parallel_intra_rank():
+    assert _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK is not None
+    return _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK
+
+def set_spiral_pipeline_parallel_intra_rank(rank):
+    global _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK
+    _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK = rank
+
+def get_spiral_pipeline_parallel_intra_size():
+    assert _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE is not None
+    return _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE
+
+def set_spiral_pipeline_parallel_intra_size(size):
+    global _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE
+    _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE = size
+
+def get_spiral_pipeline_parallel_is_host_leader():
+    assert _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER is not None
+    return _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER
+
+def set_spiral_pipeline_parallel_is_host_leader(is_leader: bool):
+    global _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER
+    _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER = is_leader
+
 
 def destroy_model_parallel():
     """Set the groups to none."""
@@ -823,3 +853,10 @@ def destroy_model_parallel():
     _SPIRAL_EMBEDDING_GLOBAL_RANKS = None
     global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
     _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None
+
+    global _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK
+    _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK = None
+    global _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE
+    _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE = None
+    global _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER
+    _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER = None

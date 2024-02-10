@@ -33,7 +33,7 @@ def get_param_groups(modules,
         
         # NOTE (mcrl) Skip forward stages since only the backward stages should be dealt with optimizer.
         if mpu.is_spiral_pipeline_parallel():
-            if hasattr(module, "is_spiral_pipeline_parallel_forward_stage") and getattr(module, "is_spiral_pipeline_parallel_forward_stage") == True:
+            if hasattr(module, "spiral_forward_stage_id") and getattr(module, "spiral_forward_stage_id") is not None:
                 continue
 
         for name, param in module.named_parameters():

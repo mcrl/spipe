@@ -371,13 +371,16 @@ def validate_args(args, defaults={}):
     if args.spiral_pipeline_parallel:
         if args.standalone_embedding_stage:
             raise RuntimeError(
-                "Standalone embedding stage is not supported with SpiralPipe")
+                "SpiralPipe does not support standalone embedding stage")
         if args.virtual_pipeline_model_parallel_size is not None:
             raise RuntimeError(
-                "Virtual pipeline model parallel size is not supported with SpiralPipe")
+                "SpiralPipe does not support setting virtual pipeline")
         if args.params_dtype != torch.float:
             raise RuntimeError(
                 "SpiralPipe only supports fp32")
+        if args.lazy_mpu_init:
+            raise RuntimeError(
+                "SpiralPipe does not support lazy mpu init")
             
 
     # Print arguments.
