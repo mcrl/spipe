@@ -12,28 +12,28 @@ from megatron.spiral.debug import spiral_print
 Shape = Union[List[int], torch.Size]
 
 
-def _batched_p2p_ops(*,
-                     tensor_sends: Optional[List[torch.Tensor]],
-                     tensor_recvs: Optional[List[torch.Tensor]],
-                     send_ranks: Optional[List[int]],
-                     recv_ranks: Optional[List[int]],
-                     group: torch.distributed.ProcessGroup):
+def _batched_p2p_ops(
+    *,
+    tensor_sends: Optional[List[torch.Tensor]],
+    tensor_recvs: Optional[List[torch.Tensor]],
+    send_ranks: Optional[List[int]],
+    recv_ranks: Optional[List[int]],
+    group: torch.distributed.ProcessGroup,
+):
     ops = []
     if tensor_sends is not None:
         assert send_ranks is not None and len(tensor_sends) == len(send_ranks)
         for tensor, rank in zip(tensor_sends, send_ranks):
-            send_op = torch.distributed.P2POp(torch.distributed.isend,
-                                              tensor,
-                                              rank,
-                                              group=group)
+            send_op = torch.distributed.P2POp(
+                torch.distributed.isend, tensor, rank, group=group
+            )
             ops.append(send_op)
     if tensor_recvs is not None:
         assert recv_ranks is not None and len(tensor_recvs) == len(recv_ranks)
         for tensor, rank in zip(tensor_recvs, recv_ranks):
-            recv_op = torch.distributed.P2POp(torch.distributed.irecv,
-                                              tensor,
-                                              rank,
-                                              group=group)
+            recv_op = torch.distributed.P2POp(
+                torch.distributed.irecv, tensor, rank, group=group
+            )
             ops.append(recv_op)
     if len(ops) > 0:
         reqs = torch.distributed.batch_isend_irecv(ops)
@@ -42,12 +42,14 @@ def _batched_p2p_ops(*,
     return reqs
 
 
-def _p2p_ops(*,
-             tensor_sends: Optional[List[torch.Tensor]],
-             tensor_recvs: Optional[List[torch.Tensor]],
-             send_ranks: Optional[List[int]],
-             recv_ranks: Optional[List[int]],
-             group: torch.distributed.ProcessGroup):
+def _p2p_ops(
+    *,
+    tensor_sends: Optional[List[torch.Tensor]],
+    tensor_recvs: Optional[List[torch.Tensor]],
+    send_ranks: Optional[List[int]],
+    recv_ranks: Optional[List[int]],
+    group: torch.distributed.ProcessGroup,
+):
     reqs = []
     if mpu.get_pipeline_model_parallel_rank() % 2 == 0:
         if tensor_sends is not None:
@@ -74,19 +76,20 @@ def _p2p_ops(*,
     return reqs
 
 
-def _communicate(*, 
-                 tensor_sends: Optional[List[torch.Tensor]],
-                 send_ranks: Optional[List[int]],
-                 recv_ranks: Optional[List[int]],
-                 tensor_shape: Shape,
-                 group: Optional[torch.distributed.ProcessGroup],
-                 batch_p2p_comm: bool = True,
-                 wait_on_reqs: bool = False,
-                 dtype: Optional[torch.dtype],
-                 variable_seq_lengths: bool = False,
-                 use_ring_exchange_p2p: bool = False,
-                 ) -> Tuple[Optional[List[torch.Tensor]], Optional[List[Work]]]:
-    
+def _communicate(
+    *,
+    tensor_sends: Optional[List[torch.Tensor]],
+    send_ranks: Optional[List[int]],
+    recv_ranks: Optional[List[int]],
+    tensor_shape: Shape,
+    group: Optional[torch.distributed.ProcessGroup],
+    batch_p2p_comm: bool = True,
+    wait_on_reqs: bool = False,
+    dtype: Optional[torch.dtype],
+    variable_seq_lengths: bool = False,
+    use_ring_exchange_p2p: bool = False,
+) -> Tuple[Optional[List[torch.Tensor]], Optional[List[Work]]]:
+
     # Create placeholder for receive if needed
     tensor_recvs = None
 
@@ -98,12 +101,13 @@ def _communicate(*,
     if group is None:
         group = mpu.get_pipeline_model_parallel_group()
 
-    
     if not variable_seq_lengths:
         shape = tensor_shape
     else:
         # TODO (mcrl) implement _communicate_shape
-        raise NotImplementedError("SpiralPipe does not support variable sequence length is not supported yet")
+        raise NotImplementedError(
+            "SpiralPipe does not support variable sequence length is not supported yet"
+        )
 
     if recv_ranks:
         if dtype is None:
@@ -113,11 +117,16 @@ def _communicate(*,
                 "tensor_shape must be specified if recv_ranks is not None."
                 "Common tensor_shape is (seq_length, micro_batch_size, hidden_size)"
             )
-        tensor_recvs = [torch.empty(shape, 
-                                    requires_grad=True,
-                                    device=torch.cuda.current_device(),
-                                    dtype=dtype) for _ in recv_ranks]
-    
+        tensor_recvs = [
+            torch.empty(
+                shape,
+                requires_grad=True,
+                device=torch.cuda.current_device(),
+                dtype=dtype,
+            )
+            for _ in recv_ranks
+        ]
+
     if use_ring_exchange_p2p:
         # TODO (mcrl) support ring exchange
         raise NotImplementedError("SpiralPipe does not support ring exchange yet")
@@ -130,13 +139,15 @@ def _communicate(*,
         p2p_func = _batched_p2p_ops
     else:
         p2p_func = _p2p_ops
-    
-    reqs = p2p_func(tensor_sends=tensor_sends,
-                    tensor_recvs=tensor_recvs,
-                    send_ranks=send_ranks,
-                    recv_ranks=recv_ranks,
-                    group=group if group is not None else mpu.get_pipeline_model_parallel_group())
-    
+
+    reqs = p2p_func(
+        tensor_sends=tensor_sends,
+        tensor_recvs=tensor_recvs,
+        send_ranks=send_ranks,
+        recv_ranks=recv_ranks,
+        group=group if group is not None else mpu.get_pipeline_model_parallel_group(),
+    )
+
     if wait_on_reqs and len(reqs) > 0:
         for req in reqs:
             req.wait()
@@ -151,75 +162,94 @@ def _communicate(*,
 
 
 @nvtx.annotate("recv_input_tensor", color="red")
-def recv_input_tensor(tensor_shape: Shape,
-                      dtype: torch.dtype,
-                      batch_p2p_comm: bool = True,
-                      overlap_p2p_comm: bool = False,
-                      timers: Callable = None,) -> Tuple[torch.Tensor, Optional[List[Work]]]:
-    
+def recv_input_tensor(
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    batch_p2p_comm: bool = True,
+    overlap_p2p_comm: bool = False,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[List[Work]]]:
+
     if timers is not None:
         timers("recv_input_tensor", log_level=2).start()
-    
+
     recv_rank = None
     if mpu.get_spiral_pipeline_parallel_forward_virtual_rank() == 0:
         recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
     else:
         local_world_size = mpu.get_spiral_pipeline_parallel_intra_size()
         local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
-        recv_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
+        recv_rank = (
+            mpu.get_pipeline_model_parallel_rank()
+            // local_world_size
+            * local_world_size
             + (local_rank - 1) % local_world_size
+        )
 
     # TODO (mcrl) delete
     spiral_print(f"recv input_tensor({tensor_shape}) from rank {recv_rank}")
 
-    [input_tensor], reqs = _communicate(tensor_sends=None,
-                                    send_ranks=None,
-                                    recv_ranks=[recv_rank],
-                                    tensor_shape=tensor_shape,
-                                    group=mpu.get_pipeline_model_parallel_group(),
-                                    batch_p2p_comm=batch_p2p_comm,
-                                    wait_on_reqs=not overlap_p2p_comm,
-                                    dtype=dtype)
+    [input_tensor], reqs = _communicate(
+        tensor_sends=None,
+        send_ranks=None,
+        recv_ranks=[recv_rank],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        batch_p2p_comm=batch_p2p_comm,
+        wait_on_reqs=not overlap_p2p_comm,
+        dtype=dtype,
+    )
     if timers is not None:
         timers("recv_input_tensor", log_level=2).stop()
-    
+
     return input_tensor, reqs
 
 
 @nvtx.annotate("send_output_tensor", color="blue")
-def send_output_tensor(output_tensor: torch.Tensor,
-                       overlap_p2p_comm: bool = False,
-                       batch_p2p_comm: bool = True,
-                       timers: Callable = None,) -> Optional[List[Work]]:
-    
+def send_output_tensor(
+    output_tensor: torch.Tensor,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Optional[List[Work]]:
+
     if timers is not None:
         timers("send_output_tensor", log_level=2).start()
-    
+
     send_rank = None
-    if mpu.get_spiral_pipeline_parallel_forward_virtual_rank() == mpu.get_spiral_pipeline_parallel_forward_virtual_size() - 1:
+    if (
+        mpu.get_spiral_pipeline_parallel_forward_virtual_rank()
+        == mpu.get_spiral_pipeline_parallel_forward_virtual_size() - 1
+    ):
         send_rank = mpu.get_pipeline_model_parallel_next_rank()
     else:
         local_world_size = mpu.get_spiral_pipeline_parallel_intra_size()
         local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
-        send_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
+        send_rank = (
+            mpu.get_pipeline_model_parallel_rank()
+            // local_world_size
+            * local_world_size
             + (local_rank + 1) % local_world_size
-    
+        )
+
     # TODO (mcrl) delete
     spiral_print(f"send output_tensor({output_tensor.shape}) to rank {send_rank}")
 
-    _, reqs = _communicate(tensor_sends=[output_tensor],
-                                    send_ranks=[send_rank],
-                                    recv_ranks=None,
-                                    tensor_shape=None,
-                                    group=mpu.get_pipeline_model_parallel_group(),
-                                    wait_on_reqs=not overlap_p2p_comm,
-                                    batch_p2p_comm=batch_p2p_comm,
-                                    dtype=None)
+    _, reqs = _communicate(
+        tensor_sends=[output_tensor],
+        send_ranks=[send_rank],
+        recv_ranks=None,
+        tensor_shape=None,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=None,
+    )
     if timers is not None:
         timers("send_output_tensor", log_level=2).stop()
-    
+
     return reqs
-    
+
 
 # @nvtx.annotate("send_output_tensor_recv_input_tensor", color="red")
 # def send_output_tensor_recv_input_tensor(output_tensor: torch.Tensor,
@@ -227,13 +257,13 @@ def send_output_tensor(output_tensor: torch.Tensor,
 #                            dtype: torch.dtype,
 #                            batch_p2p_comm: bool = True,
 #                            timers: Callable = None,) -> torch.Tensor:
-    
+
 #     if mpu.is_pipeline_first_stage():
 #         input_tensor = None
 #     else:
 #         if timers is not None:
 #             timers("send_recv_input_tensor", log_level=2).start()
-        
+
 #         recv_rank = None
 #         if mpu.get_spiral_pipeline_parallel_forward_virtual_rank() == 0:
 #             recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
@@ -242,7 +272,7 @@ def send_output_tensor(output_tensor: torch.Tensor,
 #             local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
 #             recv_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
 #                 + (local_rank - 1) % local_world_size
-        
+
 #         send_rank = None
 #         if mpu.get_spiral_pipeline_parallel_forward_virtual_rank() == mpu.get_spiral_pipeline_parallel_forward_virtual_size() - 1:
 #             send_rank = mpu.get_pipeline_model_parallel_next_rank()
@@ -251,7 +281,7 @@ def send_output_tensor(output_tensor: torch.Tensor,
 #             local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
 #             send_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
 #                 + (local_rank + 1) % local_world_size
-            
+
 #         [input_tensor], _ = _communicate(tensor_sends=[output_tensor],
 #                                         send_ranks=[send_rank],
 #                                         recv_ranks=[recv_rank],
@@ -261,78 +291,99 @@ def send_output_tensor(output_tensor: torch.Tensor,
 #                                         dtype=dtype)
 #         if timers is not None:
 #             timers("send_output_tensor_recv_input_tensor", log_level=2).stop()
-    
+
 #     return input_tensor
 
 
 @nvtx.annotate("recv_output_tensor_grad", color="purple")
-def recv_output_tensor_grad(tensor_shape: Shape,
-                      dtype: torch.dtype,
-                      batch_p2p_comm: bool = True,
-                      overlap_p2p_comm: bool = False,
-                      timers: Callable = None,) -> Tuple[torch.Tensor, Optional[List[Work]]]:
-    
+def recv_output_tensor_grad(
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    batch_p2p_comm: bool = True,
+    overlap_p2p_comm: bool = False,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[List[Work]]]:
+
     if timers is not None:
         timers("recv_output_tensor_grad", log_level=2).start()
-    
+
     recv_rank = None
-    if mpu.get_spiral_pipeline_parallel_backward_virtual_rank() == mpu.get_spiral_pipeline_parallel_backward_virtual_size() - 1:
+    if (
+        mpu.get_spiral_pipeline_parallel_backward_virtual_rank()
+        == mpu.get_spiral_pipeline_parallel_backward_virtual_size() - 1
+    ):
         recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
     else:
         local_world_size = mpu.get_spiral_pipeline_parallel_intra_size()
         local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
-        recv_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
+        recv_rank = (
+            mpu.get_pipeline_model_parallel_rank()
+            // local_world_size
+            * local_world_size
             + (local_rank - 1) % local_world_size
+        )
 
     # TODO (mcrl) delete
     spiral_print(f"recv output_tensor_grad({tensor_shape}) from rank {recv_rank}")
 
-    [output_tensor_grad], reqs = _communicate(tensor_sends=None,
-                                    send_ranks=None,
-                                    recv_ranks=[recv_rank],
-                                    tensor_shape=tensor_shape,
-                                    group=mpu.get_pipeline_model_parallel_group(),
-                                    batch_p2p_comm=batch_p2p_comm,
-                                    wait_on_reqs=not overlap_p2p_comm,
-                                    dtype=dtype)
+    [output_tensor_grad], reqs = _communicate(
+        tensor_sends=None,
+        send_ranks=None,
+        recv_ranks=[recv_rank],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        batch_p2p_comm=batch_p2p_comm,
+        wait_on_reqs=not overlap_p2p_comm,
+        dtype=dtype,
+    )
     if timers is not None:
         timers("output_tensor_grad", log_level=2).stop()
-    
+
     return output_tensor_grad, reqs
 
 
 @nvtx.annotate("send_input_tensor_grad", color="green")
-def send_input_tensor_grad(input_tensor_grad: torch.Tensor,
-                            overlap_p2p_comm: bool = False,
-                            batch_p2p_comm: bool = True,
-                            timers: Callable = None,) -> Optional[List[Work]]:
-    
+def send_input_tensor_grad(
+    input_tensor_grad: torch.Tensor,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Optional[List[Work]]:
+
     if timers is not None:
         timers("send_input_tensor_grad", log_level=2).start()
-    
+
     send_rank = None
     if mpu.get_spiral_pipeline_parallel_backward_virtual_rank() == 0:
         send_rank = mpu.get_pipeline_model_parallel_next_rank()
     else:
         local_world_size = mpu.get_spiral_pipeline_parallel_intra_size()
         local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
-        send_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
+        send_rank = (
+            mpu.get_pipeline_model_parallel_rank()
+            // local_world_size
+            * local_world_size
             + (local_rank + 1) % local_world_size
-    
-    # TODO (mcrl) delete
-    spiral_print(f"send input_tensor_grad({input_tensor_grad.shape}) to rank {send_rank}")
+        )
 
-    _, reqs = _communicate(tensor_sends=[input_tensor_grad],
-                                    send_ranks=[send_rank],
-                                    recv_ranks=None,
-                                    tensor_shape=None,
-                                    group=mpu.get_pipeline_model_parallel_group(),
-                                    wait_on_reqs=not overlap_p2p_comm,
-                                    batch_p2p_comm=batch_p2p_comm,
-                                    dtype=None)
+    # TODO (mcrl) delete
+    spiral_print(
+        f"send input_tensor_grad({input_tensor_grad.shape}) to rank {send_rank}"
+    )
+
+    _, reqs = _communicate(
+        tensor_sends=[input_tensor_grad],
+        send_ranks=[send_rank],
+        recv_ranks=None,
+        tensor_shape=None,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=None,
+    )
     if timers is not None:
         timers("send_input_tensor_grad", log_level=2).stop()
-    
+
     return reqs
 
 

@@ -11,7 +11,11 @@ import torch
 from torch import Tensor
 from torch.nn import Module, Parameter
 
-from megatron.spiral.debug import spiral_print, spiral_report_memory, debug_module2class_id
+from megatron.spiral.debug import (
+    spiral_print,
+    spiral_report_memory,
+    debug_module2class_id,
+)
 from megatron.spiral.utils import is_spiral_param
 
 
@@ -39,11 +43,13 @@ class SpiralParamStatus(Enum):
     INFLIGHT = 3
 
 
-def wrapper_for_fp_tensor_constructor(fn: Callable, target_fp_dtype: torch.dtype) -> Callable:
+def wrapper_for_fp_tensor_constructor(
+    fn: Callable, target_fp_dtype: torch.dtype
+) -> Callable:
 
     def wrapped_fn(*args, **kwargs) -> Tensor:
         if kwargs.get("device", None) is None:
-            kwargs['device'] = torch.cuda.current_device()
+            kwargs["device"] = torch.cuda.current_device()
         tensor: Tensor = fn(*args, **kwargs)
         if tensor.is_floating_point():
             tensor.data = tensor.data.to(target_fp_dtype)
@@ -58,7 +64,7 @@ def get_new_tensor_fn_for_dtype(dtype: torch.dtype) -> Callable:
     def new_tensor(cls, *args, **kwargs) -> Tensor:
         device = torch.cuda.current_device()
         if not args:
-            args = (0, )
+            args = (0,)
         tensor = _orig_torch_empty(0, device=device).new_empty(*args, **kwargs)
         if tensor.is_floating_point():
             tensor = tensor.to(dtype)
@@ -105,7 +111,6 @@ class InsertPostInitMethodToModuleSubClasses(object):
             torch.float,
         ], f"Invalid data type {self.dtype}, allowed values are [torch.half, torch.bfloat16, torch.float]"
 
-
     def __enter__(self):
         if not self.enabled:
             return
@@ -116,7 +121,6 @@ class InsertPostInitMethodToModuleSubClasses(object):
             global top_level_context
             top_level_context = self
         spiral_init_context += 1
-
 
     def __exit__(self, exc_type, exc_value, traceback):
         if not self.enabled:
@@ -134,9 +138,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
             billion_elems = (
                 InsertPostInitMethodToModuleSubClasses.num_module_elements / 1e9
             )
-            num_params = (
-                InsertPostInitMethodToModuleSubClasses.num_module_parameters
-            )
+            num_params = InsertPostInitMethodToModuleSubClasses.num_module_parameters
             spiral_print(
                 f"finished initializing model - num_params = {num_params}, num_elems = {billion_elems:.2f}B"
             )
@@ -144,7 +146,6 @@ class InsertPostInitMethodToModuleSubClasses(object):
         # Now that we cleaned up the metaclass injection, raise the exception.
         if exc_type is not None:
             return False
-
 
     def patch_init_and_builtins(self):
 
@@ -155,7 +156,11 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
                 @functools.wraps(fn_to_apply)
                 def wrapped_fn_to_apply(module_to_apply_fn_to: Module) -> None:
-                    params_to_apply_fn_to: Iterable[Parameter] = [p for p in module_to_apply_fn_to.parameters(recurse=False) if is_spiral_param(p)]
+                    params_to_apply_fn_to: Iterable[Parameter] = [
+                        p
+                        for p in module_to_apply_fn_to.parameters(recurse=False)
+                        if is_spiral_param(p)
+                    ]
 
                     # Copy parameters to local device
                     for param in params_to_apply_fn_to:
@@ -224,7 +229,6 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
         self.patched = True
 
-
     def unpatch_init_and_builtins(self):
         if self.patched:
 
@@ -247,28 +251,16 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
             self.patched = False
 
-
     def _add_tensor_creation_wrappers(self):
         torch.Tensor.__new__ = get_new_tensor_fn_for_dtype(self.dtype)
-        torch.tensor = wrapper_for_fp_tensor_constructor(
-            _orig_torch_tensor, self.dtype
-        )
-        torch.empty = wrapper_for_fp_tensor_constructor(
-            _orig_torch_empty, self.dtype
-        )
-        torch.zeros = wrapper_for_fp_tensor_constructor(
-            _orig_torch_zeros, self.dtype
-        )
+        torch.tensor = wrapper_for_fp_tensor_constructor(_orig_torch_tensor, self.dtype)
+        torch.empty = wrapper_for_fp_tensor_constructor(_orig_torch_empty, self.dtype)
+        torch.zeros = wrapper_for_fp_tensor_constructor(_orig_torch_zeros, self.dtype)
         torch.ones = wrapper_for_fp_tensor_constructor(_orig_torch_ones, self.dtype)
         torch.full = wrapper_for_fp_tensor_constructor(_orig_torch_full, self.dtype)
-        torch.arange = wrapper_for_fp_tensor_constructor(
-            _orig_torch_arange, self.dtype
-        )
+        torch.arange = wrapper_for_fp_tensor_constructor(_orig_torch_arange, self.dtype)
         torch.eye = wrapper_for_fp_tensor_constructor(_orig_torch_eye, self.dtype)
-        torch.randn = wrapper_for_fp_tensor_constructor(
-            _orig_torch_randn, self.dtype
-        )
-
+        torch.randn = wrapper_for_fp_tensor_constructor(_orig_torch_randn, self.dtype)
 
     def _remove_tensor_creation_wrappers(self):
         torch.Tensor.__new__ = torch.Tensor.__old_new__
@@ -281,14 +273,13 @@ class InsertPostInitMethodToModuleSubClasses(object):
         torch.eye = _orig_torch_eye
         torch.randn = _orig_torch_randn
 
-
     # To be implemented by inheriting classes
     def _post_init_method(self, module):
         pass
 
 
 class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
-    override_module_apply = False # unused but kept for future
+    override_module_apply = False  # unused but kept for future
 
     def __init__(
         self,
@@ -306,24 +297,35 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         self.local_device = torch.cuda.current_device()
         self.remote_device = torch.device("cpu")
         super().__init__(enabled=enabled, dtype=dtype)
-        
 
     def _post_init_method(self, module):
 
         # Attach spiral stage attribute
         from megatron.core import mpu
+
         if not hasattr(module, "spiral_forward_stage_id"):
-            setattr(module, "spiral_forward_stage_id", mpu.get_spiral_pipeline_parallel_forward_virtual_rank())
+            setattr(
+                module,
+                "spiral_forward_stage_id",
+                mpu.get_spiral_pipeline_parallel_forward_virtual_rank(),
+            )
         if not hasattr(module, "spiral_backward_stage_id"):
-            setattr(module, "spiral_backward_stage_id", mpu.get_spiral_pipeline_parallel_backward_virtual_rank())
-        assert module.spiral_forward_stage_id is not None or module.spiral_backward_stage_id is not None, f"{module.__class__.__name__} is neither forward nor backward stage"
+            setattr(
+                module,
+                "spiral_backward_stage_id",
+                mpu.get_spiral_pipeline_parallel_backward_virtual_rank(),
+            )
+        assert (
+            module.spiral_forward_stage_id is not None
+            or module.spiral_backward_stage_id is not None
+        ), f"{module.__class__.__name__} is neither forward nor backward stage"
 
         # Convert and offload module's parameters
         for param in module.parameters(recurse=False):
             InsertPostInitMethodToModuleSubClasses.num_module_parameters += 1
             InsertPostInitMethodToModuleSubClasses.num_module_elements += param.numel()
 
-            # TODO (mcrl) Currently, all params are converted to spiral params. 
+            # TODO (mcrl) Currently, all params are converted to spiral params.
             # Modify this when selectively converting params to spiral params is required
             if not self._is_spiral_param(param):
                 self._convert_to_spiral_param(param)
@@ -334,23 +336,29 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 # param.borrow()
                 param.free()
 
-        module.spiral_fetch = lambda *args, **kwargs: self._fetch_module(module, *args, **kwargs)
-        module.spiral_free = lambda *args, **kwargs: self._free_module(module, *args, **kwargs)
-        module.spiral_offload_grad = lambda *args, **kwargs: self._offload_grad_module(module, *args, **kwargs)
-    
+        module.spiral_fetch = lambda *args, **kwargs: self._fetch_module(
+            module, *args, **kwargs
+        )
+        module.spiral_free = lambda *args, **kwargs: self._free_module(
+            module, *args, **kwargs
+        )
+        module.spiral_offload_grad = lambda *args, **kwargs: self._offload_grad_module(
+            module, *args, **kwargs
+        )
 
     def _is_spiral_param(self, param):
         if not torch.is_tensor(param):
             return False
         return hasattr(param, "spiral_tensor")
 
-
     def _convert_to_spiral_param(self, param):
         """Converts a parameter to a SpiralPipe parameter."""
-        param.spiral_status = SpiralParamStatus.ACTIVE # After original __init__, all params initialized active
+        param.spiral_status = (
+            SpiralParamStatus.ACTIVE
+        )  # After original __init__, all params initialized active
         param.spiral_shape = param.shape
         param.spiral_numel = param.numel()
-        param.spiral_tensor = None # Stores copy of the tensor on remote device
+        param.spiral_tensor = None  # Stores copy of the tensor on remote device
 
         def _free_data(param: Parameter) -> None:
             """Free weight data of a parameter."""
@@ -363,11 +371,13 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         def _offload_data(param, async_op=False):
             """Offload weight data of a parameter to remote device."""
             assert param.spiral_status == SpiralParamStatus.ACTIVE
-            
+
             if param.spiral_tensor is None:
                 param.spiral_tensor = param.data.to(self.remote_device)
             else:
-                assert param.spiral_tensor.shape == param.spiral_shape, "Offload tensor shape mismatch"
+                assert (
+                    param.spiral_tensor.shape == param.spiral_shape
+                ), "Offload tensor shape mismatch"
                 param.spiral_tensor.copy_(param.data)
             param.spiral_status = SpiralParamStatus.REMOTE
 
@@ -380,10 +390,14 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         def _fetch_data(param, async_op=False):
             assert param.spiral_status == SpiralParamStatus.REMOTE
             assert param.spiral_tensor is not None, "Fetch tensor is None"
-            assert param.spiral_tensor.shape == param.spiral_shape, "Fetch tensor shape mismatch"
+            assert (
+                param.spiral_tensor.shape == param.spiral_shape
+            ), "Fetch tensor shape mismatch"
 
             if param.numel() == 0:
-                param.data = param.spiral_tensor.to(self.local_device).view(param.spiral_shape)
+                param.data = param.spiral_tensor.to(self.local_device).view(
+                    param.spiral_shape
+                )
             else:
                 param.data.copy_(param.spiral_tensor).view(param.spiral_shape)
             param.spiral_status = SpiralParamStatus.ACTIVE
@@ -394,18 +408,19 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             assert param.spiral_status == SpiralParamStatus.ACTIVE
             assert param.spiral_tensor is not None, "Offloaded tensor is None"
 
-            if hasattr(param, 'main_grad') and param.main_grad is not None:
+            if hasattr(param, "main_grad") and param.main_grad is not None:
                 param.spiral_tensor.main_grad = param.main_grad.to(self.remote_device)
 
-            if hasattr(param, 'grad') and param.grad is not None:
+            if hasattr(param, "grad") and param.grad is not None:
                 param.spiral_tensor.grad = param.grad.to(self.remote_device)
 
         param.free = lambda *args, **kwargs: _free_data(param, *args, **kwargs)
         param.offload = lambda *args, **kwargs: _offload_data(param, *args, **kwargs)
         param.borrow = lambda *args, **kwargs: _borrow_data(param, *args, **kwargs)
-        param.fetch = lambda *args, **kwargs: _fetch_data(param, *args, **kwargs)    
-        param.offload_grad = lambda *args, **kwargs: _offload_grad(param, *args, **kwargs)
-
+        param.fetch = lambda *args, **kwargs: _fetch_data(param, *args, **kwargs)
+        param.offload_grad = lambda *args, **kwargs: _offload_grad(
+            param, *args, **kwargs
+        )
 
     @nvtx.annotate("fetch_module", color="orange")
     def _fetch_module(self, module, async_op=False):
@@ -415,7 +430,6 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.fetch(async_op=async_op)
         spiral_report_memory(f"after fetch module {debug_module2class_id(module)}")
 
-
     @nvtx.annotate("free_module", color="darkgreen")
     def _free_module(self, module):
         spiral_report_memory(f"before free module {debug_module2class_id(module)}")
@@ -424,11 +438,14 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.free()
         spiral_report_memory(f"after free module {debug_module2class_id(module)}")
 
-
     @nvtx.annotate("offload_grad_module", color="yellow")
     def _offload_grad_module(self, module, async_op=False):
-        spiral_report_memory(f"before offload grad module {debug_module2class_id(module)}")
+        spiral_report_memory(
+            f"before offload grad module {debug_module2class_id(module)}"
+        )
         for param in module.parameters(recurse=True):
             if self._is_spiral_param(param):
                 param.offload_grad(async_op=async_op)
-        spiral_report_memory(f"after offload grad module {debug_module2class_id(module)}")
+        spiral_report_memory(
+            f"after offload grad module {debug_module2class_id(module)}"
+        )

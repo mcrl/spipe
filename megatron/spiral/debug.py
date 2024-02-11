@@ -36,7 +36,9 @@ def debug_module2name(module):
 
 
 def debug_module2name_id(module):
-    if hasattr(module, "spiral_forward_stage_id") and hasattr(module, "spiral_backward_stage_id"):
+    if hasattr(module, "spiral_forward_stage_id") and hasattr(
+        module, "spiral_backward_stage_id"
+    ):
         return f"name={debug_module2name(module)} fid={module.spiral_forward_stage_id} bid={module.spiral_backward_stage_id}"
     else:
         return f"name={debug_module2name(module)} id={module.id}"
@@ -47,7 +49,9 @@ def debug_module2name_class(module):
 
 
 def debug_module2class_id(module):
-    if hasattr(module, "spiral_forward_stage_id") and hasattr(module, "spiral_backward_stage_id"):
+    if hasattr(module, "spiral_forward_stage_id") and hasattr(
+        module, "spiral_backward_stage_id"
+    ):
         return f"class={module.__class__.__name__} fid={module.spiral_forward_stage_id} bid={module.spiral_backward_stage_id}"
     else:
         return f"class={module.__class__.__name__} id={module.id}"
@@ -65,7 +69,9 @@ def debug_param2name_id(param):
 
 
 def debug_param2name_id_shape(param):
-    return f"name={debug_param2name(param)} id={param.spiral_id} shape={param.data.shape}"
+    return (
+        f"name={debug_param2name(param)} id={param.spiral_id} shape={param.data.shape}"
+    )
 
 
 def debug_param2name_id_shape_device(param):
@@ -154,21 +160,21 @@ def print_backward_tensors(tensor):
         for funcs in grad_fn.next_functions:
             if funcs[0]:
                 try:
-                    tensor = getattr(funcs[0], 'variable')
+                    tensor = getattr(funcs[0], "variable")
                     print(funcs[0])
-                    print(f"Tensor - id: {id(tensor)}, shape: {tensor.shape}, data: {tensor}, grad: {tensor.grad}")
+                    print(
+                        f"Tensor - id: {id(tensor)}, shape: {tensor.shape}, data: {tensor}, grad: {tensor.grad}"
+                    )
                 except AttributeError as e:
                     _print_bwd_tensors(funcs[0])
 
-    if hasattr(tensor, 'grad_fn'):
+    if hasattr(tensor, "grad_fn"):
         _print_bwd_tensors(tensor.grad_fn)
 
 
 def spiral_print(message):
     if torch.distributed.is_initialized():
-        message = f"[Spiral] " \
-        + f"[{torch.distributed.get_rank()}] " \
-        + message
+        message = f"[Spiral] " + f"[{torch.distributed.get_rank()}] " + message
     else:
         message = f"[Spiral] " + message
     print(message)
@@ -182,17 +188,18 @@ def spiral_print(message):
 
 
 def spiral_report_memory(message, gpu=True, cpu=True):
-    """ SpiralPipe memory report """
-    giga_bytes = 1024 ** 3
+    """SpiralPipe memory report"""
+    giga_bytes = 1024**3
 
     string = message
     if gpu:
         string += " | GPU: {} GB".format(
-            round(torch.cuda.memory_allocated() / giga_bytes, 2))
+            round(torch.cuda.memory_allocated() / giga_bytes, 2)
+        )
         string += " | MAX_GPU: {} GB".format(
-            round(torch.cuda.max_memory_allocated() / giga_bytes, 2))
+            round(torch.cuda.max_memory_allocated() / giga_bytes, 2)
+        )
     if cpu:
         rss_used = psutil.Process(os.getpid()).memory_info().rss
-        string += " | CPU: {} GB".format(
-            round(rss_used / giga_bytes, 2))
+        string += " | CPU: {} GB".format(round(rss_used / giga_bytes, 2))
     spiral_print(string)

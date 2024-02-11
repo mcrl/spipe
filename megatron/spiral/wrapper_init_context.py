@@ -27,9 +27,9 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
     def __exit__(self, exc_type, exc_value, traceback):
         self.unpatch_init_and_builtins()
-    
+
     def patch_init_and_builtins(self):
-        
+
         def copy_spiral_attrs_after(f: Callable) -> Callable:
             @functools.wraps(f)
             def wrapper(module, *args, **kwargs):
@@ -38,7 +38,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
                     self._post_init_method(module)
 
             return wrapper
-        
+
         def _enable_class(cls):
             cls._old_init = cls.__init__
             cls.__init__ = copy_spiral_attrs_after(cls.__init__)
@@ -59,7 +59,6 @@ class InsertPostInitMethodToModuleSubClasses(object):
         torch.nn.modules.module.Module.__init_subclass__ = classmethod(_init_subclass)
 
         self.patched = True
-
 
     def unpatch_init_and_builtins(self):
         if self.patched:
@@ -83,7 +82,7 @@ class SpiralWrapperInitContext(InsertPostInitMethodToModuleSubClasses):
     SPIRAL_INFIX = "spiral"
 
     def __init__(self, enabled=True):
-        """ A contex to enable copy of attributes from the wrapped module to the wrapper module.
+        """A contex to enable copy of attributes from the wrapped module to the wrapper module.
         All attributes that contain the SPIRAL_INFIX will be copied from the wrapped module to the wrapper module.
         """
         super().__init__(enabled=enabled)
@@ -92,4 +91,6 @@ class SpiralWrapperInitContext(InsertPostInitMethodToModuleSubClasses):
         assert hasattr(module, "module"), "module must have a .module attribute"
         for name, value in getattr(module, "module").__dict__.items():
             if self.SPIRAL_INFIX in name:
-                setattr(module, name, value) # copy attributes with name xx${SPIRAL_INFIX}xx to the wrapper module
+                setattr(
+                    module, name, value
+                )  # copy attributes with name xx${SPIRAL_INFIX}xx to the wrapper module
