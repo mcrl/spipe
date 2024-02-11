@@ -334,8 +334,9 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 # param.borrow()
                 param.free()
 
-        module.spiral_fetch = lambda async_op=False: self._fetch_module(module, async_op=async_op)
-        module.spiral_free = lambda: self._free_module(module)
+        module.spiral_fetch = lambda *args, **kwargs: self._fetch_module(module, *args, **kwargs)
+        module.spiral_free = lambda *args, **kwargs: self._free_module(module, *args, **kwargs)
+        module.spiral_offload_grad = lambda *args, **kwargs: self._offload_grad_module(module, *args, **kwargs)
     
 
     def _is_spiral_param(self, param):
@@ -351,15 +352,16 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         param.spiral_numel = param.numel()
         param.spiral_tensor = None # Stores copy of the tensor on remote device
 
-        def _free_param(param: Parameter) -> None:
-            """Free underlying storage of a parameter."""
+        def _free_data(param: Parameter) -> None:
+            """Free weight data of a parameter."""
             # TODO (mcrl) un-comment below line after CPU optimizer is implemented
             # param.data = torch.empty(0, dtype=param.dtype, device=param.device)
             if param.spiral_tensor is not None:
                 param.spiral_status = SpiralParamStatus.REMOTE
 
-        def _offload_param(param):
-            """Offload a parameter to remote device."""
+        # TODO (mcrl) implement async offload
+        def _offload_data(param, async_op=False):
+            """Offload weight data of a parameter to remote device."""
             assert param.spiral_status == SpiralParamStatus.ACTIVE
             
             if param.spiral_tensor is None:
@@ -369,13 +371,13 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.spiral_tensor.copy_(param.data)
             param.spiral_status = SpiralParamStatus.REMOTE
 
-        def _borrow_param(param):
+        def _borrow_data(param):
             param.spiral_tensor = torch.empty_like(param.data)
             # TODO (mcrl) borrow tensor
             param.spiral_status = SpiralParamStatus.REMOTE
 
         # TODO (mcrl) implement async fetch
-        def _fetch_param(param, async_op=False):
+        def _fetch_data(param, async_op=False):
             assert param.spiral_status == SpiralParamStatus.REMOTE
             assert param.spiral_tensor is not None, "Fetch tensor is None"
             assert param.spiral_tensor.shape == param.spiral_shape, "Fetch tensor shape mismatch"
@@ -386,10 +388,23 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.data.copy_(param.spiral_tensor).view(param.spiral_shape)
             param.spiral_status = SpiralParamStatus.ACTIVE
 
-        param.free = lambda: _free_param(param)
-        param.offload = lambda: _offload_param(param)
-        param.borrow = lambda: _borrow_param(param)
-        param.fetch = lambda async_op=False: _fetch_param(param, async_op)    
+        # TODO (mcrl) implement async offload grad
+        def _offload_grad(param, async_op=False):
+            """Offload a gradient to remote device."""
+            assert param.spiral_status == SpiralParamStatus.ACTIVE
+            assert param.spiral_tensor is not None, "Offloaded tensor is None"
+
+            if hasattr(param, 'main_grad') and param.main_grad is not None:
+                param.spiral_tensor.main_grad = param.main_grad.to(self.remote_device)
+
+            if hasattr(param, 'grad') and param.grad is not None:
+                param.spiral_tensor.grad = param.grad.to(self.remote_device)
+
+        param.free = lambda *args, **kwargs: _free_data(param, *args, **kwargs)
+        param.offload = lambda *args, **kwargs: _offload_data(param, *args, **kwargs)
+        param.borrow = lambda *args, **kwargs: _borrow_data(param, *args, **kwargs)
+        param.fetch = lambda *args, **kwargs: _fetch_data(param, *args, **kwargs)    
+        param.offload_grad = lambda *args, **kwargs: _offload_grad(param, *args, **kwargs)
 
 
     @nvtx.annotate("fetch_module", color="orange")
@@ -408,3 +423,12 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             if self._is_spiral_param(param):
                 param.free()
         spiral_report_memory(f"after free module {debug_module2class_id(module)}")
+
+
+    @nvtx.annotate("offload_grad_module", color="yellow")
+    def _offload_grad_module(self, module, async_op=False):
+        spiral_report_memory(f"before offload grad module {debug_module2class_id(module)}")
+        for param in module.parameters(recurse=True):
+            if self._is_spiral_param(param):
+                param.offload_grad(async_op=async_op)
+        spiral_report_memory(f"after offload grad module {debug_module2class_id(module)}")

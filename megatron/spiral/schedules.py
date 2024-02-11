@@ -244,6 +244,7 @@ def forward_backward_pipelining_with_spiral(*,
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
 
+        model[-bwd_stage_id-1].spiral_offload_grad()
         model[-bwd_stage_id-1].spiral_free()
         mpu.set_spiral_pipeline_parallel_backward_virtual_rank(None)
     # end bwd

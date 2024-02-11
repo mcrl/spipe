@@ -69,7 +69,7 @@ GPT_ARGS="
     --min-lr 1.0e-5 \
     --weight-decay 1e-2 \
     --lr-warmup-fraction .01 \
-    --clip-grad 1.0 \
+    --clip-grad 0.0 \
     --no-gradient-accumulation-fusion
 "
 

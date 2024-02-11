@@ -4,6 +4,7 @@ import warnings
 
 from apex.optimizers import FusedAdam as Adam
 from apex.optimizers import FusedSGD as SGD
+from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 from megatron import get_args
 from megatron.core import mpu
@@ -40,6 +41,12 @@ def get_param_groups(modules,
             if not param.requires_grad:
                 continue
 
+            if mpu.is_spiral_pipeline_parallel():
+                assert (is_spiral_param(param))
+                assert (param.spiral_status is not SpiralParamStatus.INFLIGHT)
+                if param.spiral_status == SpiralParamStatus.REMOTE:
+                    param = param.spiral_tensor
+
             if no_weight_decay_cond is not None:
                 if mpu.is_spiral_pipeline_parallel():
                     warnings.warn("no_weight_decay_cond is not supported in spiral pipeline parallelism. Consequencies are not known.")
@@ -47,11 +54,6 @@ def get_param_groups(modules,
             else:
                 # do not regularize biases nor Norm parameters
                 no_wd = name.endswith(".bias") or len(param.shape) == 1
-                if mpu.is_spiral_pipeline_parallel():
-                    assert(is_spiral_param(param))
-                    assert(param.spiral_status is not SpiralParamStatus.INFLIGHT)
-                    if param.spiral_status == SpiralParamStatus.REMOTE:
-                        no_wd = name.endswith(".bias") or len(param.spiral_shape) == 1
 
             if scale_lr_cond is not None:
                 if mpu.is_spiral_pipeline_parallel():
@@ -94,20 +96,28 @@ def get_megatron_optimizer(model,
                                     scale_lr_cond,
                                     lr_mult)
 
-    if args.optimizer == 'adam':
-        optimizer = Adam(param_groups,
-                         lr=args.lr,
-                         weight_decay=args.weight_decay,
-                         betas=(args.adam_beta1, args.adam_beta2),
-                         eps=args.adam_eps)
-    elif args.optimizer == 'sgd':
-        optimizer = SGD(param_groups,
-                        lr=args.lr,
-                        weight_decay=args.weight_decay,
-                        momentum=args.sgd_momentum)
+    if mpu.is_spiral_pipeline_parallel():
+        assert args.optimizer == 'adam', 'Spiral Pipeline only support Adam'
+        optimizer = DeepSpeedCPUAdam(param_groups,
+                                     lr=args.lr,
+                                     weight_decay=args.weight_decay,
+                                     betas=(args.adam_beta1, args.adam_beta2),
+                                     eps=args.adam_eps)
     else:
-        raise Exception('{} optimizer is not supported.'.format(
-            args.optimizer))
+        if args.optimizer == 'adam':
+            optimizer = Adam(param_groups,
+                             lr=args.lr,
+                             weight_decay=args.weight_decay,
+                             betas=(args.adam_beta1, args.adam_beta2),
+                             eps=args.adam_eps)
+        elif args.optimizer == 'sgd':
+            optimizer = SGD(param_groups,
+                            lr=args.lr,
+                            weight_decay=args.weight_decay,
+                            momentum=args.sgd_momentum)
+        else:
+            raise Exception('{} optimizer is not supported.'.format(
+                args.optimizer))
 
     # Determine whether the params have main-grad field.
     params_have_main_grad = False

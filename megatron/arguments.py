@@ -381,6 +381,9 @@ def validate_args(args, defaults={}):
         if args.lazy_mpu_init:
             raise RuntimeError(
                 "SpiralPipe does not support lazy mpu init")
+        if args.clip_grad > 0.0:
+            raise RuntimeError(
+                "SpiralPipe does not support clip_grad > 0.0")
             
 
     # Print arguments.
