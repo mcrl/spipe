@@ -362,8 +362,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
 
         def _free_data(param: Parameter) -> None:
             """Free weight data of a parameter."""
-            # TODO (mcrl) un-comment below line after CPU optimizer is implemented
-            # param.data = torch.empty(0, dtype=param.dtype, device=param.device)
+            param.data = torch.empty(0, dtype=param.dtype, device=param.device)
             if param.spiral_tensor is not None:
                 param.spiral_status = SpiralParamStatus.REMOTE
 

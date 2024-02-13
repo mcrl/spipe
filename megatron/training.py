@@ -388,30 +388,39 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     if wrap_with_ddp:
         init_contexts = []
 
+        def _wrap_ddp(model_module):
+            if mpu.is_spiral_pipeline_parallel():
+                model_module.spiral_fetch(async_op=False)
+
+            if args.DDP_impl == 'torch':
+                i = torch.cuda.current_device()
+                ddp_module = torchDDP(model_module, device_ids=[i], output_device=i,
+                                      process_group=mpu.get_data_parallel_group())
+
+            elif args.DDP_impl == 'local':
+                ddp_module = LocalDDP(model_module,
+                                      args.accumulate_allreduce_grads_in_fp32,
+                                      args.use_contiguous_buffers_in_local_ddp)
+                # broad cast params from data parallel src rank to other data parallel ranks
+                if args.data_parallel_random_init:
+                    ddp_module.broadcast_params()
+            else:
+                raise NotImplementedError('Unknown DDP implementation specified: '
+                                          '{}. Exiting.'.format(args.DDP_impl))
+
+            if mpu.is_spiral_pipeline_parallel():
+                model_module.spiral_free()
+
+            return ddp_module
+
         if mpu.is_spiral_pipeline_parallel():
             import warnings
             warnings.warn("SpiralPipe does not guaranteed DDP correctness.")
-            init_contexts = [SpiralWrapperInitContext(enabled=True)] # DDP wrapper copies spiral attributes from `model_module`
+            # DDP wrapper copies spiral attributes from `model_module`
+            init_contexts = [SpiralWrapperInitContext(enabled=True)]
 
         with ContextManagers(init_contexts):
-            if args.DDP_impl == 'torch':
-                i = torch.cuda.current_device()
-                model = [torchDDP(model_module, device_ids=[i], output_device=i,
-                                process_group=mpu.get_data_parallel_group())
-                        for model_module in model]
-
-            elif args.DDP_impl == 'local':
-                model = [LocalDDP(model_module,
-                                args.accumulate_allreduce_grads_in_fp32,
-                                args.use_contiguous_buffers_in_local_ddp)
-                        for model_module in model]
-                # broad cast params from data parallel src rank to other data parallel ranks
-                if args.data_parallel_random_init:
-                    for model_module in model:
-                        model_module.broadcast_params()
-            else:
-                raise NotImplementedError('Unknown DDP implementation specified: '
-                                        '{}. Exiting.'.format(args.DDP_impl))
+            model = [_wrap_ddp(model_module) for model_module in model]
 
     return model
 
