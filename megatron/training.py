@@ -262,12 +262,12 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
     elif mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_spiral_pipeline_parallel():
         assert model_type != ModelType.encoder_and_decoder, \
             "SpiralPipe schedule not supported for model with both encoder and decoder"
-        
+
         get_thunder_group().SetSpiralCPUAllocator()
         init_contexts = [SpiralInitContext(enabled=True, dtype=args.params_dtype)]
         model = []
 
-        # Example: 
+        # Example:
         # _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = 3
         # _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = 3
         # _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = 4
@@ -294,7 +294,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                 this_model.model_type = model_type
                 model.append(this_model)
                 mpu.set_spiral_pipeline_parallel_forward_virtual_rank(None)
-            
+
             # Sync after forward building
             spiral_print(f"Done building forward stages")
             torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
@@ -319,9 +319,9 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             # Sync after backward building
             spiral_print(f"Done building backward stages")
             torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
-        
+
         get_thunder_group().UnsetSpiralCPUAllocator()
-        
+
     else:
         pre_process = mpu.is_pipeline_first_stage()
         post_process = mpu.is_pipeline_last_stage()
@@ -390,7 +390,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
 
         def _wrap_ddp(model_module):
             if mpu.is_spiral_pipeline_parallel():
-                model_module.spiral_fetch(async_op=False)
+                model_module.spiral_fetch(non_blocking=False)
 
             if args.DDP_impl == 'torch':
                 i = torch.cuda.current_device()
@@ -909,7 +909,7 @@ def evaluate(forward_step_func,
 
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
         compute_feature_bank(model)
-    
+
     # Turn on evaluation mode which disables dropout.
     for model_module in model:
         model_module.eval()

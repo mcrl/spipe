@@ -1,4 +1,4 @@
-from .initialize import SpiralBackend, get_thunder_group
+from .initialize import SpiralBackend, get_thunder_group, get_thunder_cuda_manager
 from .init_context import SpiralInitContext, SpiralParamStatus
 from .wrapper_init_context import SpiralWrapperInitContext
 from .generic import ContextManagers
@@ -28,3 +28,8 @@ from .debug import (
 )
 
 from .utils import is_spiral_param
+
+from .test import (
+    test_spiral_report_memory,
+    test_spiral_cuda_manager,
+)

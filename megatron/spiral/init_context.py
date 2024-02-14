@@ -352,7 +352,11 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         return hasattr(param, "spiral_tensor")
 
     def _convert_to_spiral_param(self, param):
-        """Converts a parameter to a SpiralPipe parameter."""
+        """Converts a parameter to a SpiralPipe parameter.
+
+        NOTE (mcrl): .to() changes dataptr while .copy_() preserves. .empty() also changes dataptr
+                    Be aware not to allocate redundant memory and provoke unnecessary garbage collection for allocators
+        """
         param.spiral_status = (
             SpiralParamStatus.ACTIVE
         )  # After original __init__, all params initialized active
@@ -366,27 +370,35 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             if param.spiral_tensor is not None:
                 param.spiral_status = SpiralParamStatus.REMOTE
 
-        # TODO (mcrl) implement async offload
-        def _offload_data(param, async_op=False):
+        def _offload_data(param, non_blocking=False):
             """Offload weight data of a parameter to remote device."""
             assert param.spiral_status == SpiralParamStatus.ACTIVE
 
             if param.spiral_tensor is None:
-                param.spiral_tensor = param.data.to(self.remote_device)
+                # NOTE (mcrl): Currently, all spiral_tensor is pinned memory.
+                # Although there is no max pinned memory limit in CUDA, there are possible overheads
+                # (https://stackoverflow.com/questions/22300100/about-pinned-memory-in-cuda-is-there-an-upper-limit-on-it),
+                param.spiral_tensor = torch.empty(
+                    param.spiral_shape,
+                    dtype=param.dtype,
+                    device=self.remote_device,
+                    pin_memory=True,
+                )
             else:
                 assert (
                     param.spiral_tensor.shape == param.spiral_shape
                 ), "Offload tensor shape mismatch"
-                param.spiral_tensor.copy_(param.data)
-            param.spiral_status = SpiralParamStatus.REMOTE
+            param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
+            if not non_blocking:
+                # NOTE: for non-blocking offload, spiral_status should be changed after waiting in the caller
+                param.spiral_status = SpiralParamStatus.REMOTE
 
         def _borrow_data(param):
             param.spiral_tensor = torch.empty_like(param.data)
             # TODO (mcrl) borrow tensor
             param.spiral_status = SpiralParamStatus.REMOTE
 
-        # TODO (mcrl) implement async fetch
-        def _fetch_data(param, async_op=False):
+        def _fetch_data(param, non_blocking=False):
             assert param.spiral_status == SpiralParamStatus.REMOTE
             assert param.spiral_tensor is not None, "Fetch tensor is None"
             assert (
@@ -394,24 +406,53 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             ), "Fetch tensor shape mismatch"
 
             if param.numel() == 0:
-                param.data = param.spiral_tensor.to(self.local_device).view(
+                param.data = param.spiral_tensor.to(
+                    self.local_device, non_blocking=non_blocking
+                ).view(param.spiral_shape)
+            else:
+                param.data.copy_(param.spiral_tensor, non_blocking=non_blocking).view(
                     param.spiral_shape
                 )
-            else:
-                param.data.copy_(param.spiral_tensor).view(param.spiral_shape)
-            param.spiral_status = SpiralParamStatus.ACTIVE
+            if not non_blocking:
+                # NOTE: for non-blocking fetch, spiral_status should be changed after waiting in the caller
+                param.spiral_status = SpiralParamStatus.ACTIVE
 
-        # TODO (mcrl) implement async offload grad
-        def _offload_grad(param, async_op=False):
+        def _offload_grad(param, non_blocking=False):
             """Offload a gradient to remote device."""
-            assert param.spiral_status == SpiralParamStatus.ACTIVE
-            assert param.spiral_tensor is not None, "Offloaded tensor is None"
 
-            if hasattr(param, "main_grad") and param.main_grad is not None:
-                param.spiral_tensor.main_grad = param.main_grad.to(self.remote_device)
+            if hasattr(param, "main_grad") and getattr(param, "main_grad") is not None:
+                if (
+                    hasattr(param.spiral_tensor, "main_grad")
+                    and getattr(param.spiral_tensor, "main_grad") is not None
+                ):
+                    # NOTE (mcrl): Only check for numel, since main_grad shape "may" differ on GPU and CPU depending on optimizer
+                    assert (
+                        param.main_grad.numel() == param.spiral_tensor.main_grad.numel()
+                    ), "Main grad numel mismatch"
+                    param.spiral_tensor.main_grad.copy_(
+                        param.main_grad, non_blocking=non_blocking
+                    )
+                else:
+                    param.spiral_tensor.main_grad = param.main_grad.to(
+                        self.remote_device, non_blocking=non_blocking
+                    )
 
-            if hasattr(param, "grad") and param.grad is not None:
-                param.spiral_tensor.grad = param.grad.to(self.remote_device)
+            if hasattr(param, "grad") and getattr(param, "grad") is not None:
+                if (
+                    hasattr(param.spiral_tensor, "grad")
+                    and getattr(param.spiral_tensor, "grad") is not None
+                ):
+                    # NOTE (mcrl): Only check for numel, since grad shape "may" differ on GPU and CPU depending on optimizer
+                    assert (
+                        param.grad.numel() == param.spiral_tensor.grad.numel()
+                    ), "Grad numel mismatch"
+                    param.spiral_tensor.grad.copy_(
+                        param.grad, non_blocking=non_blocking
+                    )
+                else:
+                    param.spiral_tensor.grad = param.grad.to(
+                        self.remote_device, non_blocking=non_blocking
+                    )
 
         param.free = lambda *args, **kwargs: _free_data(param, *args, **kwargs)
         param.offload = lambda *args, **kwargs: _offload_data(param, *args, **kwargs)
@@ -422,11 +463,11 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         )
 
     @nvtx.annotate("fetch_module", color="orange")
-    def _fetch_module(self, module, async_op=False):
+    def _fetch_module(self, module, non_blocking=False):
         spiral_report_memory(f"before fetch module {debug_module2class_id(module)}")
         for param in module.parameters(recurse=True):
             if self._is_spiral_param(param):
-                param.fetch(async_op=async_op)
+                param.fetch(non_blocking=non_blocking)
         spiral_report_memory(f"after fetch module {debug_module2class_id(module)}")
 
     @nvtx.annotate("free_module", color="darkgreen")
@@ -437,14 +478,14 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.free()
         spiral_report_memory(f"after free module {debug_module2class_id(module)}")
 
-    @nvtx.annotate("offload_grad_module", color="yellow")
-    def _offload_grad_module(self, module, async_op=False):
+    @nvtx.annotate("offload_grad_module", color="white")
+    def _offload_grad_module(self, module, non_blocking=False):
         spiral_report_memory(
             f"before offload grad module {debug_module2class_id(module)}"
         )
         for param in module.parameters(recurse=True):
             if self._is_spiral_param(param):
-                param.offload_grad(async_op=async_op)
+                param.offload_grad(non_blocking=non_blocking)
         spiral_report_memory(
             f"after offload grad module {debug_module2class_id(module)}"
         )

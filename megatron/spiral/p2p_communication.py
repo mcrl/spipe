@@ -5,7 +5,6 @@ import torch
 from torch._C._distributed_c10d import Work
 
 from megatron.core import mpu
-from megatron.spiral.debug import spiral_print
 
 
 # Types
@@ -186,9 +185,6 @@ def recv_input_tensor(
             + (local_rank - 1) % local_world_size
         )
 
-    # TODO (mcrl) delete
-    spiral_print(f"recv input_tensor({tensor_shape}) from rank {recv_rank}")
-
     [input_tensor], reqs = _communicate(
         tensor_sends=None,
         send_ranks=None,
@@ -231,9 +227,6 @@ def send_output_tensor(
             * local_world_size
             + (local_rank + 1) % local_world_size
         )
-
-    # TODO (mcrl) delete
-    spiral_print(f"send output_tensor({output_tensor.shape}) to rank {send_rank}")
 
     _, reqs = _communicate(
         tensor_sends=[output_tensor],
@@ -323,9 +316,6 @@ def recv_output_tensor_grad(
             + (local_rank - 1) % local_world_size
         )
 
-    # TODO (mcrl) delete
-    spiral_print(f"recv output_tensor_grad({tensor_shape}) from rank {recv_rank}")
-
     [output_tensor_grad], reqs = _communicate(
         tensor_sends=None,
         send_ranks=None,
@@ -342,7 +332,7 @@ def recv_output_tensor_grad(
     return output_tensor_grad, reqs
 
 
-@nvtx.annotate("send_input_tensor_grad", color="green")
+@nvtx.annotate("send_input_tensor_grad", color="rapids")
 def send_input_tensor_grad(
     input_tensor_grad: torch.Tensor,
     overlap_p2p_comm: bool = False,
@@ -365,11 +355,6 @@ def send_input_tensor_grad(
             * local_world_size
             + (local_rank + 1) % local_world_size
         )
-
-    # TODO (mcrl) delete
-    spiral_print(
-        f"send input_tensor_grad({input_tensor_grad.shape}) to rank {send_rank}"
-    )
 
     _, reqs = _communicate(
         tensor_sends=[input_tensor_grad],
