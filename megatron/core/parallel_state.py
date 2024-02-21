@@ -116,13 +116,13 @@ def initialize_model_parallel(
             pipeline_model_parallel_size is 8 and
             pipeline_model_parallel_split_rank is 3, then ranks 0-2
             will be the encoder and ranks 3-7 will be the decoder.
-        
+
         spiral_pipeline_parallel (bool, default = False):
             Whether to use spiral pipeline parallel.
-        
+
         spiral_pipeline_parallel_forward_virtual_size (int, optional):
             The number of forward virtual stages that each spiral pipeline rank will have
-        
+
         spiral_pipeline_parallel_backward_virtual_size (int, optional):
             The number of backward virtual stages that each spiral pipeline rank will have
 
@@ -532,7 +532,7 @@ def is_pipeline_last_stage(ignore_virtual=False):
         _is_backward_virtual_last_stage = get_spiral_pipeline_parallel_backward_virtual_rank() == get_spiral_pipeline_parallel_backward_virtual_size() - 1 and \
         get_pipeline_model_parallel_rank() == 0
         return _is_forward_virtual_last_stage or _is_backward_virtual_last_stage
-    
+
     # NOTE (mcrl) below is original logic
     if not ignore_virtual:
         virtual_pipeline_model_parallel_world_size = \
@@ -665,7 +665,7 @@ def get_spiral_pipeline_parallel_backward_virtual_size():
     return _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
 
 
-def set_spiral_pipeline_parallel_backward_virtual_world_size(size):
+def set_spiral_pipeline_parallel_backward_virtual_size(size):
     global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
     _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = size
 

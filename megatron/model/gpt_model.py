@@ -38,7 +38,7 @@ def post_language_model_processing(lm_output, labels, logit_weights,
             loss = tensor_parallel.vocab_parallel_cross_entropy(output, labels)
         else:
             loss = tensor_parallel.vocab_parallel_cross_entropy(output.float(), labels)
-        
+
         # [s b] => [b, s]
         loss = loss.transpose(0,1).contiguous()
         return loss
@@ -52,8 +52,6 @@ class GPTModel(MegatronModule):
                  parallel_output=True,
                  pre_process=True,
                  post_process=True):
-        spiral_print(f"GPTModel:__init__")
-
         args = get_args()
         super(GPTModel, self).__init__(share_word_embeddings=not args.untie_embeddings_and_output_weights)
 
@@ -72,7 +70,7 @@ class GPTModel(MegatronModule):
                                                          args.num_layers),
             pre_process=self.pre_process,
             post_process=self.post_process)
-        
+
         if not args.untie_embeddings_and_output_weights:
             self.initialize_word_embeddings(init_method_normal)
 

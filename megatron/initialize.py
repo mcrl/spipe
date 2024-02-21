@@ -21,19 +21,19 @@ from megatron.global_vars import set_global_variables
 from megatron.model.transformer import bias_dropout_add_fused_train
 from megatron.model.fused_bias_gelu import bias_gelu
 from megatron.spiral import SpiralBackend, get_thunder_group
-
-import spiral_helper
+import megatron.spiral.build_state as sbs
 from megatron.spiral.debug import spiral_print
+import spiral_helper
 
 
 def initialize_megatron(extra_args_provider=None, args_defaults={},
                         ignore_unknown_args=False, allow_no_cuda=False):
     """Set global variables, initialize distributed, and
     set autoresume and random seeds.
-    `allow_no_cuda` should not be set unless using megatron for cpu only 
-    data processing. In general this arg should not be set unless you know 
+    `allow_no_cuda` should not be set unless using megatron for cpu only
+    data processing. In general this arg should not be set unless you know
     what you are doing.
-    Returns a function to finalize distributed env initialization 
+    Returns a function to finalize distributed env initialization
     (optionally, only when args.lazy_mpu_init == True)
     """
     if not allow_no_cuda:
@@ -45,13 +45,13 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
 
     # Check MPI
     _mpi_check(args)
-    
+
     if args.use_checkpoint_args or args_defaults.get('use_checkpoint_args', False):
         assert args.load is not None, '--use-checkpoints-args requires --load argument'
         load_args_from_checkpoint(args)
 
     validate_args(args, args_defaults)
-        
+
     # set global args, build tokenizer, and set adlr-autoresume,
     # tensorboard-writer, and timers.
     set_global_variables(args)
@@ -61,7 +61,7 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
         args = get_args()
         # Pytorch distributed.
         _initialize_distributed()
-        
+
         # Random seeds for reproducibility.
         if args.rank == 0:
             print('> setting random seeds to {} ...'.format(args.seed))
@@ -92,6 +92,10 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
 
         # Init spiral backend
         _spiral_backend_init()
+        # Init spiral build state
+        _spiral_build_state_init()
+        # Execute spiral tests
+        _spiral_do_test()
 
         # No continuation function
         return None
@@ -134,7 +138,7 @@ def _compile_dependencies():
             print('WARNING: constraints for invoking optimized'
                   ' fused softmax kernel are not met. We default'
                   ' back to unfused kernel invocations.', flush=True)
-    
+
     # Always build on rank zero first.
     if torch.distributed.get_rank() == 0:
         start_time = time.time()
@@ -153,7 +157,6 @@ def _compile_dependencies():
         print('>>> done with compiling and loading fused kernels. '
               'Compilation time: {:.3f} seconds'.format(
                   time.time() - start_time), flush=True)
-
 
 
 def _initialize_distributed():
@@ -188,13 +191,7 @@ def _initialize_distributed():
         world_size=args.world_size, rank=args.rank,
         timeout=timedelta(minutes=args.distributed_timeout_minutes))
 
-    spiral_pipeline_parallel_forward_virtual_size = None
-    spiral_pipeline_parallel_backward_virtual_size = None
-    # TODO (mcrl) Do some stage partitioning here or somewhere else
-    if args.spiral_pipeline_parallel:
-        spiral_pipeline_parallel_forward_virtual_size = 2
-        spiral_pipeline_parallel_backward_virtual_size = 2
-
+    # TODO (mcrl) This is a good place to do stage partitioning
 
     # Set the tensor model-parallel, pipeline model-parallel, and
     # data-parallel communicators.
@@ -207,8 +204,8 @@ def _initialize_distributed():
                                           args.virtual_pipeline_model_parallel_size,
                                           args.pipeline_model_parallel_split_rank,
                                           args.spiral_pipeline_parallel,
-                                          spiral_pipeline_parallel_forward_virtual_size,
-                                          spiral_pipeline_parallel_backward_virtual_size,)
+                                          args.spiral_pipeline_parallel_forward_virtual_size,
+                                          args.spiral_pipeline_parallel_backward_virtual_size,)
             if args.rank == 0:
                 print(f'> initialized tensor model parallel with size '
                       f'{mpu.get_tensor_model_parallel_world_size()}')
@@ -339,7 +336,7 @@ def _mpi_check(args):
                 result = subprocess.check_output(hostname_cmd, shell=True)
                 master_addr = result.decode('utf-8').split()[0]
             master_addr = comm.bcast(master_addr, root=0)
-        
+
         if hasattr(args, 'master_port') and args.master_port:
             master_port = args.master_port
         else:
@@ -384,3 +381,20 @@ def _spiral_backend_init():
         SpiralBackend(ranks)
         spiral_helper.LazyConfigure(True) # TODO (mcrl) this should be set from arg
         _set_comm_info()
+
+
+def _spiral_build_state_init():
+    sbs.initialize_spiral_build_state()
+
+
+def _spiral_do_test():
+    # NOTE (mcrl): This is a good place to do tests
+    _SPIRAL_DO_TEST = False
+
+    if not _SPIRAL_DO_TEST:
+        return
+
+    from megatron.spiral.test import test_spiral_cuda_manager
+    test_spiral_cuda_manager()
+
+    exit(0)

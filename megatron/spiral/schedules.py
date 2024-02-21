@@ -387,9 +387,7 @@ def forward_backward_pipelining_with_spiral(
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 output_tensor = forward_step(
                     forward_step_func,
-                    data_iterator[
-                        bwd_stage_id
-                    ],  # TODO (mcrl) problematic, since this assumes forward virtual size == backward virtual size, as len == forward virtual size
+                    data_iterator[bwd_stage_id + mpu.get_spiral_pipeline_parallel_forward_virtual_size()],
                     model[-bwd_stage_id - 1],
                     num_microbatches,
                     input_tensor_ckpt,

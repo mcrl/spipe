@@ -23,7 +23,7 @@ def get_param_groups(modules,
     """creates param groups based on weight decay condition (regularized vs non regularized)
        and learning rate scale condition (args.lr vs lr_mult * args.lr)
        scale_lr_cond is used during finetuning where head of the network requires a scaled
-       version of the base learning rate. 
+       version of the base learning rate.
     """
     wd_no_scale_lr = []
     wd_scale_lr = []
@@ -31,7 +31,7 @@ def get_param_groups(modules,
     no_wd_scale_lr = []
 
     for module in modules:
-        
+
         # NOTE (mcrl) Skip forward stages since only the backward stages should be dealt with optimizer.
         if mpu.is_spiral_pipeline_parallel():
             if hasattr(module, "spiral_forward_stage_id") and getattr(module, "spiral_forward_stage_id") is not None:
@@ -43,7 +43,6 @@ def get_param_groups(modules,
 
             if mpu.is_spiral_pipeline_parallel():
                 assert (is_spiral_param(param))
-                assert (param.spiral_status is not SpiralParamStatus.INFLIGHT)
                 if param.spiral_status == SpiralParamStatus.REMOTE:
                     param = param.spiral_tensor
 
@@ -90,7 +89,7 @@ def get_megatron_optimizer(model,
     args = get_args()
 
     # Base optimizer.
-    # NOTE (mcrl) param_groups currently contains only the assigned bwd stage's parameters. 
+    # NOTE (mcrl) param_groups currently contains only the assigned bwd stage's parameters.
     param_groups = get_param_groups(model,
                                     no_weight_decay_cond,
                                     scale_lr_cond,

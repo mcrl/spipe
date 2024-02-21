@@ -9,6 +9,22 @@ from .p2p_communication import (
     send_input_tensor_grad,
 )
 from .schedules import forward_backward_pipelining_with_spiral
+from .module import SpiralPhaseList
+from .build_state import (
+    get_spiral_pipeline_parallel_forward_stage_build_phase,
+    set_spiral_pipeline_parallel_forward_stage_build_phase,
+    get_spiral_pipeline_parallel_backward_stage_build_phase,
+    set_spiral_pipeline_parallel_backward_stage_build_phase,
+    get_spiral_pipeline_parallel_forward_stage_build_phase_size,
+    get_spiral_pipeline_parallel_backward_stage_build_phase_size,
+    get_spiral_pipeline_parallel_total_build_phase_size,
+    get_spiral_pipeline_parallel_aggregate_num_spiral_params,
+    get_spiral_pipeline_parallel_num_spiral_params,
+    get_spiral_pipeline_parallel_global_build_phase,
+    get_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict,
+    set_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict,
+    destroy_spiral_build_state,
+)
 
 from .debug import (
     debug_extract_module_and_param_names,
@@ -27,7 +43,11 @@ from .debug import (
     spiral_report_memory,
 )
 
-from .utils import is_spiral_param
+from .utils import (
+    is_spiral_param,
+    num_spiral_params,
+    lcm,
+)
 
 from .test import (
     test_spiral_report_memory,

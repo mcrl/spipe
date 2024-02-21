@@ -19,6 +19,7 @@ from megatron.model.fused_bias_gelu import bias_gelu_impl
 from megatron.model.rotary_pos_embedding import apply_rotary_pos_emb
 from megatron.model.utils import attention_mask_func, openai_gelu, erf_gelu
 
+import megatron.spiral.build_state as sbs
 from megatron.spiral.debug import spiral_print
 
 
@@ -723,7 +724,6 @@ class ParallelTransformerLayer(MegatronModule):
                  self_attn_mask_type=AttnMaskType.padding,
                  drop_path_rate=0.):
                  # retriever=None):
-        spiral_print("ParallelTransformerLayer:__init__")
         args = get_args()
 
         super(ParallelTransformerLayer, self).__init__()
@@ -1263,8 +1263,6 @@ class ParallelTransformer(MegatronModule):
                  pre_process=True,
                  post_process=True,
                  drop_path_rate=0.0):
-        spiral_print(f"ParallelTransformer:__init__")
-
         super(ParallelTransformer, self).__init__()
         args = get_args()
 
@@ -1347,7 +1345,7 @@ class ParallelTransformer(MegatronModule):
                 "Full recompute not supported for Retro."
             assert args.transformer_impl == 'local', \
                 "Transformer engine does not support Retro layers."
-            
+
         def build_layer(layer_number):
             if args.transformer_impl == 'local':
                 current_layer_type = _get_layer_type(
@@ -1412,13 +1410,49 @@ class ParallelTransformer(MegatronModule):
                 (mpu.get_pipeline_model_parallel_rank() * self.num_layers)
         elif mpu.is_spiral_pipeline_parallel():
             if mpu.is_spiral_pipeline_parallel_forward_stage():
-                self.num_layers = args.num_layers // mpu.get_spiral_pipeline_parallel_forward_virtual_size()
-                offset = mpu.get_spiral_pipeline_parallel_forward_virtual_rank() * self.num_layers
+                self.num_layers = (
+                    self.num_layers
+                    // mpu.get_spiral_pipeline_parallel_forward_virtual_size()
+                    // sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+                )
+                offset = (
+                    mpu.get_spiral_pipeline_parallel_forward_virtual_rank()
+                    * (
+                        args.num_layers
+                        // mpu.get_spiral_pipeline_parallel_forward_virtual_size()
+                    )
+                    + mpu.get_pipeline_model_parallel_rank()
+                    * sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+                    * self.num_layers
+                    + sbs.get_spiral_pipeline_parallel_forward_stage_build_phase()
+                    * self.num_layers
+                )
             elif mpu.is_spiral_pipeline_parallel_backward_stage():
-                self.num_layers = args.num_layers // mpu.get_spiral_pipeline_parallel_backward_virtual_size()
-                offset = mpu.get_spiral_pipeline_parallel_backward_virtual_rank() * self.num_layers
+                self.num_layers = (
+                    self.num_layers
+                    // mpu.get_spiral_pipeline_parallel_backward_virtual_size()
+                    // sbs.get_spiral_pipeline_parallel_backward_stage_build_phase_size()
+                )
+                offset = (
+                    mpu.get_spiral_pipeline_parallel_backward_virtual_rank()
+                    * (
+                        args.num_layers
+                        // mpu.get_spiral_pipeline_parallel_backward_virtual_size()
+                    )
+                    + (
+                        mpu.get_pipeline_model_parallel_world_size()
+                        - mpu.get_pipeline_model_parallel_rank()
+                        - 1
+                    )
+                    * sbs.get_spiral_pipeline_parallel_backward_stage_build_phase_size()
+                    * self.num_layers
+                    + sbs.get_spiral_pipeline_parallel_backward_stage_build_phase()
+                    * self.num_layers
+                )
             else:
-                raise Exception('ParallelTransformer: Fail to set num_layers and offset according to Spiral pipeline stage')     
+                raise Exception(
+                    "ParallelTransformer: Fail to set num_layers and offset according to Spiral pipeline stage"
+                )
         else:
             # Each stage gets a contiguous set of layers.
             if args.model_type == ModelType.encoder_and_decoder and \

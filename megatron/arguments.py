@@ -366,7 +366,7 @@ def validate_args(args, defaults={}):
                     args.retro_num_retrieved_chunks * \
                     retro_args.retro_gpt_chunk_length
                 set_retro_args(retro_args)
-    
+
     # SpiralPipe checks
     if args.spiral_pipeline_parallel:
         if args.standalone_embedding_stage:
@@ -384,7 +384,24 @@ def validate_args(args, defaults={}):
         if args.clip_grad > 0.0:
             raise RuntimeError(
                 "SpiralPipe does not support clip_grad > 0.0")
-            
+        if args.spiral_pipeline_parallel_forward_virtual_size is None:
+            raise RuntimeError(
+                "SpiralPipe requires setting forward virtual size")
+        if args.spiral_pipeline_parallel_forward_virtual_size < 1:
+            raise RuntimeError(
+                "SpiralPipe requires forward virtual size > 0")
+        if args.spiral_pipeline_parallel_forward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
+            raise RuntimeError(
+                "SpiralPipe requires forward virtual size <= num_layers // pipeline_model_parallel_size")
+        if args.spiral_pipeline_parallel_backward_virtual_size is None:
+            raise RuntimeError(
+                "SpiralPipe requires setting backward virtual size")
+        if args.spiral_pipeline_parallel_backward_virtual_size < 1:
+            raise RuntimeError(
+                "SpiralPipe requires backward virtual size > 0")
+        if args.spiral_pipeline_parallel_backward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
+            raise RuntimeError(
+                "SpiralPipe requires backward virtual size <= num_layers // pipeline_model_parallel_size")
 
     # Print arguments.
     _print_args("arguments", args)
@@ -960,6 +977,10 @@ def _add_distributed_args(parser):
                        help='Number of layers per virtual pipeline stage')
     group.add_argument('--spiral-pipeline-parallel', action='store_true',
                        help='Enable spiral pipeline parallel.')
+    group.add_argument('--spiral-pipeline-parallel-forward-virtual-size', type=int, default=None,
+                       help='Number of spiral pipeline parallel forward stages per rank')
+    group.add_argument('--spiral-pipeline-parallel-backward-virtual-size', type=int, default=None,
+                       help='Number of spiral pipeline parallel backward stages per rank')
     group.add_argument('--overlap-p2p-communication',
                        action='store_true',
                        help='overlap pipeline parallel communication with forward and backward chunks',

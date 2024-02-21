@@ -16,6 +16,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <cstddef>
+#include <pybind11/numpy.h>
 
 const char* sharedMemoryName = "/thunder";
 
@@ -28,7 +29,6 @@ std::vector<std::string> GetHostnames(MPI_Comm comm) {
   int size;
   CHECK_MPI(MPI_Comm_size(comm, &size));
 
-  
   char* all_hostnames = (char*)malloc(MPI_MAX_PROCESSOR_NAME * size);
   int* all_hostnamelens = (int*)malloc(sizeof(int) * size);
   char* hostname = (char*)malloc(MPI_MAX_PROCESSOR_NAME);
@@ -112,6 +112,7 @@ public:
   void BorrowTensor(torch::Tensor& tensor, uintptr_t addr, int from);
 
   const py::dict GetCommInfo() const;
+  template <typename T> py::array_t<T>& AllGather(py::array_t<T>& fwd_arr) const;
 
   static bool debug;
 
@@ -331,6 +332,16 @@ const py::dict Comm::GetCommInfo() const {
   return info;
 }
 
+template <typename T>
+py::array_t<T>& Comm::AllGather(py::array_t<T>& arr) const {
+  py::buffer_info buf = arr.request();
+  auto* ptr = (T*)arr.mutable_data();
+  py::ssize_t ag_numel = std::reduce(buf.shape.begin() + 1, buf.shape.end(), 1, std::multiplies<>());
+  py::ssize_t ag_offset = comm_info_.mpi_rank_ * ag_numel;
+  CHECK_MPI(MPI_Allgather(&ptr[ag_offset], ag_numel, MPI_UNSIGNED, ptr, ag_numel, MPI_UNSIGNED, mpi_comm_));
+  return arr;
+}
+
 void LazyConfigure(bool debug) { Comm::debug = debug; }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
@@ -342,5 +353,6 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
     .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
     .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
     .def("BorrowTensor", &Comm::BorrowTensor)
-    .def("GetCommInfo", &Comm::GetCommInfo);
+    .def("GetCommInfo", &Comm::GetCommInfo)
+    .def("AllGather", &Comm::AllGather<unsigned int>);
 }

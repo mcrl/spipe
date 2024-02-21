@@ -113,7 +113,6 @@ class MegatronModule(torch.nn.Module):
                 pass
                 # torch.distributed.all_reduce(self.word_embeddings_weight().spiral_tensor.data,
                 #                             group=mpu.get_spiral_embedding_group_gloo())
-                # spiral_print("word_embeddings sync between stages done")
 
         if not mpu.is_spiral_pipeline_parallel():
             # Ensure that encoder(first stage) and decoder(split stage) position
@@ -134,7 +133,6 @@ class MegatronModule(torch.nn.Module):
                 # position_embeddings = self.language_model.embedding.position_embeddings
                 # torch.distributed.all_reduce(position_embeddings.weight.spiral_tensor.data,
                 #                             group=mpu.get_spiral_position_embedding_group_gloo())
-                # spiral_print("position_embeddings sync between postp stages done")
 
 
 def conversion_helper(val, conversion):

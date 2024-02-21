@@ -50,12 +50,14 @@ GPT_ARGS="
     --tensor-model-parallel-size $TP_SIZE \
     --pipeline-model-parallel-size $PP_SIZE \
     --spiral-pipeline-parallel \
+    --spiral-pipeline-parallel-forward-virtual-size 2 \
+    --spiral-pipeline-parallel-backward-virtual-size 3 \
     --no-initialization \
     --untie-embeddings-and-output-weights \
     --distributed-backend nccl \
     --overlap-p2p-communication \
     --sequence-parallel \
-    --num-layers 6 \
+    --num-layers 18 \
     --hidden-size 1024 \
     --num-attention-heads 16 \
     --seq-length 1024 \
@@ -63,7 +65,8 @@ GPT_ARGS="
     --micro-batch-size $MICRO_BSZ \
     --global-batch-size $GLOBAL_BSZ \
     --lr 0.00015 \
-    --train-iters 500 \
+    --train-iters 3 \
+    --eval-iters 0 \
     --lr-decay-iters 320000 \
     --lr-decay-style cosine \
     --min-lr 1.0e-5 \
