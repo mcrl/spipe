@@ -20,10 +20,9 @@
 
 const char* sharedMemoryName = "/thunder";
 
-// const size_t kCpuBufferSize = 1L << 30; // 1GB, per host
-const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
-
-#define USE_MPI_SHARED_MEMORY 0
+// const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
+const size_t kCpuBufferSize = 1L << 35; // 32GB, per host
+const size_t kCpuBufferHeaderSize = 1L << 30; // 1GB, per host
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
   int size;
@@ -109,10 +108,13 @@ public:
   void SetSpiralCPUAllocator();
   void UnsetSpiralCPUAllocator();
 
-  void BorrowTensor(torch::Tensor& tensor, uintptr_t addr, int from);
+  void RemapParamData(torch::Tensor& tensor, const unsigned int param_id, const c10::IntArrayRef sizes, const c10::IntArrayRef strides, const int64_t storage_offset) const;
+  void SetParamDataInfo(const unsigned int param_id, const uintptr_t dataptr, const size_t size_bytes);
 
   const py::dict GetCommInfo() const;
   template <typename T> py::array_t<T>& AllGather(py::array_t<T>& fwd_arr) const;
+
+  inline uintptr_t GetBase(const int mpi_rank) const;
 
   static bool debug;
 
@@ -138,13 +140,18 @@ private:
   CommInfo comm_info_;
 
   int fd_;
-  MPI_Win win_;
   void* shared_ptr_ = nullptr;
+  uintptr_t* shared_ptrs_; // shared_ptr_ virtual address of each mpi rank
+
+  struct ParamDataInfo {
+    int mpi_rank_;      // mpi rank of initializer of param data
+    uintptr_t dataptr_; // param data virtual address of mpi_rank_
+    size_t size_bytes_; // size of param data
+  };
+  ParamDataInfo* param_mapping_tbl_ = nullptr;
 
   c10::SpiralCPUAllocator* allocator_ = nullptr;
   at::Allocator* prev_allocator_ptr_ = nullptr;
-
-  uintptr_t* bases_; // shared_ptr_ virtual address of each process
 };
 
 bool Comm::debug = false;
@@ -179,72 +186,57 @@ Comm::Comm(std::vector<int> ranks) {
   comm_info_.is_host_leader_ = comm_info_.intra_rank_ == 0;
 
   // Open shared memory
-  if (!USE_MPI_SHARED_MEMORY) {
-    if (comm_info_.is_host_leader_) {
-      fd_ = shm_open(sharedMemoryName, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
-      assert(fd_ != -1);
-      CHECK_ERRNO(ftruncate(fd_, kCpuBufferSize));
+  if (comm_info_.is_host_leader_) {
+    fd_ = shm_open(sharedMemoryName, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+    assert(fd_ != -1);
+    CHECK_ERRNO(ftruncate(fd_, kCpuBufferHeaderSize + kCpuBufferSize));
 
-      // test
-      struct stat sb;
-      CHECK_ERRNO(fstat(fd_, &sb));
-      if (Comm::debug)
-        spdlog::info("Shared memory created fd = {} sz = {}", fd_, sb.st_size);
-      assert(sb.st_size == kCpuBufferSize);
-    }
-    CHECK_MPI(MPI_Barrier(intra_comm_));
-    if (!comm_info_.is_host_leader_) {
-      fd_ = shm_open(sharedMemoryName, O_RDWR, 0);
-      assert(fd_ != -1);
-
-      // test
-      struct stat sb;
-      CHECK_ERRNO(fstat(fd_, &sb));
-      if (Comm::debug)
-        spdlog::info("Shared memory opened fd = {} sz = {}", fd_, sb.st_size);
-      assert(sb.st_size == kCpuBufferSize);
-    }
-    shared_ptr_ =
-        mmap(NULL, kCpuBufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
-    assert(shared_ptr_ != MAP_FAILED);
-    close(fd_);
+    // test
+    struct stat sb;
+    CHECK_ERRNO(fstat(fd_, &sb));
+    if (Comm::debug)
+      spdlog::info("Shared memory created fd = {} sz = {}", fd_, sb.st_size);
+    assert(sb.st_size == kCpuBufferHeaderSize + kCpuBufferSize);
   }
+  CHECK_MPI(MPI_Barrier(intra_comm_));
+  if (!comm_info_.is_host_leader_) {
+    fd_ = shm_open(sharedMemoryName, O_RDWR, 0);
+    assert(fd_ != -1);
 
-  // Open shared memory via MPI
-  if (USE_MPI_SHARED_MEMORY) {
-    CHECK_MPI(MPI_Win_allocate_shared(comm_info_.is_host_leader_ ? kCpuBufferSize : 0,
-                                      1,
-                                      MPI_INFO_NULL,
-                                      intra_comm_,
-                                      shared_ptr_,
-                                      &win_));
-    if (!comm_info_.is_host_leader_) {
-      MPI_Aint size;
-      int disp_unit;
-      CHECK_MPI(MPI_Win_shared_query(win_, 0, &size, &disp_unit, &shared_ptr_));
-    }
-    CHECK_MPI(MPI_Win_lock_all(0, win_));
+    // test
+    struct stat sb;
+    CHECK_ERRNO(fstat(fd_, &sb));
+    if (Comm::debug)
+      spdlog::info("Shared memory opened fd = {} sz = {}", fd_, sb.st_size);
+    assert(sb.st_size == kCpuBufferHeaderSize + kCpuBufferSize);
   }
+  shared_ptr_ =
+      mmap(NULL, kCpuBufferHeaderSize + kCpuBufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+  assert(shared_ptr_ != MAP_FAILED);
+  close(fd_);
 
-  // Collect bases
-  bases_ = (uintptr_t*)malloc(sizeof(uintptr_t) * comm_info_.mpi_size_);
-  bases_[comm_info_.mpi_rank_] = (uintptr_t)shared_ptr_;
+  // Collect shared_ptrs_
+  shared_ptrs_ = (uintptr_t*)malloc(sizeof(uintptr_t) * comm_info_.mpi_size_);
+  shared_ptrs_[comm_info_.mpi_rank_] = (uintptr_t)shared_ptr_;
 #if __WORDSIZE == 64
-  CHECK_MPI(MPI_Allgather(&bases_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED_LONG, bases_, 1, MPI_UNSIGNED_LONG, mpi_comm_));
+  CHECK_MPI(MPI_Allgather(&shared_ptrs_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED_LONG, shared_ptrs_, 1, MPI_UNSIGNED_LONG, mpi_comm_));
 #else
-  CHECK_MPI(MPI_Allgather(&bases_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED, bases_, 1, MPI_UNSIGNED, mpi_comm_));
+  CHECK_MPI(MPI_Allgather(&shared_ptrs_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED, shared_ptrs_, 1, MPI_UNSIGNED, mpi_comm_));
 #endif
   
   // test
   if (Comm::debug) {
     for (int i = 0; i < comm_info_.mpi_size_; i++) {
-      spdlog::info("rank = {} base = {}", i, bases_[i]);
+      spdlog::info("rank = {} shared_ptr = {}", i, shared_ptrs_[i]);
     }
   }
 
+  // Initialize param mapping tbl
+  param_mapping_tbl_ = (ParamDataInfo*)shared_ptr_;
+
   // Initialize allocator
   assert(allocator_ == nullptr); // allocator_ must be nullptr before first calling instance
-  allocator_ = c10::SpiralCPUAllocator::instance((uintptr_t)shared_ptr_, kCpuBufferSize / comm_info_.intra_size_ * comm_info_.intra_rank_, kCpuBufferSize / comm_info_.intra_size_, sizeof(float)); // Shared memory is divided equally among host processes
+  allocator_ = c10::SpiralCPUAllocator::instance(GetBase(comm_info_.mpi_rank_), kCpuBufferSize / comm_info_.intra_size_ * comm_info_.intra_rank_, kCpuBufferSize / comm_info_.intra_size_, sizeof(float)); // Shared memory is divided equally among host processes
   
   CHECK_MPI(MPI_Barrier(mpi_comm_));
 }
@@ -261,16 +253,12 @@ Comm::~Comm() {
   // NOTE: since allocator is designed to be a singleton,
   // we do not need to delete it here.
 
-  // Free bases
-  free(bases_);
+  // Free shared_ptrs_
+  free(shared_ptrs_);
 
   // Destroy shared memory
-  if (USE_MPI_SHARED_MEMORY) {
-    CHECK_MPI(MPI_Win_unlock_all(win_));
-    CHECK_MPI(MPI_Win_free(&win_));
-  }
   if (shared_ptr_ != nullptr) {
-    CHECK_ERRNO(munmap(shared_ptr_, kCpuBufferSize));
+    CHECK_ERRNO(munmap(shared_ptr_, kCpuBufferHeaderSize + kCpuBufferSize));
     if (comm_info_.is_host_leader_) {
       CHECK_ERRNO(shm_unlink(sharedMemoryName));
     }
@@ -306,18 +294,30 @@ void Comm::UnsetSpiralCPUAllocator() {
   prev_allocator_ptr_ = nullptr;
 }
 
-/*
- * Borrow tensor from owner rank
- *
- * tensor: tensor to set dataptr
- * addr: virtual address of src tensor from owner rank
- * from: owner rank of src tensor
- */
-void Comm::BorrowTensor(torch::Tensor& tensor, uintptr_t addr, int from) {
-  std::ptrdiff_t offset = addr - bases_[from];
-  void* srcptr = (void*)(bases_[comm_info_.intra_rank_] + offset);
+void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, const c10::IntArrayRef sizes, const c10::IntArrayRef strides, const int64_t storage_offset) const {
+  uintptr_t addr = param_mapping_tbl_[param_id].dataptr_;
+  std::ptrdiff_t offset = addr - GetBase(param_mapping_tbl_[param_id].mpi_rank_);
+  void* srcptr = (void*)(GetBase(comm_info_.mpi_rank_) + offset);
   c10::DataPtr srcdataptr = { srcptr, srcptr, nullptr, at::Device(at::DeviceType::CPU) }; // disallow delete
+
+  // change tensor metadata
+  c10::TensorImpl* tensor_impl = tensor.unsafeGetTensorImpl();
+  tensor_impl->set_sizes_and_strides(sizes, strides);
+  tensor_impl->set_storage_offset(storage_offset);
+
+  // change tensor storage
   tensor.storage().set_data_ptr_noswap(std::move(srcdataptr));
+  tensor.storage().set_nbytes(param_mapping_tbl_[param_id].size_bytes_);
+}
+
+void Comm::SetParamDataInfo(const unsigned int param_id, const uintptr_t dataptr, const size_t size_bytes) {
+  param_mapping_tbl_[param_id].mpi_rank_ = comm_info_.mpi_rank_;
+  param_mapping_tbl_[param_id].dataptr_ = dataptr;
+  param_mapping_tbl_[param_id].size_bytes_ = size_bytes;
+
+  if (Comm::debug) {
+    spdlog::info("Set param_mapping_tbl_[{}] mpi_rank = {} dataptr = {}", param_id, param_mapping_tbl_[param_id].mpi_rank_, param_mapping_tbl_[param_id].dataptr_);
+  }
 }
 
 const py::dict Comm::GetCommInfo() const {
@@ -342,17 +342,21 @@ py::array_t<T>& Comm::AllGather(py::array_t<T>& arr) const {
   return arr;
 }
 
+// Virtual address of allocator memory. Corrsponds to `base_` in SpiralCPUAllocator
+inline uintptr_t Comm::GetBase(const int mpi_rank) const { return shared_ptrs_[mpi_rank] + kCpuBufferHeaderSize; }
+
 void LazyConfigure(bool debug) { Comm::debug = debug; }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
   m.def("LazyConfigure",
         &LazyConfigure,
-        "SpiralPipeBackend LazyConfigure (C++)");
+        "SpiralPipeBackend LazyConfigure (C++)"); 
   py::class_<Comm>(m, "Comm")
     .def(py::init<std::vector<int>>())
     .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
     .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
-    .def("BorrowTensor", &Comm::BorrowTensor)
+    .def("RemapParamData", &Comm::RemapParamData)
+    .def("SetParamDataInfo", &Comm::SetParamDataInfo)
     .def("GetCommInfo", &Comm::GetCommInfo)
     .def("AllGather", &Comm::AllGather<unsigned int>);
 }

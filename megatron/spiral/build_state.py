@@ -14,11 +14,15 @@ _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
 
 def initialize_spiral_build_state():
     global _SPIRAL_PIPELINE_PARALLEL_GLOBAL_BUILD_PHASE_NUM_SPIRAL_PARAMS_DICT
-    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
-    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
     _SPIRAL_PIPELINE_PARALLEL_GLOBAL_BUILD_PHASE_NUM_SPIRAL_PARAMS_DICT = {
         s: 0 for s in range(get_spiral_pipeline_parallel_total_build_phase_size() * mpu.get_pipeline_model_parallel_world_size())
     }
+    reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated()
+    reset_spiral_pipeline_parallel_backward_stage_build_phase_num_spiral_params_allocated()
+
+
+def reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated():
+    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
     _SPIRAL_PIPELINE_PARALLEL_FORWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED = np.zeros(
         (
             mpu.get_spiral_pipeline_parallel_forward_virtual_size(),
@@ -26,6 +30,10 @@ def initialize_spiral_build_state():
         ),
         dtype=np.uintc,
     )
+
+
+def reset_spiral_pipeline_parallel_backward_stage_build_phase_num_spiral_params_allocated():
+    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
     _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED = np.zeros(
         (
             mpu.get_spiral_pipeline_parallel_backward_virtual_size(),

@@ -6,6 +6,7 @@ from datetime import datetime
 import math
 import sys
 import time
+import warnings
 import numpy as np
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
@@ -44,7 +45,8 @@ from megatron.utils import report_memory
 from megatron.spiral import get_thunder_group, SpiralInitContext, SpiralWrapperInitContext, ContextManagers
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
-from megatron.spiral.debug import spiral_print
+from megatron.spiral.utils import is_spiral_param
+from megatron.spiral.debug import spiral_print, debug_param2id_shape_status
 from megatron.spiral.init_context import patch_extra_repr
 
 from megatron.model.vision.knn_monitor import compute_feature_bank
@@ -390,6 +392,9 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                     for phase_id, phase_model in enumerate(stage_models.module_list):
                         spiral_print(f"===== fwd stage {stage_id} phase {phase_id} =====")
                         spiral_print(str(phase_model))
+                        for param in phase_model.parameters(recurse=True):
+                            if is_spiral_param(param):
+                                spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
 
             # Build phase to num spiral param map
             num_params_per_fwd_build_phase = np.empty(
@@ -440,12 +445,37 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                         stage_id = mpu.get_spiral_pipeline_parallel_backward_virtual_size() - reverse_stage_id - 1
                         spiral_print(f"===== bwd stage {stage_id} phase {phase_id} =====")
                         spiral_print(str(phase_model))
+                        for param in phase_model.parameters(recurse=True):
+                            if is_spiral_param(param):
+                                spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
+            for stage_models in model[mpu.get_spiral_pipeline_parallel_forward_virtual_size():]:
+                for phase_model in stage_models.module_list:
+                    phase_model.spiral_save_params_info()
+            torch.distributed.barrier(group = mpu.get_pipeline_model_parallel_group()) # IMPORTANT
 
-            # TODO (mcrl) Re-mapping fwd with spiral ids and phase to nparam map
-            # TODO (mcrl) reset sbs.fwd alloc np
+            # Remap forward
+            spiral_print(f"Remapping forward stages")
+            sbs.reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated() # reset for proper spiral id mapping
+            for i in range(mpu.get_spiral_pipeline_parallel_forward_virtual_size()):
+                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(i)
+                for j in range(sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size()):
+                    sbs.set_spiral_pipeline_parallel_forward_stage_build_phase(j)
+                    model[i].module_list[j].spiral_remap()
+                    sbs.set_spiral_pipeline_parallel_forward_stage_build_phase(None)
+                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(None)
+
+            # Sync after forward remapping
+            spiral_print(f"Done remapping forward stages")
+            with patch_extra_repr():
+                for stage_id, stage_models in enumerate(model[:mpu.get_spiral_pipeline_parallel_forward_virtual_size()]):
+                    for phase_id, phase_model in enumerate(stage_models.module_list):
+                        spiral_print(f"===== fwd stage {stage_id} phase {phase_id} =====")
+                        spiral_print(str(phase_model))
+                        for param in phase_model.parameters(recurse=True):
+                            if is_spiral_param(param):
+                                spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
 
         get_thunder_group().UnsetSpiralCPUAllocator()
-
     else:
         pre_process = mpu.is_pipeline_first_stage()
         post_process = mpu.is_pipeline_last_stage()
@@ -538,7 +568,6 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             return ddp_module
 
         if mpu.is_spiral_pipeline_parallel():
-            import warnings
             warnings.warn("SpiralPipe does not guaranteed DDP correctness.")
             # DDP wrapper copies spiral attributes from `model_module`
             init_contexts = [SpiralWrapperInitContext(enabled=True)]

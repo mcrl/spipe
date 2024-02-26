@@ -83,7 +83,11 @@ def debug_param2name_id_numel(param):
 
 
 def debug_param2name_id_shape_status(param):
-    return f"name={debug_param2name(param)} id={param.spiral_id} shape={param.data.shape} status={param.ds_status}"
+    return f"name={debug_param2name(param)} id={param.spiral_id} shape={param.data.shape} status={param.spiral_status}"
+
+
+def debug_param2id_shape_status(param):
+    return f"id={param.spiral_id} gpu_shape={param.data.shape} cpu_shape={param.spiral_tensor.shape} status={param.spiral_status}"
 
 
 def printflock(*msgs):

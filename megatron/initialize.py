@@ -378,8 +378,8 @@ def _spiral_backend_init():
     if hasattr(args, 'spiral_pipeline_parallel') and args.spiral_pipeline_parallel:
         torch_group = mpu.get_pipeline_model_parallel_group()
         ranks = frozenset(torch.distributed.get_process_group_ranks(torch_group))
-        SpiralBackend(ranks)
         spiral_helper.LazyConfigure(True) # TODO (mcrl) this should be set from arg
+        SpiralBackend(ranks)
         _set_comm_info()
 
 

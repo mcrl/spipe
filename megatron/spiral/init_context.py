@@ -12,12 +12,14 @@ import torch
 from torch import Tensor
 from torch.nn import Module, Parameter
 
+from megatron.spiral import get_thunder_group
 from megatron.spiral.debug import (
     spiral_print,
     spiral_report_memory,
     debug_module2class_id,
 )
 from megatron.spiral.utils import is_spiral_param
+import megatron.spiral.build_state as sbs
 
 
 spiral_init_context = 0
@@ -39,6 +41,9 @@ class SpiralParamStatus(Enum):
 
     # parameter is in CPU
     REMOTE = 2
+
+    # parameter is not available
+    UNAVAILABLE = 3
 
 
 def wrapper_for_fp_tensor_constructor(
@@ -89,9 +94,8 @@ def get_all_subclasses(cls):
 # Inserts _post_init_method at the end of init method
 # for all sub classes of torch.nn.Module
 class InsertPostInitMethodToModuleSubClasses(object):
-    num_module_parameters = 0
-    num_module_elements = 0
-    num_module_spiral_parameters = 0
+    num_spiral_parameters = 0
+    num_spiral_elements = 0
 
     def __init__(self, enabled=True, dtype=None):
         """A context to enable massive model construction for training with PP.
@@ -135,12 +139,11 @@ class InsertPostInitMethodToModuleSubClasses(object):
             top_level_context = None
 
             billion_elems = (
-                InsertPostInitMethodToModuleSubClasses.num_module_elements / 1e9
+                InsertPostInitMethodToModuleSubClasses.num_spiral_elements / 1e9
             )
-            num_params = InsertPostInitMethodToModuleSubClasses.num_module_parameters
-            spiral_parms = InsertPostInitMethodToModuleSubClasses.num_module_spiral_parameters
+            num_params = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
             spiral_print(
-                f"finished initializing model - num_params = {num_params} (spiral_params = {spiral_parms}), num_elems = {billion_elems:.2f}B"
+                f"finished initializing spiral params = {num_params}), elems = {billion_elems:.2f}B"
             )
 
         # Now that we cleaned up the metaclass injection, raise the exception.
@@ -191,7 +194,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
                     setattr(module, "_spiral_child_entered", True)
 
                     # attach spiral module recurse attributes
-                    num_module_spiral_parameters_before = InsertPostInitMethodToModuleSubClasses.num_module_spiral_parameters
+                    num_module_spiral_parameters_before = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
 
                 f(module, *args, **kwargs)
 
@@ -201,7 +204,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
                     self._post_init_method(module)
 
                     # attach spiral module recurse attributes
-                    num_module_spiral_parameters_after = InsertPostInitMethodToModuleSubClasses.num_module_spiral_parameters
+                    num_module_spiral_parameters_after = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
                     setattr(module, "num_spiral_params_recurse", num_module_spiral_parameters_after - num_module_spiral_parameters_before)
 
             return wrapper
@@ -330,9 +333,6 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
 
         # Convert module's parameters
         for param in module.parameters(recurse=False):
-            InsertPostInitMethodToModuleSubClasses.num_module_parameters += 1
-            InsertPostInitMethodToModuleSubClasses.num_module_elements += param.numel()
-
             # TODO (mcrl) Currently, all params are converted to spiral params.
             # Modify this when selectively converting params to spiral params is required
             if not is_spiral_param(param):
@@ -342,12 +342,11 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 num_spiral_params += 1
 
             # Conditionally ordered offload and free
-            # fwd stage: free -> offload; since its spiral_tensor will be re-mapped in the remapping phase
+            # fwd stage: free; since its spiral_tensor will be re-mapped
             # bwd stage: offload -> free; its data will be used
             if is_spiral_param(param):
                 if module.spiral_forward_stage_id is not None:
                     param.free()
-                    param.offload()
                 elif module.spiral_backward_stage_id is not None:
                     param.offload()
                     param.free()
@@ -365,6 +364,12 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         module.spiral_offload_grad = lambda *args, **kwargs: self._offload_grad_module(
             module, *args, **kwargs
         )
+        module.spiral_save_params_info = lambda *args, **kwargs: self._save_module_params_info(
+            module, *args, **kwargs
+        )
+        module.spiral_remap = lambda *args, **kwargs: self._remap_module(
+            module, *args, **kwargs
+        )
 
         # Attach spiral module attributes
         setattr(module, "num_spiral_params", num_spiral_params)
@@ -374,68 +379,69 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
 
         NOTE (mcrl): .to() changes dataptr while .copy_() preserves. .empty() also changes dataptr
                     Be aware not to allocate redundant memory and provoke unnecessary garbage collection for allocators
-        """
-        import megatron.spiral.build_state as sbs
 
-        InsertPostInitMethodToModuleSubClasses.num_module_spiral_parameters += 1
+        NOTE (mcrl): Currently, all spiral_tensor is pinned by default.
+                    This is because Spiral allocator memory is registered as pinned memory.
+                    As a result, pin_memory argument should not be passed to Tensor creation APIs.
+                    Although there is no max pinned memory limit in CUDA, there are possible overheads(https://stackoverflow.com/questions/22300100/about-pinned-memory-in-cuda-is-there-an-upper-limit-on-it)
+        """
+        InsertPostInitMethodToModuleSubClasses.num_spiral_parameters += 1
+        InsertPostInitMethodToModuleSubClasses.num_spiral_elements += param.numel()
 
         param.spiral_id = sbs.get_add_spiral_pipeline_parallel_next_param_number_to_build()
-        param.spiral_status = (
-            SpiralParamStatus.ACTIVE
-        )  # After original __init__, all params initialized active
+        param.spiral_status = SpiralParamStatus.ACTIVE
         param.spiral_shape = param.shape
+        param.spiral_stride = param.stride()
+        param.spiral_storage_offset = param.storage_offset()
         param.spiral_numel = param.numel()
-        param.spiral_tensor = None  # Stores copy of the tensor on remote device
+        param.spiral_tensor = torch.empty(
+            0,
+            dtype=param.dtype,
+            device=self.remote_device,
+            # NOTE (mcrl): pin_memory arg should not be passed
+        )
 
         def _free_data(param: Parameter) -> None:
             """Free weight data of a parameter."""
             param.data = torch.empty(0, dtype=param.dtype, device=param.device)
-            if param.spiral_tensor is not None:
+            if param.spiral_tensor.numel() == param.spiral_numel:
                 param.spiral_status = SpiralParamStatus.REMOTE
+            else:
+                param.spiral_status = SpiralParamStatus.UNAVAILABLE
 
         def _offload_data(param, non_blocking=False):
             """Offload weight data of a parameter to remote device."""
             assert param.spiral_status == SpiralParamStatus.ACTIVE
+            assert param.spiral_tensor is not None, "Offload tensor is None"
 
-            if param.spiral_tensor is None:
-                # NOTE (mcrl): Currently, all spiral_tensor is pinned memory.
-                # Although there is no max pinned memory limit in CUDA, there are possible overheads
-                # (https://stackoverflow.com/questions/22300100/about-pinned-memory-in-cuda-is-there-an-upper-limit-on-it),
-                param.spiral_tensor = torch.empty(
-                    param.shape,
-                    dtype=param.dtype,
-                    device=self.remote_device,
-                    pin_memory=True,
-                )
+            if param.spiral_tensor.numel() == 0:
+                assert sbs.get_spiral_pipeline_parallel_backward_stage_build_phase() is not None, \
+                    "Offloading to empty spiral tensor should be executed only once during backward stage build phase"
+                param.spiral_tensor = param.data.to(
+                    device=self.remote_device, non_blocking=non_blocking
+                ) # NOTE (mcrl): pin_memory() should not be called
             else:
                 assert (
-                    param.spiral_tensor.shape == param.spiral_shape
-                ), "Offload tensor shape mismatch"
-            param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
+                    param.spiral_tensor.shape == param.data.shape
+                ), f"Offload tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
+                param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
             if not non_blocking:
                 # NOTE: for non-blocking offload, spiral_status should be changed after waiting in the caller
                 param.spiral_status = SpiralParamStatus.REMOTE
 
-        def _borrow_data(param):
-            param.spiral_tensor = torch.empty_like(param.data)
-            # TODO (mcrl) borrow tensor
-            param.spiral_status = SpiralParamStatus.REMOTE
-
         def _fetch_data(param, non_blocking=False):
             assert param.spiral_status == SpiralParamStatus.REMOTE
             assert param.spiral_tensor is not None, "Fetch tensor is None"
-            assert (
-                param.spiral_tensor.shape == param.spiral_shape
-            ), "Fetch tensor shape mismatch"
 
             if param.numel() == 0:
                 param.data = param.spiral_tensor.to(
-                    self.local_device, non_blocking=non_blocking
+                    device=self.local_device, non_blocking=non_blocking
                 ).view(param.spiral_shape)
             else:
-                param.data.copy_(param.spiral_tensor, non_blocking=non_blocking).view(
-                    param.spiral_shape
-                )
+                assert (
+                    param.spiral_tensor.shape == param.data.shape
+                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
+                param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
             if not non_blocking:
                 # NOTE: for non-blocking fetch, spiral_status should be changed after waiting in the caller
                 param.spiral_status = SpiralParamStatus.ACTIVE
@@ -479,7 +485,6 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
 
         param.free = lambda *args, **kwargs: _free_data(param, *args, **kwargs)
         param.offload = lambda *args, **kwargs: _offload_data(param, *args, **kwargs)
-        param.borrow = lambda *args, **kwargs: _borrow_data(param, *args, **kwargs)
         param.fetch = lambda *args, **kwargs: _fetch_data(param, *args, **kwargs)
         param.offload_grad = lambda *args, **kwargs: _offload_grad(
             param, *args, **kwargs
@@ -520,6 +525,37 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         spiral_report_memory(
             f"after offload grad module {debug_module2class_id(module)}"
         )
+
+    def _save_module_params_info(self, module):
+        for param in module.parameters(recurse=True):
+            if is_spiral_param(param):
+                get_thunder_group().SetParamDataInfo(
+                    param.spiral_id,
+                    (
+                        param.spiral_tensor.data_ptr()
+                        if isinstance(param.spiral_tensor, torch.Tensor)
+                        else param.spiral_tensor.data.ptr
+                    ),
+                    param.spiral_tensor.numel() * param.spiral_tensor.element_size(),
+                )
+
+    # NOTE (mcrl): Prior to call, must reset spiral build state's "forward number of spiral params allocated". (Look at training.py for example)
+    # If reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated() hasn't been called, spiral_ids will be incorrectly reassigned.
+    def _remap_module(self, module):
+        for param in module.parameters(recurse=True):
+            if is_spiral_param(param):
+                param.spiral_id = (
+                    sbs.get_add_spiral_pipeline_parallel_next_param_number_to_build()
+                )
+                get_thunder_group().RemapParamData(
+                    param.spiral_tensor,
+                    param.spiral_id,
+                    param.spiral_shape,
+                    param.spiral_stride,
+                    param.spiral_storage_offset,
+                )
+                if param.spiral_status == SpiralParamStatus.UNAVAILABLE:
+                    param.spiral_status = SpiralParamStatus.REMOTE
 
 
 @contextmanager

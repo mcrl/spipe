@@ -11,6 +11,8 @@ from .p2p_communication import (
 from .schedules import forward_backward_pipelining_with_spiral
 from .module import SpiralPhaseList
 from .build_state import (
+    reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated,
+    reset_spiral_pipeline_parallel_backward_stage_build_phase_num_spiral_params_allocated,
     get_spiral_pipeline_parallel_forward_stage_build_phase,
     set_spiral_pipeline_parallel_forward_stage_build_phase,
     get_spiral_pipeline_parallel_backward_stage_build_phase,
@@ -38,6 +40,7 @@ from .debug import (
     debug_param2name_id_shape_device,
     debug_param2name_id_numel,
     debug_param2name_id_shape_status,
+    debug_param2id_shape_status,
     printflock,
     spiral_print,
     spiral_report_memory,
