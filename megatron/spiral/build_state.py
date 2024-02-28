@@ -15,7 +15,11 @@ _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
 def initialize_spiral_build_state():
     global _SPIRAL_PIPELINE_PARALLEL_GLOBAL_BUILD_PHASE_NUM_SPIRAL_PARAMS_DICT
     _SPIRAL_PIPELINE_PARALLEL_GLOBAL_BUILD_PHASE_NUM_SPIRAL_PARAMS_DICT = {
-        s: 0 for s in range(get_spiral_pipeline_parallel_total_build_phase_size() * mpu.get_pipeline_model_parallel_world_size())
+        s: 0
+        for s in range(
+            get_spiral_pipeline_parallel_total_build_phase_size()
+            * mpu.get_pipeline_model_parallel_world_size()
+        )
     }
     reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated()
     reset_spiral_pipeline_parallel_backward_stage_build_phase_num_spiral_params_allocated()
@@ -23,23 +27,27 @@ def initialize_spiral_build_state():
 
 def reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated():
     global _SPIRAL_PIPELINE_PARALLEL_FORWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
-    _SPIRAL_PIPELINE_PARALLEL_FORWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED = np.zeros(
-        (
-            mpu.get_spiral_pipeline_parallel_forward_virtual_size(),
-            get_spiral_pipeline_parallel_forward_stage_build_phase_size(),
-        ),
-        dtype=np.uintc,
+    _SPIRAL_PIPELINE_PARALLEL_FORWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED = (
+        np.zeros(
+            (
+                mpu.get_spiral_pipeline_parallel_forward_virtual_size(),
+                get_spiral_pipeline_parallel_forward_stage_build_phase_size(),
+            ),
+            dtype=np.uintc,
+        )
     )
 
 
 def reset_spiral_pipeline_parallel_backward_stage_build_phase_num_spiral_params_allocated():
     global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED
-    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED = np.zeros(
-        (
-            mpu.get_spiral_pipeline_parallel_backward_virtual_size(),
-            get_spiral_pipeline_parallel_backward_stage_build_phase_size(),
-        ),
-        dtype=np.uintc,
+    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE_NUM_SPIRAL_PARAMS_ALLOCATED = (
+        np.zeros(
+            (
+                mpu.get_spiral_pipeline_parallel_backward_virtual_size(),
+                get_spiral_pipeline_parallel_backward_stage_build_phase_size(),
+            ),
+            dtype=np.uintc,
+        )
     )
 
 
@@ -63,7 +71,10 @@ def get_add_spiral_pipeline_parallel_next_param_number_to_build(incr=1):
             mpu.get_spiral_pipeline_parallel_backward_virtual_rank(),
             _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE,
         ] += incr
-    return get_spiral_pipeline_parallel_aggregate_num_spiral_params() + num_params_allocated
+    return (
+        get_spiral_pipeline_parallel_aggregate_num_spiral_params()
+        + num_params_allocated
+    )
 
 
 def get_spiral_pipeline_parallel_forward_stage_build_phase():
@@ -168,7 +179,11 @@ def get_spiral_pipeline_parallel_global_build_phase():
             * mpu.get_pipeline_model_parallel_world_size()
             * mpu.get_spiral_pipeline_parallel_backward_virtual_rank()
             + get_spiral_pipeline_parallel_backward_stage_build_phase_size()
-            * (mpu.get_pipeline_model_parallel_world_size() - mpu.get_pipeline_model_parallel_rank() - 1)
+            * (
+                mpu.get_pipeline_model_parallel_world_size()
+                - mpu.get_pipeline_model_parallel_rank()
+                - 1
+            )
             + _SPIRAL_PIPELINE_PARALLEL_BACKWARD_STAGE_BUILD_PHASE
         )
     else:
@@ -192,6 +207,45 @@ def set_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict(dict)
     """
     global _SPIRAL_PIPELINE_PARALLEL_GLOBAL_BUILD_PHASE_NUM_SPIRAL_PARAMS_DICT
     _SPIRAL_PIPELINE_PARALLEL_GLOBAL_BUILD_PHASE_NUM_SPIRAL_PARAMS_DICT = dict
+
+
+# Below are helper functions that can be used outside model initialization
+
+
+def get_pp_rank_for_fwd_phase(global_phase):
+    """Get the pipeline model parallel rank for the forward stage execution of global build phase"""
+    assert (
+        global_phase
+        < get_spiral_pipeline_parallel_total_build_phase_size()
+        * mpu.get_pipeline_model_parallel_world_size()
+    )
+    return (
+        global_phase
+        % (
+            get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+            * mpu.get_pipeline_model_parallel_world_size()
+        )
+        // get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+    )
+
+
+def fwd_phase2local_stage_phase(global_phase):
+    """Translate global fwd phase to local stage and local phase
+    NOTE (mcrl) This function does not assert that global phase belongs to forward stage of this rank
+    """
+    assert (
+        global_phase
+        < get_spiral_pipeline_parallel_total_build_phase_size()
+        * mpu.get_pipeline_model_parallel_world_size()
+    )
+    local_stage = global_phase // (
+        get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+        * mpu.get_pipeline_model_parallel_world_size()
+    )
+    local_phase = (
+        global_phase % get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+    )
+    return local_stage, local_phase
 
 
 # NOTE (mcrl): currently has no caller

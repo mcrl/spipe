@@ -25,6 +25,8 @@ from .build_state import (
     get_spiral_pipeline_parallel_global_build_phase,
     get_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict,
     set_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict,
+    get_pp_rank_for_fwd_phase,
+    fwd_phase2local_stage_phase,
     destroy_spiral_build_state,
 )
 

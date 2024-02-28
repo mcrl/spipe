@@ -143,7 +143,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
             )
             num_params = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
             spiral_print(
-                f"finished initializing spiral params = {num_params}), elems = {billion_elems:.2f}B"
+                f"finished initializing spiral params = {num_params}, elems = {billion_elems:.2f}B"
             )
 
         # Now that we cleaned up the metaclass injection, raise the exception.

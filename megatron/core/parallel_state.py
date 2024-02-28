@@ -21,6 +21,8 @@ _SPIRAL_EMBEDDING_GROUP_GLOO = None
 _POSITION_EMBEDDING_GROUP = None
 _SPIRAL_POSITION_EMBEDDING_GROUP = None
 _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
+# Input tensor checkpoint group for spiral pipeline
+_SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = None
 _DATA_PARALLEL_GROUP_GLOO = None
@@ -238,6 +240,7 @@ def initialize_model_parallel(
 
     # Build the pipeline model-parallel groups and embedding groups
     # (first and last rank in each pipeline model-parallel group).
+    # Also build spiral input tensor ckpt group
     global _PIPELINE_MODEL_PARALLEL_GROUP
     global _PIPELINE_GLOBAL_RANKS
     assert _PIPELINE_MODEL_PARALLEL_GROUP is None, \
@@ -255,6 +258,10 @@ def initialize_model_parallel(
     global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
     assert _POSITION_EMBEDDING_GROUP is None, \
         'position embedding group is already initialized'
+    global _SPIRAL_INPUT_TENSOR_CKPT_GROUP
+    assert _SPIRAL_INPUT_TENSOR_CKPT_GROUP is None, \
+        'spiral inpute tensor checkpoint group is already initialized'
+
     for i in range(num_pipeline_model_parallel_groups):
         ranks = range(i, world_size, num_pipeline_model_parallel_groups)
         group = torch.distributed.new_group(ranks)
@@ -310,6 +317,17 @@ def initialize_model_parallel(
                 _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = group_gloo
             if rank in ranks:
                 _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = spiral_position_embedding_ranks
+
+        if _SPIRAL_PIPELINE_PARALLEL:
+            group = torch.distributed.new_group(ranks)
+            if rank in ranks:
+                _SPIRAL_INPUT_TENSOR_CKPT_GROUP = group
+                # NOTE (mcrl)
+                # Perform an entire-rank-participating collective call to init the group
+                # in order to use batch_isend_recv
+                # https://pytorch.org/docs/2.0/distributed.html#:~:text=Note%20that%20when,group%20are%20allowed.
+                torch.distributed.barrier(group=group)
+
 
     # Build the FP8 groups.
     global _AMAX_REDUCTION_GROUP
@@ -422,6 +440,13 @@ def get_spiral_position_embedding_group_gloo():
     assert _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO is not None, \
         'spiral position embedding group-gloo is not initialized'
     return _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO
+
+
+def get_spiral_input_tensor_ckpt_group():
+    """Get the input tensor checkpoint group the caller rank belongs to."""
+    assert _SPIRAL_INPUT_TENSOR_CKPT_GROUP is not None, \
+        'spiral input tensor checkpoint group is not initialized'
+    return _SPIRAL_INPUT_TENSOR_CKPT_GROUP
 
 
 def get_amax_reduction_group():
@@ -853,6 +878,8 @@ def destroy_model_parallel():
     _SPIRAL_EMBEDDING_GLOBAL_RANKS = None
     global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
     _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None
+    global _SPIRAL_INPUT_TENSOR_CKPT_GROUP
+    _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
 
     global _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK
     _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK = None

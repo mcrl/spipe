@@ -6,7 +6,6 @@ from torch._C._distributed_c10d import Work
 
 from megatron.core import mpu
 
-
 # Types
 Shape = Union[List[int], torch.Size]
 
@@ -94,7 +93,7 @@ def _communicate(
 
     # This will come from config in the next version, for now hard
     # code it here to match existing functionality.
-    batch_p2p_sync = True
+    # batch_p2p_sync = True
 
     # set group
     if group is None:
@@ -134,7 +133,7 @@ def _communicate(
         #     return []
         # p2p_func = _ring_exchange_wrapper
     elif batch_p2p_comm:
-        assert wait_on_reqs
+        # assert wait_on_reqs
         p2p_func = _batched_p2p_ops
     else:
         p2p_func = _p2p_ops
@@ -152,10 +151,10 @@ def _communicate(
             req.wait()
         reqs = None
 
-    if batch_p2p_comm and batch_p2p_sync:
-        # To protect against race condition when using batch_isend_irecv().
-        # User should assert that we have a modern enough PyTorch to not need this
-        torch.cuda.synchronize()
+    # if batch_p2p_comm and batch_p2p_sync:
+    #     # To protect against race condition when using batch_isend_irecv().
+    #     # User should assert that we have a modern enough PyTorch to not need this
+    #     torch.cuda.synchronize()
 
     return tensor_recvs, reqs
 
@@ -196,7 +195,7 @@ def recv_input_tensor(
         dtype=dtype,
     )
     if timers is not None:
-        timers("recv_input_tensor", log_level=2).stop()
+        timers("recv_input_tensor").stop()
 
     return input_tensor, reqs
 
@@ -239,53 +238,9 @@ def send_output_tensor(
         dtype=None,
     )
     if timers is not None:
-        timers("send_output_tensor", log_level=2).stop()
+        timers("send_output_tensor").stop()
 
     return reqs
-
-
-# @nvtx.annotate("send_output_tensor_recv_input_tensor", color="red")
-# def send_output_tensor_recv_input_tensor(output_tensor: torch.Tensor,
-#                            tensor_shape: Shape,
-#                            dtype: torch.dtype,
-#                            batch_p2p_comm: bool = True,
-#                            timers: Callable = None,) -> torch.Tensor:
-
-#     if mpu.is_pipeline_first_stage():
-#         input_tensor = None
-#     else:
-#         if timers is not None:
-#             timers("send_recv_input_tensor", log_level=2).start()
-
-#         recv_rank = None
-#         if mpu.get_spiral_pipeline_parallel_forward_virtual_rank() == 0:
-#             recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
-#         else:
-#             local_world_size = mpu.get_spiral_pipeline_parallel_intra_size()
-#             local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
-#             recv_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
-#                 + (local_rank - 1) % local_world_size
-
-#         send_rank = None
-#         if mpu.get_spiral_pipeline_parallel_forward_virtual_rank() == mpu.get_spiral_pipeline_parallel_forward_virtual_size() - 1:
-#             send_rank = mpu.get_pipeline_model_parallel_next_rank()
-#         else:
-#             local_world_size = mpu.get_spiral_pipeline_parallel_intra_size()
-#             local_rank = mpu.get_spiral_pipeline_parallel_intra_rank()
-#             send_rank = mpu.get_pipeline_model_parallel_rank() // local_world_size * local_world_size \
-#                 + (local_rank + 1) % local_world_size
-
-#         [input_tensor], _ = _communicate(tensor_sends=[output_tensor],
-#                                         send_ranks=[send_rank],
-#                                         recv_ranks=[recv_rank],
-#                                         tensor_shape=tensor_shape,
-#                                         group=mpu.get_pipeline_model_parallel_group(),
-#                                         batch_p2p_comm=batch_p2p_comm,
-#                                         dtype=dtype)
-#         if timers is not None:
-#             timers("send_output_tensor_recv_input_tensor", log_level=2).stop()
-
-#     return input_tensor
 
 
 @nvtx.annotate("recv_output_tensor_grad", color="purple")
@@ -327,7 +282,7 @@ def recv_output_tensor_grad(
         dtype=dtype,
     )
     if timers is not None:
-        timers("output_tensor_grad", log_level=2).stop()
+        timers("output_tensor_grad").stop()
 
     return output_tensor_grad, reqs
 
@@ -367,112 +322,6 @@ def send_input_tensor_grad(
         dtype=None,
     )
     if timers is not None:
-        timers("send_input_tensor_grad", log_level=2).stop()
+        timers("send_input_tensor_grad").stop()
 
     return reqs
-
-
-# below are deprecated codes from de2a86e
-
-# def _communicate_by_rank_id(*,
-#                             send_tensor: torch.Tensor,
-#                             recv_rank_id: int,
-#                             send_rank_id: int,
-#                             tensor_shape: Shape,
-#                             batch_p2p_comm: bool = True,
-#                             dtype: Optional[torch.dtype],
-#                             ) -> torch.Tensor:
-#     """Batched recv from recv_rank_id and send to send_rank_id in pipeline.
-#     TODO(mcrl) Additional implement needed to support batch_p2p_comm
-#     """
-#     ops = []
-#     group = mpu.get_pipeline_model_parallel_group()
-#     recv_tensor = None
-
-#     if send_tensor is not None and send_rank_id is not None:
-#         send_handle = torch.distributed.P2POp(torch.distributed.isend,
-#                                               send_tensor, send_rank_id, group)
-#         ops.append(send_handle)
-
-#     if recv_rank_id is not None:
-#         recv_tensor = torch.empty(tensor_shape,
-#                                   requires_grad=True,
-#                                   device=torch.cuda.current_device(),
-#                                   dtype=dtype)
-
-#         recv_handle = torch.distributed.P2POp(torch.distributed.irecv,
-#                                               recv_tensor, recv_rank_id, group)
-#         ops.append(recv_handle)
-
-#     if len(ops) > 0:
-#         reqs = torch.distributed.batch_isend_irecv(ops)
-#     else:
-#         reqs = []
-
-#     for req in reqs:
-#         req.wait()
-
-#     return recv_tensor
-
-
-# @nvtx.annotate("send_ckpt", color="cyan")
-# def send_ckpt(send_tensor: torch.Tensor,
-#               send_rank_id: int,
-#               batch_p2p_comm: bool = True,
-#               timers: Callable = None) -> None:
-#     """Send tensor to send_rank_id in pipeline (forward send).
-#     """
-#     if timers is not None:
-#         timers('send_ckpt', log_level=2).start()
-#     _communicate_by_rank_id(send_tensor=send_tensor,
-#                             recv_rank_id=None,
-#                             send_rank_id=send_rank_id,
-#                             tensor_shape=None,
-#                             batch_p2p_comm=batch_p2p_comm,
-#                             dtype=None)
-#     if timers is not None:
-#         timers('forward-send').stop()
-
-
-# @nvtx.annotate("recv_ckpt", color="cyan")
-# def recv_ckpt(recv_rank_id: int,
-#               tensor_shape: Shape,
-#               dtype: torch.dtype,
-#               batch_p2p_comm: bool = True,
-#               timers: Callable = None) -> torch.Tensor:
-#     """ Receive tensor from recv_rank_id in pipeline
-#     """
-#     if timers is not None:
-#         timers('recv_ckpt', log_level=2).start()
-#     input_tensor_ckpt = _communicate_by_rank_id(send_tensor=None,
-#                                                 recv_rank_id=recv_rank_id,
-#                                                 send_rank_id=None,
-#                                                 tensor_shape=tensor_shape,
-#                                                 batch_p2p_comm=batch_p2p_comm,
-#                                                 dtype=dtype)
-#     if timers is not None:
-#         timers('recv_ckpt').stop()
-#     return input_tensor_ckpt
-
-
-# @nvtx.annotate("send_ckpt_recv_ckpt", color="cyan")
-# def send_ckpt_recv_ckpt(send_tensor: torch.Tensor,
-#                         recv_rank_id: int,
-#                         send_rank_id: int,
-#                         tensor_shape: Shape,
-#                         dtype: torch.dtype,
-#                         batch_p2p_comm: bool = True,
-#                         timers: Callable = None) -> torch.Tensor:
-#     """Batched recv from recv_rank_id and send to send_rank_id in pipeline.
-#     """
-#     if timers is not None:
-#         timers('send_ckpt_recv_ckpt', log_level=2).start()
-#     input_tensor_ckpt = _communicate_by_rank_id(send_tensor=send_tensor,
-#                                                 recv_rank_id=recv_rank_id,
-#                                                 send_rank_id=send_rank_id,
-#                                                 tensor_shape=tensor_shape,
-#                                                 batch_p2p_comm=batch_p2p_comm,
-#                                                 dtype=dtype)
-#     if timers is not None:
-#         timers('send_ckpt_recv_ckpt').stop()
-#     return input_tensor_ckpt
