@@ -684,6 +684,11 @@ def train_step(forward_step_func, data_iterator,
         barrier=args.barrier_with_L1_time)
     forward_backward_func = get_forward_backward_func()
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
+
+    spiral_kwargs = {}
+    if mpu.is_spiral_pipeline_parallel():
+        spiral_kwargs = {"optimizer": optimizer}
+
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,
         data_iterator=data_iterator,
@@ -696,7 +701,8 @@ def train_step(forward_step_func, data_iterator,
         overlap_p2p_comm=args.overlap_p2p_comm,
         batch_p2p_comm=not args.overlap_p2p_comm,
         forward_only=False,
-        timers=fwd_bwd_timers)
+        timers=fwd_bwd_timers,
+        **spiral_kwargs)
     timers('forward-backward').stop()
 
     # Empty unused memory.
@@ -713,9 +719,15 @@ def train_step(forward_step_func, data_iterator,
         unwrapped_model.cancel_gradients_last_layer(args.curr_iteration)
 
     # Update parameters.
-    timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
-    timers('optimizer').stop()
+    if not mpu.is_spiral_pipeline_parallel():
+        timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
+        update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
+        timers('optimizer').stop()
+    else:
+        # TODO (mcrl): Need to remove when async option was enabled
+        torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
+        update_successful = True
+        grad_norm = num_zeros_in_grad = 0
 
     # Gather params.
     if update_successful:

@@ -102,6 +102,13 @@ class SpiralCUDAManager:
                 return 0
         return -1
 
+    def sync_event(self, query: SpiralCUDAEventQuery_t) -> int:
+        for eventhdl in self._get_stream_event_hdl_deque(query.record_stream_name):
+            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+                eventhdl.synchronize()
+                return 0
+        return -1
+
     def _get_stream_event_hdl_deque(self, stream_name: str):
         assert (
             self.__stream_dict.get(stream_name) is not None
@@ -163,6 +170,27 @@ class SpiralCUDAEventHandle:
             self.pre_wait_fn()
 
         self.event.wait(stream=torch.cuda.current_stream())
+
+        # flush completed events from the record stream event deque, including the event itself
+        # TODO (mcrl): handle case when multiple streams wait on the same event
+        while (
+            self.record_stream_event_deque
+            and self.record_stream_event_deque[0].event.query()
+        ):
+            completed_event_hdl = self.record_stream_event_deque.popleft()
+            if completed_event_hdl == self:
+                break
+
+        if self.post_wait_fn is not None:
+            self.post_wait_fn()
+
+    def synchronize(self):
+        assert self.wait_stream is None, "EventSynchronize would block cpu processing, so wait_stream should be None"
+
+        if self.pre_wait_fn is not None:
+            self.pre_wait_fn()
+
+        self.event.synchronize()
 
         # flush completed events from the record stream event deque, including the event itself
         # TODO (mcrl): handle case when multiple streams wait on the same event

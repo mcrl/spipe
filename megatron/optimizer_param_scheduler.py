@@ -5,6 +5,7 @@
 import math
 
 from megatron import print_rank_0
+from megatron.spiral.optimizer import SpiralOptimizer
 
 class OptimizerParamScheduler(object):
     """Anneals learning rate and weight decay"""
@@ -121,7 +122,13 @@ class OptimizerParamScheduler(object):
         self.num_steps += increment
         new_lr = self.get_lr()
         new_wd = self.get_wd()
-        for group in self.optimizer.param_groups:
+
+        if isinstance(self.optimizer, SpiralOptimizer):
+            param_groups = self.optimizer.get_total_param_groups()
+        else:
+            param_groups = self.optimizer.param_groups
+
+        for group in param_groups:
             group['lr'] = new_lr * group.get('lr_mult', 1.0)
             group['weight_decay'] = new_wd * group.get('wd_mult', 1.0)
 

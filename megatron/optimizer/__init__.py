@@ -14,6 +14,7 @@ from megatron.spiral.utils import is_spiral_param
 from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
 from .optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
+from megatron.spiral.optimizer import SpiralOptimizer
 
 
 def get_param_groups(modules,
@@ -31,12 +32,6 @@ def get_param_groups(modules,
     no_wd_scale_lr = []
 
     for module in modules:
-
-        # NOTE (mcrl) Skip forward stages since only the backward stages should be dealt with optimizer.
-        if mpu.is_spiral_pipeline_parallel():
-            if hasattr(module, "spiral_forward_stage_id") and getattr(module, "spiral_forward_stage_id") is not None:
-                continue
-
         for name, param in module.named_parameters():
             if not param.requires_grad:
                 continue
@@ -88,48 +83,63 @@ def get_megatron_optimizer(model,
                            lr_mult=1.0):
     args = get_args()
 
+    # Determine whether the params have main-grad field.
+    params_have_main_grad = False
+    if args.DDP_impl == 'local':
+        params_have_main_grad = True
+
+    # Spiral optimizer.
+    if mpu.is_spiral_pipeline_parallel():
+        assert args.optimizer == 'adam', 'Spiral Pipeline only support Adam'
+
+        optimizer_list = []
+        for bwd_stage_id in range(mpu.get_spiral_pipeline_parallel_backward_virtual_size()):
+            param_groups = get_param_groups([model[-bwd_stage_id - 1]],
+                                            no_weight_decay_cond,
+                                            scale_lr_cond,
+                                            lr_mult)
+            optimizer = DeepSpeedCPUAdam(param_groups,
+                                         lr=args.lr,
+                                         weight_decay=args.weight_decay,
+                                         betas=(args.adam_beta1, args.adam_beta2),
+                                         eps=args.adam_eps)
+            optimizer_list.append(optimizer)
+
+        return SpiralOptimizer(optimizer_list, args.clip_grad,
+                               args.log_num_zeros_in_grad,
+                               params_have_main_grad,
+                               args.use_contiguous_buffers_in_local_ddp,
+                               model)
+
     # Base optimizer.
-    # NOTE (mcrl) param_groups currently contains only the assigned bwd stage's parameters.
     param_groups = get_param_groups(model,
                                     no_weight_decay_cond,
                                     scale_lr_cond,
                                     lr_mult)
 
-    if mpu.is_spiral_pipeline_parallel():
-        assert args.optimizer == 'adam', 'Spiral Pipeline only support Adam'
-        optimizer = DeepSpeedCPUAdam(param_groups,
-                                     lr=args.lr,
-                                     weight_decay=args.weight_decay,
-                                     betas=(args.adam_beta1, args.adam_beta2),
-                                     eps=args.adam_eps)
+    if args.optimizer == 'adam':
+        optimizer = Adam(param_groups,
+                         lr=args.lr,
+                         weight_decay=args.weight_decay,
+                         betas=(args.adam_beta1, args.adam_beta2),
+                         eps=args.adam_eps)
+    elif args.optimizer == 'sgd':
+        optimizer = SGD(param_groups,
+                        lr=args.lr,
+                        weight_decay=args.weight_decay,
+                        momentum=args.sgd_momentum)
     else:
-        if args.optimizer == 'adam':
-            optimizer = Adam(param_groups,
-                             lr=args.lr,
-                             weight_decay=args.weight_decay,
-                             betas=(args.adam_beta1, args.adam_beta2),
-                             eps=args.adam_eps)
-        elif args.optimizer == 'sgd':
-            optimizer = SGD(param_groups,
-                            lr=args.lr,
-                            weight_decay=args.weight_decay,
-                            momentum=args.sgd_momentum)
-        else:
-            raise Exception('{} optimizer is not supported.'.format(
-                args.optimizer))
+        raise Exception('{} optimizer is not supported.'.format(
+            args.optimizer))
 
-    # Determine whether the params have main-grad field.
-    params_have_main_grad = False
-    if args.DDP_impl == 'local':
-        params_have_main_grad = True
+
 
     # Mixed precision optimizer.
     # - Note: both the Float16Optimizer and the DistributedOptimizer inherit
     #   from the MixedPrecisionOptimizer, which manages any optimizer where
     #   the model params and main params are distinct.
     if args.fp16 or args.bf16 or args.use_distributed_optimizer:
-        if mpu.is_spiral_pipeline_parallel():
-            raise RuntimeError("SpiralPipe currently only supports FP32 optimizer.")
+
         # Grad scaler:
         #    if loss-scale is provided, instantiate the constant scaler.
         #    if we are using fp16 and loss-scale is not present, use a

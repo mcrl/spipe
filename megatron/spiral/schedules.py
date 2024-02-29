@@ -4,11 +4,12 @@ from typing import Callable, Iterator, List, Optional, Union, Tuple
 from enum import Enum
 import nvtx
 import sys
+import multiprocess as mp
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
 
-from megatron import get_num_microbatches
+from megatron import get_num_microbatches, get_args, get_timers
 from megatron.core import mpu
 from megatron.core.enums import ModelType
 from megatron.core.utils import get_model_type, get_attr_wrapped_model
@@ -159,6 +160,7 @@ def forward_backward_pipelining_with_spiral(
     no_sync_func: Optional[Callable] = None,
     grad_sync_func: Optional[Callable] = None,
     param_sync_func: Optional[Callable] = None,
+    optimizer,
 ):
     """Run sprial schedule, with communication between pipeline stages as needed.
 
@@ -344,6 +346,9 @@ def forward_backward_pipelining_with_spiral(
 
     recv_handles = None
 
+    # Sub process list for weight update
+    weight_update_processes = []
+
     prefetch_event_queries = []
     compute_event_queries = []
     offload_event_queries = []
@@ -353,9 +358,6 @@ def forward_backward_pipelining_with_spiral(
     offload_query = None
 
     """ Start training """
-
-    # TODO (mcrl) below line is temporarily added to sync between minibatches. Remove after optimizer sync is implemented
-    # torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
 
     # nop pre-pipeline non-compute timesteps
     __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
@@ -701,6 +703,15 @@ def forward_backward_pipelining_with_spiral(
             model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
             model[-bwd_stage_id - 1].spiral_free()
 
+            offload_query = get_thunder_cuda_manager().Event(
+                "offload",
+                None,
+                tag=f"optimizer:b{bwd_stage_id}"
+            )
+            if get_thunder_cuda_manager().record_event(offload_query) == -1:
+                raise RuntimeError("record_event failed")
+            offload_event_queries.append(offload_query)
+
             if not bwd_stage_id == 0:
                 offload_query = get_thunder_cuda_manager().Event(
                     "offload",
@@ -713,6 +724,14 @@ def forward_backward_pipelining_with_spiral(
                 if get_thunder_cuda_manager().record_event(offload_query) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries.append(offload_query)
+
+        torch.cuda.nvtx.range_push(f"opt fork:{bwd_stage_id}")
+        weight_update = mp.Process(target=_weight_update, args=(optimizer, bwd_stage_id,
+                                                                offload_event_queries.pop(0),))
+        weight_update.start()
+        weight_update_processes.append(weight_update)
+        torch.cuda.nvtx.range_pop()
+
         mpu.set_spiral_pipeline_parallel_backward_virtual_rank(None)
     # end bwd
 
@@ -727,6 +746,14 @@ def forward_backward_pipelining_with_spiral(
         comm_input_ckpt(next(ckpt_send_recv_schedule))
 
     cleanup()
+
+    # wait for cpu weight update process
+    torch.cuda.nvtx.range_push(f"opt join")
+    for weight_update in weight_update_processes:
+        weight_update.join()
+    torch.cuda.nvtx.range_pop()
+
+
     return forward_data_store
 
 
@@ -734,3 +761,14 @@ def _post_wait_set_spiral_param_status(module, status: SpiralParamStatus):
     for param in module.parameters(recurse=True):
         if is_spiral_param(param):
             param.spiral_param_status = status
+
+
+def _weight_update(optimizer, bwd_stage_id, event_query):
+    if (
+        get_thunder_cuda_manager().sync_event(event_query)
+        == -1
+    ):
+        # event synchornize with tag=f"optimizer:b{bwd_stage_id}"
+        raise RuntimeError("sync_event failed")
+    optimizer.set_bwd_stage(bwd_stage_id)
+    optimizer.step(get_args(), get_timers())
