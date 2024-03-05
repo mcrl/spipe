@@ -11,9 +11,9 @@ global thunder_cuda_manager
 
 
 class SpiralBackend:
-    def __init__(self, ranks):
+    def __init__(self, ranks, init_shmem):
         global thunder_group
-        thunder_group = spiral_helper.Comm(sorted(ranks))
+        thunder_group = spiral_helper.Comm(sorted(ranks), init_shmem)
 
         global thunder_cuda_manager
         thunder_cuda_manager = SpiralCUDAManager()
@@ -172,7 +172,7 @@ class SpiralCUDAEventHandle:
         self.event.wait(stream=torch.cuda.current_stream())
 
         # flush completed events from the record stream event deque, including the event itself
-        # TODO (mcrl): handle case when multiple streams wait on the same event
+        # TODO (SpiralPipe) handle case when multiple streams wait on the same event
         while (
             self.record_stream_event_deque
             and self.record_stream_event_deque[0].event.query()
@@ -193,7 +193,7 @@ class SpiralCUDAEventHandle:
         self.event.synchronize()
 
         # flush completed events from the record stream event deque, including the event itself
-        # TODO (mcrl): handle case when multiple streams wait on the same event
+        # TODO (SpiralPipe): handle case when multiple streams wait on the same event
         while (
             self.record_stream_event_deque
             and self.record_stream_event_deque[0].event.query()

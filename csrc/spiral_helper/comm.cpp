@@ -98,7 +98,7 @@ int GetHostId(MPI_Comm comm) {
 
 class Comm {
 public:
-  Comm(std::vector<int> ranks);
+  Comm(std::vector<int> ranks, const bool init_shmem);
   Comm(const Comm&) = delete;             // copy ctor
   Comm(Comm&&) = delete;                  // move ctor
   Comm& operator= (const Comm&) = delete; // copy assign
@@ -138,10 +138,11 @@ private:
     bool is_host_leader_;
   };
   CommInfo comm_info_;
-
+  
   int fd_;
   void* shared_ptr_ = nullptr;
-  uintptr_t* shared_ptrs_; // shared_ptr_ virtual address of each mpi rank
+  uintptr_t* shared_ptrs_;        // shared_ptr_ virtual address of each mpi rank
+  size_t shared_memory_size_ = 0; // size > 0 indicates shmem initialized
 
   struct ParamDataInfo {
     int mpi_rank_;      // mpi rank of initializer of param data
@@ -156,7 +157,7 @@ private:
 
 bool Comm::debug = false;
 
-Comm::Comm(std::vector<int> ranks) {
+Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   if (Comm::debug)
     spdlog::info("Creating SpiralPipe Comm");
 
@@ -185,18 +186,24 @@ Comm::Comm(std::vector<int> ranks) {
   CHECK_MPI(MPI_Comm_rank(mpi_comm_, &comm_info_.mpi_rank_));
   comm_info_.is_host_leader_ = comm_info_.intra_rank_ == 0;
 
+  if (!init_shmem)
+    return;
+  
+  // Configure shared memory
+  shared_memory_size_ = kCpuBufferHeaderSize + kCpuBufferSize;
+
   // Open shared memory
   if (comm_info_.is_host_leader_) {
     fd_ = shm_open(sharedMemoryName, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
     assert(fd_ != -1);
-    CHECK_ERRNO(ftruncate(fd_, kCpuBufferHeaderSize + kCpuBufferSize));
+    CHECK_ERRNO(ftruncate(fd_, shared_memory_size_));
 
     // test
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
       spdlog::info("Shared memory created fd = {} sz = {}", fd_, sb.st_size);
-    assert(sb.st_size == kCpuBufferHeaderSize + kCpuBufferSize);
+    assert(sb.st_size == shared_memory_size_);
   }
   CHECK_MPI(MPI_Barrier(intra_comm_));
   if (!comm_info_.is_host_leader_) {
@@ -208,10 +215,10 @@ Comm::Comm(std::vector<int> ranks) {
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
       spdlog::info("Shared memory opened fd = {} sz = {}", fd_, sb.st_size);
-    assert(sb.st_size == kCpuBufferHeaderSize + kCpuBufferSize);
+    assert(sb.st_size == shared_memory_size_);
   }
   shared_ptr_ =
-      mmap(NULL, kCpuBufferHeaderSize + kCpuBufferSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
+      mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE, MAP_SHARED, fd_, 0);
   assert(shared_ptr_ != MAP_FAILED);
   close(fd_);
 
@@ -250,6 +257,14 @@ Comm::~Comm() {
   MPI_Barrier(intra_comm_);
   MPI_Barrier(inter_comm_);
 
+  // Destroy communicators
+  CHECK_MPI(MPI_Comm_free(&mpi_comm_));
+  CHECK_MPI(MPI_Comm_free(&inter_comm_));
+  CHECK_MPI(MPI_Comm_free(&intra_comm_));
+
+  if (shared_memory_size_ == 0)
+    return;
+
   // NOTE: since allocator is designed to be a singleton,
   // we do not need to delete it here.
 
@@ -258,19 +273,15 @@ Comm::~Comm() {
 
   // Destroy shared memory
   if (shared_ptr_ != nullptr) {
-    CHECK_ERRNO(munmap(shared_ptr_, kCpuBufferHeaderSize + kCpuBufferSize));
+    CHECK_ERRNO(munmap(shared_ptr_, shared_memory_size_));
     if (comm_info_.is_host_leader_) {
       CHECK_ERRNO(shm_unlink(sharedMemoryName));
     }
   }
-
-  // Destroy communicators
-  CHECK_MPI(MPI_Comm_free(&mpi_comm_));
-  CHECK_MPI(MPI_Comm_free(&inter_comm_));
-  CHECK_MPI(MPI_Comm_free(&intra_comm_));
 }
 
 void Comm::SetSpiralCPUAllocator() {
+  assert(allocator_ != nullptr); // allocator_ must be initialized before calling SetSpiralCPUAllocator()
   TORCH_CHECK(prev_allocator_ptr_ == nullptr,
       "Already within the scope of another non-default cpu allocator."
       "Cannot set another allocator.");
@@ -283,6 +294,7 @@ void Comm::SetSpiralCPUAllocator() {
 }
 
 void Comm::UnsetSpiralCPUAllocator() {
+  assert(allocator_ != nullptr); // allocator_ must be initialized before calling UnsetSpiralCPUAllocator()
   TORCH_CHECK(prev_allocator_ptr_ != nullptr,
       "SetSpiralCPUAllocator must have been called "
       "before UnsetSpiralCPUAllocator.");
@@ -343,7 +355,10 @@ py::array_t<T>& Comm::AllGather(py::array_t<T>& arr) const {
 }
 
 // Virtual address of allocator memory. Corrsponds to `base_` in SpiralCPUAllocator
-inline uintptr_t Comm::GetBase(const int mpi_rank) const { return shared_ptrs_[mpi_rank] + kCpuBufferHeaderSize; }
+inline uintptr_t Comm::GetBase(const int mpi_rank) const {
+  assert(shared_ptr_ != nullptr);
+  return shared_ptrs_[mpi_rank] + kCpuBufferHeaderSize;
+}
 
 void LazyConfigure(bool debug) { Comm::debug = debug; }
 
@@ -352,7 +367,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
         &LazyConfigure,
         "SpiralPipeBackend LazyConfigure (C++)"); 
   py::class_<Comm>(m, "Comm")
-    .def(py::init<std::vector<int>>())
+    .def(py::init<std::vector<int>, const bool>())
     .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
     .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
     .def("RemapParamData", &Comm::RemapParamData)

@@ -8,23 +8,27 @@ from .p2p_communication import (
     recv_output_tensor_grad,
     send_input_tensor_grad,
 )
-from .schedules import forward_backward_pipelining_with_spiral
+from .schedules import (
+    forward_backward_pipelining_with_spiral_remap,
+    forward_backward_pipelining_with_spiral,
+)
 from .module import SpiralPhaseList
+
 from .build_state import (
-    reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated,
-    reset_spiral_pipeline_parallel_backward_stage_build_phase_num_spiral_params_allocated,
-    get_spiral_pipeline_parallel_forward_stage_build_phase,
-    set_spiral_pipeline_parallel_forward_stage_build_phase,
-    get_spiral_pipeline_parallel_backward_stage_build_phase,
-    set_spiral_pipeline_parallel_backward_stage_build_phase,
-    get_spiral_pipeline_parallel_forward_stage_build_phase_size,
-    get_spiral_pipeline_parallel_backward_stage_build_phase_size,
-    get_spiral_pipeline_parallel_total_build_phase_size,
-    get_spiral_pipeline_parallel_aggregate_num_spiral_params,
-    get_spiral_pipeline_parallel_num_spiral_params,
-    get_spiral_pipeline_parallel_global_build_phase,
-    get_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict,
-    set_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict,
+    reset_spiral_forward_stage_build_phase_num_spiral_params_allocated,
+    reset_spiral_backward_stage_build_phase_num_spiral_params_allocated,
+    get_spiral_forward_stage_build_phase,
+    set_spiral_forward_stage_build_phase,
+    get_spiral_backward_stage_build_phase,
+    set_spiral_backward_stage_build_phase,
+    get_spiral_forward_stage_build_phase_size,
+    get_spiral_backward_stage_build_phase_size,
+    get_spiral_total_build_phase_size,
+    get_spiral_aggregate_num_spiral_params,
+    get_spiral_num_spiral_params,
+    get_spiral_global_build_phase,
+    get_spiral_global_build_phase_num_spiral_params_dict,
+    set_spiral_global_build_phase_num_spiral_params_dict,
     get_pp_rank_for_fwd_phase,
     fwd_phase2local_stage_phase,
     destroy_spiral_build_state,

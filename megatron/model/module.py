@@ -15,10 +15,8 @@ _HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor)
 _BF16_TYPES = (torch.BFloat16Tensor, torch.cuda.BFloat16Tensor)
 
 
-
 def param_is_not_shared(param):
     return not hasattr(param, 'shared') or not param.shared
-
 
 
 class MegatronModule(torch.nn.Module):
@@ -29,12 +27,10 @@ class MegatronModule(torch.nn.Module):
         super(MegatronModule, self).__init__()
         self.share_word_embeddings = share_word_embeddings
 
-
     def state_dict_for_save_checkpoint(self, prefix='', keep_vars=False):
         """Use this function to override the state dict for
         saving checkpoints."""
         return self.state_dict(prefix=prefix, keep_vars=keep_vars)
-
 
     def word_embeddings_weight(self):
         if self.pre_process:
@@ -44,7 +40,6 @@ class MegatronModule(torch.nn.Module):
                 raise Exception('word_embeddings_weight() called for last '
                                 'stage, but share_word_embeddings is false')
             return self.word_embeddings.weight
-
 
     def initialize_word_embeddings(self, init_method_normal):
         args = get_args()
@@ -100,7 +95,7 @@ class MegatronModule(torch.nn.Module):
                 MegatronModule.embedding_warning_printed = True
             return
 
-        if not mpu.is_spiral_pipeline_parallel():
+        if not mpu.is_spiral_remap():
             # Ensure that first and last stages have the same initial parameter
             # values.
             if mpu.is_rank_in_embedding_group():
@@ -109,12 +104,14 @@ class MegatronModule(torch.nn.Module):
         else:
             # Sync between prep-postp stages
             if mpu.is_rank_in_embedding_group(ignore_virtual=True):
-                # TODO (mcrl) Resolve circular waiting with position embedding sync
+                # TODO (SpiralPipe) Resolve circular waiting with position embedding sync
+                # torch.distributed.all_reduce(
+                #     self.word_embeddings_weight().spiral_tensor.data,
+                #     group=mpu.get_spiral_embedding_group_gloo(),
+                # )
                 pass
-                # torch.distributed.all_reduce(self.word_embeddings_weight().spiral_tensor.data,
-                #                             group=mpu.get_spiral_embedding_group_gloo())
 
-        if not mpu.is_spiral_pipeline_parallel():
+        if not mpu.is_spiral_remap():
             # Ensure that encoder(first stage) and decoder(split stage) position
             # embeddings have the same initial parameter values
             # NOTE: We don't currently support T5 with the interleaved schedule.
@@ -128,11 +125,13 @@ class MegatronModule(torch.nn.Module):
         else:
             # Sync between prep stages
             if mpu.is_rank_in_position_embedding_group() and mpu.is_pipeline_first_stage():
-                # TODO (mcrl) Resolve circular waiting with word embedding sync
-                pass
+                # TODO (SpiralPipe) Resolve circular waiting with word embedding sync
                 # position_embeddings = self.language_model.embedding.position_embeddings
-                # torch.distributed.all_reduce(position_embeddings.weight.spiral_tensor.data,
-                #                             group=mpu.get_spiral_position_embedding_group_gloo())
+                # torch.distributed.all_reduce(
+                #     position_embeddings.weight.spiral_tensor.data,
+                #     group=mpu.get_spiral_position_embedding_group_gloo(),
+                # )
+                pass
 
 
 def conversion_helper(val, conversion):
@@ -168,7 +167,6 @@ def float16_to_fp32(val):
             val = val.float()
         return val
     return conversion_helper(val, float_conversion)
-
 
 
 class Float16Module(MegatronModule):

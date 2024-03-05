@@ -69,7 +69,7 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
 
     args = get_args()
     if args.lazy_mpu_init:
-        assert not args.spiral_pipeline_parallel, "SpiralPipe does not support lazy mpu init"
+        assert not args.spiral, "SpiralPipe does not support lazy mpu init"
 
         # TODO is this still a necessary option?
         args.use_cpu_initialization=True
@@ -191,7 +191,7 @@ def _initialize_distributed():
         world_size=args.world_size, rank=args.rank,
         timeout=timedelta(minutes=args.distributed_timeout_minutes))
 
-    # TODO (mcrl) This is a good place to do stage partitioning
+    # TODO (SpiralPipe) This is a good place to do stage partitioning
 
     # Set the tensor model-parallel, pipeline model-parallel, and
     # data-parallel communicators.
@@ -203,9 +203,10 @@ def _initialize_distributed():
                                           args.pipeline_model_parallel_size,
                                           args.virtual_pipeline_model_parallel_size,
                                           args.pipeline_model_parallel_split_rank,
-                                          args.spiral_pipeline_parallel,
-                                          args.spiral_pipeline_parallel_forward_virtual_size,
-                                          args.spiral_pipeline_parallel_backward_virtual_size,)
+                                          args.spiral,
+                                          args.spiral_remap,
+                                          args.spiral_forward_virtual_size,
+                                          args.spiral_backward_virtual_size,)
             if args.rank == 0:
                 print(f'> initialized tensor model parallel with size '
                       f'{mpu.get_tensor_model_parallel_world_size()}')
@@ -370,25 +371,28 @@ def _spiral_backend_init():
 
     def _set_comm_info():
         thunder_group_info = get_thunder_group().GetCommInfo()
-        mpu.set_spiral_pipeline_parallel_intra_rank(thunder_group_info['intra_rank'])
-        mpu.set_spiral_pipeline_parallel_intra_size(thunder_group_info['intra_size'])
-        mpu.set_spiral_pipeline_parallel_is_host_leader(thunder_group_info['is_host_leader'])
+        mpu.set_spiral_intra_rank(thunder_group_info['intra_rank'])
+        mpu.set_spiral_intra_size(thunder_group_info['intra_size'])
+        mpu.set_spiral_is_host_leader(thunder_group_info['is_host_leader'])
 
     args = get_args()
-    if hasattr(args, 'spiral_pipeline_parallel') and args.spiral_pipeline_parallel:
+    if args.spiral:
         torch_group = mpu.get_pipeline_model_parallel_group()
         ranks = frozenset(torch.distributed.get_process_group_ranks(torch_group))
-        spiral_helper.LazyConfigure(True) # TODO (mcrl) this should be set from arg
-        SpiralBackend(ranks)
+        init_shmem = args.spiral_remap
+        spiral_helper.LazyConfigure(args.spiral_debug_backend)
+        SpiralBackend(ranks, init_shmem)
         _set_comm_info()
 
 
 def _spiral_build_state_init():
-    sbs.initialize_spiral_build_state()
+    args = get_args()
+    if args.spiral:
+        sbs.initialize_spiral_build_state()
 
 
 def _spiral_do_test():
-    # NOTE (mcrl): This is a good place to do tests
+    # NOTE (SpiralPipe) This is a good place to do tests
     _SPIRAL_DO_TEST = False
 
     if not _SPIRAL_DO_TEST:

@@ -367,8 +367,8 @@ def validate_args(args, defaults={}):
                     retro_args.retro_gpt_chunk_length
                 set_retro_args(retro_args)
 
-    # SpiralPipe checks
-    if args.spiral_pipeline_parallel:
+    # SpiralPipe
+    if args.spiral:
         if args.standalone_embedding_stage:
             raise RuntimeError(
                 "SpiralPipe does not support standalone embedding stage")
@@ -383,25 +383,47 @@ def validate_args(args, defaults={}):
                 "SpiralPipe does not support lazy mpu init")
         if args.clip_grad > 0.0:
             raise RuntimeError(
-                "SpiralPipe does not support clip_grad > 0.0")
-        if args.spiral_pipeline_parallel_forward_virtual_size is None:
+                "SpiralPipe does not support clip_grad > 0.0, since it incurs allreduce.")
+        if args.attention_dropout > 0.0:
+            raise RuntimeError(
+                "SpiralPipe does not support attention_dropout > 0.0, since it yields different recomputation results from original fwd results")
+        if args.hidden_dropout > 0.0:
+            raise RuntimeError(
+                "SpiralPipe does not support hidden_dropout > 0.0, since it yields different recomputation results from original fwd results")
+        if args.spiral_forward_virtual_size is None:
             raise RuntimeError(
                 "SpiralPipe requires setting forward virtual size")
-        if args.spiral_pipeline_parallel_forward_virtual_size < 1:
+        if args.spiral_forward_virtual_size < 1:
             raise RuntimeError(
                 "SpiralPipe requires forward virtual size > 0")
-        if args.spiral_pipeline_parallel_forward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
+        if args.spiral_forward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
             raise RuntimeError(
                 "SpiralPipe requires forward virtual size <= num_layers // pipeline_model_parallel_size")
-        if args.spiral_pipeline_parallel_backward_virtual_size is None:
+        if args.spiral_backward_virtual_size is None:
             raise RuntimeError(
                 "SpiralPipe requires setting backward virtual size")
-        if args.spiral_pipeline_parallel_backward_virtual_size < 1:
+        if args.spiral_backward_virtual_size < 1:
             raise RuntimeError(
                 "SpiralPipe requires backward virtual size > 0")
-        if args.spiral_pipeline_parallel_backward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
+        if args.spiral_backward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
             raise RuntimeError(
                 "SpiralPipe requires backward virtual size <= num_layers // pipeline_model_parallel_size")
+        if args.spiral_remap:
+            if not args.spiral_recompute_activations:
+                raise RuntimeError(
+                    "SpiralPipe with remapping requires spiral_recompute_activations")
+            if args.rank == 0:
+                print("Warning: SpiralPipe with remapping will run with full uniform (recompute num layers=1) recomputation \
+                      regardless of --activation-recomputation, --recompute-granularity, --recompute-method, and --recompute-num-layers")
+        if not args.spiral_remap:
+            if args.spiral_forward_virtual_size != args.spiral_backward_virtual_size:
+                raise RuntimeError(
+                    "SpiralPipe w/o remapping requires forward and backward virtual size to be the same")
+            if args.spiral_recompute_activations:
+                if args.rank == 0:
+                    print("Warning: SpiralPipe without remapping will run with full uniform (recompute num layers=1) recomputation \
+                          regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers")
+
 
     # Print arguments.
     _print_args("arguments", args)
@@ -975,12 +997,6 @@ def _add_distributed_args(parser):
                        '--tensor-model-parallel-size instead.')
     group.add_argument('--num-layers-per-virtual-pipeline-stage', type=int, default=None,
                        help='Number of layers per virtual pipeline stage')
-    group.add_argument('--spiral-pipeline-parallel', action='store_true',
-                       help='Enable spiral pipeline parallel.')
-    group.add_argument('--spiral-pipeline-parallel-forward-virtual-size', type=int, default=None,
-                       help='Number of spiral pipeline parallel forward stages per rank')
-    group.add_argument('--spiral-pipeline-parallel-backward-virtual-size', type=int, default=None,
-                       help='Number of spiral pipeline parallel backward stages per rank')
     group.add_argument('--overlap-p2p-communication',
                        action='store_true',
                        help='overlap pipeline parallel communication with forward and backward chunks',
@@ -1038,6 +1054,26 @@ def _add_distributed_args(parser):
     group.add_argument('--master-addr', default='', type=str,
                        help='(optional) IP address of node 0, will be '
                        'inferred via \'hostname -I\' if not specified.')
+
+    # SpiralPipe
+    group.add_argument('--spiral', action='store_true',
+                       help='Enable SpiralPipe')
+    group.add_argument('--spiral-forward-virtual-size', type=int, default=None,
+                       help='Number of SpiralPipe forward stages per rank')
+    group.add_argument('--spiral-backward-virtual-size', type=int, default=None,
+                       help='Number of SpiralPipe backward stages per rank')
+    group.add_argument('--spiral-remap', action='store_true',
+                       help='Enable SpiralPipe remapping.'
+                       'If turned on, --spiral-forward-virtual-size and --spiral-backward-virtual-size must be set to equal. '
+                       'If turned off, the pipeline will resemble that of Mobius (ASPLOS 2023) '
+                       'https://dl.acm.org/doi/abs/10.1145/3575693.3575703')
+    group.add_argument('--spiral-recompute-activations', action='store_true',
+                       help='Enable SpiralPipe activation recomputation')
+    group.add_argument('--spiral-stage-optimizer', action='store_true',
+                        help='Enable SpiralPipe optimizer to operate independently per stage')
+    group.add_argument('--spiral-debug-backend', action='store_true',
+                       help='Enable SpiralPipe backend logging')
+
     return parser
 
 

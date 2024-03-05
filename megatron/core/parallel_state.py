@@ -21,7 +21,7 @@ _SPIRAL_EMBEDDING_GROUP_GLOO = None
 _POSITION_EMBEDDING_GROUP = None
 _SPIRAL_POSITION_EMBEDDING_GROUP = None
 _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
-# Input tensor checkpoint group for spiral pipeline
+# Input tensor checkpoint group for SpiralPipe
 _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = None
@@ -58,17 +58,18 @@ _DATA_PARALLEL_GLOBAL_RANKS = None
 # Memory buffers to avoid dynamic memory allocation
 _GLOBAL_MEMORY_BUFFER = None
 
-# Whether spiral pipeline parallel is enable or not
-_SPIRAL_PIPELINE_PARALLEL = None
-_SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = None # should set rank value only when active
-_SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = None # should set rank value only when active
-_SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = None
-_SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = None
+# Whether SpiralPipe is enable or not
+_SPIRAL = None
+_SPIRAL_REMAP = None
+_SPIRAL_FORWARD_VIRTUAL_RANK = None # should set rank value only when active
+_SPIRAL_BACKWARD_VIRTUAL_RANK = None # should set rank value only when active
+_SPIRAL_FORWARD_VIRTUAL_SIZE = None
+_SPIRAL_BACKWARD_VIRTUAL_SIZE = None
 
-# Below spiral variables are lazily set after spiral backend init using CommInfo
-_SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE = None
-_SPIRAL_PIPELINE_PARALLEL_INTRA_RANK = None
-_SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER = None
+# Below SpiralPipe variables are lazily set after spiral backend init using CommInfo
+_SPIRAL_INTRA_SIZE = None
+_SPIRAL_INTRA_RANK = None
+_SPIRAL_IS_HOST_LEADER = None
 
 
 def initialize_model_parallel(
@@ -76,9 +77,10 @@ def initialize_model_parallel(
     pipeline_model_parallel_size: int = 1,
     virtual_pipeline_model_parallel_size: Optional[int] = None,
     pipeline_model_parallel_split_rank: Optional[int] = None,
-    spiral_pipeline_parallel: bool = False,
-    spiral_pipeline_parallel_forward_virtual_size: Optional[int] = None,
-    spiral_pipeline_parallel_backward_virtual_size: Optional[int] = None,
+    spiral: bool = False,
+    spiral_remap: bool = False,
+    spiral_forward_virtual_size: Optional[int] = None,
+    spiral_backward_virtual_size: Optional[int] = None,
     use_fp8: bool = False,
 ) -> None:
     """Initialize model data parallel groups.
@@ -119,14 +121,17 @@ def initialize_model_parallel(
             pipeline_model_parallel_split_rank is 3, then ranks 0-2
             will be the encoder and ranks 3-7 will be the decoder.
 
-        spiral_pipeline_parallel (bool, default = False):
-            Whether to use spiral pipeline parallel.
+        spiral (bool, default = False):
+            Whether to use SpiralPipe.
 
-        spiral_pipeline_parallel_forward_virtual_size (int, optional):
-            The number of forward virtual stages that each spiral pipeline rank will have
+        spiral_remap (bool, default = False):
+            Whether to use SpiralPipe remapping-aware parallel state.
 
-        spiral_pipeline_parallel_backward_virtual_size (int, optional):
-            The number of backward virtual stages that each spiral pipeline rank will have
+        spiral_forward_virtual_size (int, optional):
+            The number of forward virtual stages that each SpiralPipe pipeline rank will have
+
+        spiral_backward_virtual_size (int, optional):
+            The number of backward virtual stages that each SpiralPipe pipeline rank will have
 
         use_fp8 (bool, default = False):
             Construct GPU groups needed for FP8 training, namely for
@@ -176,21 +181,23 @@ def initialize_model_parallel(
         _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = 0
         _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = virtual_pipeline_model_parallel_size
 
-    if spiral_pipeline_parallel:
+    if spiral:
         if virtual_pipeline_model_parallel_size is not None:
-            raise RuntimeError("virtual pipeline parallel is not compatible with spiral pipeline parallel")
-        global _SPIRAL_PIPELINE_PARALLEL
-        _SPIRAL_PIPELINE_PARALLEL = True
-        global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
-        global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
-        global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
-        global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
-        _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = None
-        _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = None
-        if spiral_pipeline_parallel_forward_virtual_size is not None:
-            _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = spiral_pipeline_parallel_forward_virtual_size
-        if spiral_pipeline_parallel_backward_virtual_size is not None:
-            _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = spiral_pipeline_parallel_backward_virtual_size
+            raise RuntimeError("virtual pipeline parallel is not compatible with SpiralPipe")
+        global _SPIRAL
+        _SPIRAL = spiral
+        global _SPIRAL_REMAP
+        _SPIRAL_REMAP = spiral_remap
+        global _SPIRAL_FORWARD_VIRTUAL_RANK
+        global _SPIRAL_BACKWARD_VIRTUAL_RANK
+        global _SPIRAL_FORWARD_VIRTUAL_SIZE
+        global _SPIRAL_BACKWARD_VIRTUAL_SIZE
+        _SPIRAL_FORWARD_VIRTUAL_RANK = None
+        _SPIRAL_BACKWARD_VIRTUAL_RANK = None
+        if spiral_forward_virtual_size is not None:
+            _SPIRAL_FORWARD_VIRTUAL_SIZE = spiral_forward_virtual_size
+        if spiral_backward_virtual_size is not None:
+            _SPIRAL_BACKWARD_VIRTUAL_SIZE = spiral_backward_virtual_size
 
     if pipeline_model_parallel_split_rank is not None:
         global _PIPELINE_MODEL_PARALLEL_SPLIT_RANK
@@ -281,7 +288,7 @@ def initialize_model_parallel(
                 if ranks[pipeline_model_parallel_split_rank] not in position_embedding_ranks:
                     position_embedding_ranks = [ranks[0],
                                        ranks[pipeline_model_parallel_split_rank]]
-            if _SPIRAL_PIPELINE_PARALLEL:
+            if _SPIRAL and _SPIRAL_REMAP:
                 spiral_embedding_ranks = [ranks[0], ranks[-1]]
                 spiral_position_embedding_ranks = [ranks[0], ranks[-1]] # since forward and backward both have a prep stage
         else:
@@ -294,7 +301,7 @@ def initialize_model_parallel(
         if rank in ranks:
             _EMBEDDING_GLOBAL_RANKS = embedding_ranks
 
-        if _SPIRAL_PIPELINE_PARALLEL:
+        if _SPIRAL and _SPIRAL_REMAP:
             group = torch.distributed.new_group(spiral_embedding_ranks)
             group_gloo = torch.distributed.new_group(spiral_embedding_ranks, backend="gloo")
             if rank in spiral_embedding_ranks:
@@ -309,7 +316,7 @@ def initialize_model_parallel(
         if rank in ranks:
             _POSITION_EMBEDDING_GLOBAL_RANKS = position_embedding_ranks
 
-        if _SPIRAL_PIPELINE_PARALLEL:
+        if _SPIRAL and _SPIRAL_REMAP:
             group = torch.distributed.new_group(spiral_position_embedding_ranks)
             group_gloo = torch.distributed.new_group(spiral_position_embedding_ranks, backend="gloo")
             if rank in spiral_position_embedding_ranks:
@@ -318,11 +325,11 @@ def initialize_model_parallel(
             if rank in ranks:
                 _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = spiral_position_embedding_ranks
 
-        if _SPIRAL_PIPELINE_PARALLEL:
+        if _SPIRAL and _SPIRAL_REMAP:
             group = torch.distributed.new_group(ranks)
             if rank in ranks:
                 _SPIRAL_INPUT_TENSOR_CKPT_GROUP = group
-                # NOTE (mcrl)
+                # NOTE (SpiralPipe)
                 # Perform an entire-rank-participating collective call to init the group
                 # in order to use batch_isend_recv
                 # https://pytorch.org/docs/2.0/distributed.html#:~:text=Note%20that%20when,group%20are%20allowed.
@@ -445,7 +452,7 @@ def get_spiral_position_embedding_group_gloo():
 def get_spiral_input_tensor_ckpt_group():
     """Get the input tensor checkpoint group the caller rank belongs to."""
     assert _SPIRAL_INPUT_TENSOR_CKPT_GROUP is not None, \
-        'spiral input tensor checkpoint group is not initialized'
+        'SpiralPipe input tensor checkpoint group is not initialized'
     return _SPIRAL_INPUT_TENSOR_CKPT_GROUP
 
 
@@ -530,16 +537,21 @@ def get_pipeline_model_parallel_split_rank():
 
 def is_pipeline_first_stage(ignore_virtual=False):
     """Return True if in the first pipeline model-parallel stage, False otherwise."""
-
-    # For spiral pipeline, lowest idx forward virtual stage and lowest idx backward virtual stage is the first stage
-    if is_spiral_pipeline_parallel():
-        _is_forward_virtual_first_stage = get_spiral_pipeline_parallel_forward_virtual_rank() == 0 and \
+    if _SPIRAL and _SPIRAL_REMAP:
+        # For SpiralPipe with remapping, lowest idx forward virtual stage and
+        # lowest idx backward virtual stage is the first stage
+        _is_forward_virtual_first_stage = get_spiral_forward_virtual_rank() == 0 and \
         get_pipeline_model_parallel_rank() == 0
-        _is_backward_virtual_first_stage = get_spiral_pipeline_parallel_backward_virtual_rank() == 0 and \
+        _is_backward_virtual_first_stage = get_spiral_backward_virtual_rank() == 0 and \
         get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
         return _is_forward_virtual_first_stage or _is_backward_virtual_first_stage
+    elif _SPIRAL and not _SPIRAL_REMAP:
+        return get_pipeline_model_parallel_rank() == 0 and (
+            get_spiral_forward_virtual_rank() == 0
+            or get_spiral_backward_virtual_rank() == 0
+        )
 
-    # NOTE (mcrl) below is original logic
+    # NOTE (SpiralPipe) below is original logic
     if not ignore_virtual:
         if get_virtual_pipeline_model_parallel_world_size() is not None and \
             get_virtual_pipeline_model_parallel_rank() != 0:
@@ -549,16 +561,21 @@ def is_pipeline_first_stage(ignore_virtual=False):
 
 def is_pipeline_last_stage(ignore_virtual=False):
     """Return True if in the last pipeline model-parallel stage, False otherwise."""
-
-    # For spiral pipeline, highest idx forward virtual stage and highest idx backward virtual stage is the last stage
-    if is_spiral_pipeline_parallel():
-        _is_forward_virtual_last_stage = get_spiral_pipeline_parallel_forward_virtual_rank() == get_spiral_pipeline_parallel_forward_virtual_size() - 1 and \
+    if _SPIRAL and _SPIRAL_REMAP:
+        # For SpiralPipe with remapping, highest idx forward virtual stage and
+        # highest idx backward virtual stage is the last stage
+        _is_forward_virtual_last_stage = get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1 and \
         get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
-        _is_backward_virtual_last_stage = get_spiral_pipeline_parallel_backward_virtual_rank() == get_spiral_pipeline_parallel_backward_virtual_size() - 1 and \
+        _is_backward_virtual_last_stage = get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1 and \
         get_pipeline_model_parallel_rank() == 0
         return _is_forward_virtual_last_stage or _is_backward_virtual_last_stage
+    elif _SPIRAL and not _SPIRAL_REMAP:
+        return get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1 and (
+            get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1
+            or get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1
+        )
 
-    # NOTE (mcrl) below is original logic
+    # NOTE (SpiralPipe) below is original logic
     if not ignore_virtual:
         virtual_pipeline_model_parallel_world_size = \
             get_virtual_pipeline_model_parallel_world_size()
@@ -632,67 +649,76 @@ def is_pipeline_stage_at_split():
             is_pipeline_stage_after_split(rank+1)
 
 
-def is_spiral_pipeline_parallel():
-    """Return true if spiral pipeline parallel is enabled."""
-    if _SPIRAL_PIPELINE_PARALLEL is None:
+def is_spiral():
+    """Return true if SpiralPipe is enabled."""
+    if _SPIRAL is None:
         return False
-    return True
+    return _SPIRAL
 
 
-def is_spiral_pipeline_parallel_forward_stage():
-    """Return true if current stage is a forward stage in spiral pipeline parallel."""
-    if not is_spiral_pipeline_parallel():
-        raise RuntimeError("is_spiral_pipeline_parallel_forward_stage is only valid when spiral pipeline parallel is enabled")
-    return get_spiral_pipeline_parallel_forward_virtual_rank() is not None and \
-        get_spiral_pipeline_parallel_backward_virtual_rank() is None
+def is_spiral_remap():
+    """Return true if SpiralPipe with remapping is enabled"""
+    if _SPIRAL is None:
+        return False
+    if _SPIRAL_REMAP is None:
+        return False
+    return _SPIRAL and _SPIRAL_REMAP
 
 
-def is_spiral_pipeline_parallel_backward_stage():
-    """Return true if current stage is a backward stage in spiral pipeline parallel."""
-    if not is_spiral_pipeline_parallel():
-        raise RuntimeError("is_spiral_pipeline_parallel_backward_stage is only valid when spiral pipeline parallel is enabled")
-    return get_spiral_pipeline_parallel_backward_virtual_rank() is not None and \
-        get_spiral_pipeline_parallel_forward_virtual_rank() is None
+def is_spiral_forward_stage():
+    """Return true if current stage is a forward stage in SpiralPipe."""
+    if not _SPIRAL:
+        raise RuntimeError("is_spiral_forward_stage is only valid when SpiralPipe is enabled")
+    return get_spiral_forward_virtual_rank() is not None and \
+        get_spiral_backward_virtual_rank() is None
 
 
-def get_spiral_pipeline_parallel_forward_virtual_rank():
-    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
-    return _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
+def is_spiral_backward_stage():
+    """Return true if current stage is a backward stage in SpiralPipe."""
+    if not _SPIRAL:
+        raise RuntimeError("is_spiral_backward_stage is only valid when SpiralPipe is enabled")
+    return get_spiral_backward_virtual_rank() is not None and \
+        get_spiral_forward_virtual_rank() is None
 
 
-def set_spiral_pipeline_parallel_forward_virtual_rank(rank):
-    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
-    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = rank
+def get_spiral_forward_virtual_rank():
+    global _SPIRAL_FORWARD_VIRTUAL_RANK
+    return _SPIRAL_FORWARD_VIRTUAL_RANK
 
 
-def get_spiral_pipeline_parallel_backward_virtual_rank():
-    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
-    return _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
+def set_spiral_forward_virtual_rank(rank):
+    global _SPIRAL_FORWARD_VIRTUAL_RANK
+    _SPIRAL_FORWARD_VIRTUAL_RANK = rank
 
 
-def set_spiral_pipeline_parallel_backward_virtual_rank(rank):
-    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
-    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = rank
+def get_spiral_backward_virtual_rank():
+    global _SPIRAL_BACKWARD_VIRTUAL_RANK
+    return _SPIRAL_BACKWARD_VIRTUAL_RANK
 
 
-def get_spiral_pipeline_parallel_forward_virtual_size():
-    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
-    return _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
+def set_spiral_backward_virtual_rank(rank):
+    global _SPIRAL_BACKWARD_VIRTUAL_RANK
+    _SPIRAL_BACKWARD_VIRTUAL_RANK = rank
 
 
-def set_spiral_pipeline_parallel_forward_virtual_size(size):
-    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
-    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = size
+def get_spiral_forward_virtual_size():
+    global _SPIRAL_FORWARD_VIRTUAL_SIZE
+    return _SPIRAL_FORWARD_VIRTUAL_SIZE
 
 
-def get_spiral_pipeline_parallel_backward_virtual_size():
-    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
-    return _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
+def set_spiral_forward_virtual_size(size):
+    global _SPIRAL_FORWARD_VIRTUAL_SIZE
+    _SPIRAL_FORWARD_VIRTUAL_SIZE = size
 
 
-def set_spiral_pipeline_parallel_backward_virtual_size(size):
-    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE
-    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = size
+def get_spiral_backward_virtual_size():
+    global _SPIRAL_BACKWARD_VIRTUAL_SIZE
+    return _SPIRAL_BACKWARD_VIRTUAL_SIZE
+
+
+def set_spiral_backward_virtual_size(size):
+    global _SPIRAL_BACKWARD_VIRTUAL_SIZE
+    _SPIRAL_BACKWARD_VIRTUAL_SIZE = size
 
 
 def get_virtual_pipeline_model_parallel_rank():
@@ -789,29 +815,29 @@ def get_global_memory_buffer():
     assert _GLOBAL_MEMORY_BUFFER is not None, 'global memory buffer is not initialized'
     return _GLOBAL_MEMORY_BUFFER
 
-def get_spiral_pipeline_parallel_intra_rank():
-    assert _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK is not None
-    return _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK
+def get_spiral_intra_rank():
+    assert _SPIRAL_INTRA_RANK is not None
+    return _SPIRAL_INTRA_RANK
 
-def set_spiral_pipeline_parallel_intra_rank(rank):
-    global _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK
-    _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK = rank
+def set_spiral_intra_rank(rank):
+    global _SPIRAL_INTRA_RANK
+    _SPIRAL_INTRA_RANK = rank
 
-def get_spiral_pipeline_parallel_intra_size():
-    assert _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE is not None
-    return _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE
+def get_spiral_intra_size():
+    assert _SPIRAL_INTRA_SIZE is not None
+    return _SPIRAL_INTRA_SIZE
 
-def set_spiral_pipeline_parallel_intra_size(size):
-    global _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE
-    _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE = size
+def set_spiral_intra_size(size):
+    global _SPIRAL_INTRA_SIZE
+    _SPIRAL_INTRA_SIZE = size
 
-def get_spiral_pipeline_parallel_is_host_leader():
-    assert _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER is not None
-    return _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER
+def get_spiral_is_host_leader():
+    assert _SPIRAL_IS_HOST_LEADER is not None
+    return _SPIRAL_IS_HOST_LEADER
 
-def set_spiral_pipeline_parallel_is_host_leader(is_leader: bool):
-    global _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER
-    _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER = is_leader
+def set_spiral_is_host_leader(is_leader: bool):
+    global _SPIRAL_IS_HOST_LEADER
+    _SPIRAL_IS_HOST_LEADER = is_leader
 
 
 def destroy_model_parallel():
@@ -855,16 +881,28 @@ def destroy_model_parallel():
     _GLOBAL_MEMORY_BUFFER = None
 
     # SpiralPipe
-    global _SPIRAL_PIPELINE_PARALLEL
-    _SPIRAL_PIPELINE_PARALLEL = None
-    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK
-    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_RANK = None
-    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK
-    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_RANK = None
-    global _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE
-    _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = None
-    global _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_WORLD_SIZE
-    _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_WORLD_SIZE = None
+    global _SPIRAL
+    _SPIRAL = None
+    global _SPIRAL_REMAP
+    _SPIRAL_REMAP = None
+    global _SPIRAL_FORWARD_VIRTUAL_RANK
+    _SPIRAL_FORWARD_VIRTUAL_RANK = None
+    global _SPIRAL_BACKWARD_VIRTUAL_RANK
+    _SPIRAL_BACKWARD_VIRTUAL_RANK = None
+    global _SPIRAL_FORWARD_VIRTUAL_SIZE
+    _SPIRAL_FORWARD_VIRTUAL_SIZE = None
+    global _SPIRAL_BACKWARD_VIRTUAL_SIZE
+    _SPIRAL_BACKWARD_VIRTUAL_SIZE = None
+
+    global _SPIRAL_INPUT_TENSOR_CKPT_GROUP
+    _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
+
+    global _SPIRAL_INTRA_RANK
+    _SPIRAL_INTRA_RANK = None
+    global _SPIRAL_INTRA_SIZE
+    _SPIRAL_INTRA_SIZE = None
+    global _SPIRAL_IS_HOST_LEADER
+    _SPIRAL_IS_HOST_LEADER = None
 
     global _SPIRAL_EMBEDDING_GROUP
     _SPIRAL_EMBEDDING_GROUP = None
@@ -878,12 +916,3 @@ def destroy_model_parallel():
     _SPIRAL_EMBEDDING_GLOBAL_RANKS = None
     global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
     _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None
-    global _SPIRAL_INPUT_TENSOR_CKPT_GROUP
-    _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
-
-    global _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK
-    _SPIRAL_PIPELINE_PARALLEL_INTRA_RANK = None
-    global _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE
-    _SPIRAL_PIPELINE_PARALLEL_INTRA_SIZE = None
-    global _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER
-    _SPIRAL_PIPELINE_PARALLEL_IS_HOST_LEADER = None

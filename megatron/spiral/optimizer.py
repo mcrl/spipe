@@ -1,18 +1,25 @@
 from megatron.optimizer import FP32Optimizer
 
 
-class SpiralOptimizer(FP32Optimizer):
+class SpiralStageOptimizer(FP32Optimizer):
 
-    def __init__(self, optimizer_list, clip_grad,
-                 log_num_zeros_in_grad,
-                 params_have_main_grad,
-                 use_contiguous_buffers_in_local_ddp,
-                 models):
-
-        super(SpiralOptimizer, self).__init__(
-            optimizer_list[0], clip_grad, log_num_zeros_in_grad,
-            params_have_main_grad, use_contiguous_buffers_in_local_ddp,
-            models)
+    def __init__(
+        self,
+        optimizer_list,
+        clip_grad,
+        log_num_zeros_in_grad,
+        params_have_main_grad,
+        use_contiguous_buffers_in_local_ddp,
+        models,
+    ):
+        super(SpiralStageOptimizer, self).__init__(
+            optimizer_list[0],
+            clip_grad,
+            log_num_zeros_in_grad,
+            params_have_main_grad,
+            use_contiguous_buffers_in_local_ddp,
+            models,
+        )
 
         self.optimizer_list = optimizer_list
 
@@ -30,8 +37,15 @@ class SpiralOptimizer(FP32Optimizer):
         return param_groups
 
     def state_dict(self):
-        return self.optimizer_list.state_dict()
+        state_dict = {
+            'optimizer_list': []
+        }
+        for optimizer in self.optimizer_list:
+            state_dict['optimizer_list'].append(optimizer.state_dict())
+        return state_dict
 
     def load_state_dict(self, state_dict):
-        self.optimizer_list.load_state_dict(state_dict)
-        self.set_bwd_stage(0)
+        self.optimizer_list = []
+        for optimizer_dict in state_dict['optimizer_list']:
+            self.optimizer.load_state_dict(optimizer_dict)
+            self.optimizer_list.append(self.optimizer)

@@ -30,24 +30,19 @@ DATASET_NAME=openwebtext
 DATASET_CONFIG=plan_text
 DATA_PATH=/data/z0/heehoon/openwebtext-mg/openwebtext_text_document
 
-# --spiral-stage-optimizer
 SPIRAL_ARGS="
-    --spiral \
-    --spiral-remap \
-    --spiral-forward-virtual-size 2 \
-    --spiral-backward-virtual-size 3 \
-    --spiral-recompute-activations \
-    --spiral-debug-backend \
     --megatron-mpi
 "
 
 GPT_ARGS="
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size $NP \
+    --recompute-granularity full \
+    --recompute-method uniform \
+    --recompute-num-layers 1 \
     --no-initialization \
     --untie-embeddings-and-output-weights \
     --distributed-backend nccl \
-    --overlap-p2p-communication \
     --sequence-parallel \
     --num-layers 24 \
     --hidden-size 1024 \
@@ -67,7 +62,8 @@ GPT_ARGS="
     --clip-grad 0.0 \
     --attention-dropout 0.0 \
     --hidden-dropout 0.0 \
-    --no-gradient-accumulation-fusion
+    --no-gradient-accumulation-fusion \
+    --use-distributed-optimizer
 "
 
 DATA_ARGS="

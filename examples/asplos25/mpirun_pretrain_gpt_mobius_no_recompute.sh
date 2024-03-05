@@ -33,11 +33,8 @@ DATA_PATH=/data/z0/heehoon/openwebtext-mg/openwebtext_text_document
 # --spiral-stage-optimizer
 SPIRAL_ARGS="
     --spiral \
-    --spiral-remap \
     --spiral-forward-virtual-size 2 \
-    --spiral-backward-virtual-size 3 \
-    --spiral-recompute-activations \
-    --spiral-debug-backend \
+    --spiral-backward-virtual-size 2 \
     --megatron-mpi
 "
 

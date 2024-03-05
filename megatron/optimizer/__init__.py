@@ -14,7 +14,7 @@ from megatron.spiral.utils import is_spiral_param
 from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
 from .optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
-from megatron.spiral.optimizer import SpiralOptimizer
+from megatron.spiral.optimizer import SpiralStageOptimizer
 
 
 def get_param_groups(modules,
@@ -26,32 +26,43 @@ def get_param_groups(modules,
        scale_lr_cond is used during finetuning where head of the network requires a scaled
        version of the base learning rate.
     """
+    args = get_args()
+
     wd_no_scale_lr = []
     wd_scale_lr = []
     no_wd_no_scale_lr = []
     no_wd_scale_lr = []
 
     for module in modules:
+
+        # NOTE (SpiralPipe) Skip module that is not bwd stage. A module with both fwd / bwd stage id is not skipped. (e.g., SpiralPipe w/o remapping)
+        if args.spiral:
+            if not hasattr(module, "spiral_backward_stage_id"):
+                warnings.warn("SpiralPipe module should have spiral_backward_stage_id attr even if it is None (refer to _post_init_method in init_context.py). Lacking it highly suggests a critical bug.")
+                continue
+            if hasattr(module, "spiral_backward_stage_id") and getattr(module, "spiral_backward_stage_id") is None:
+                continue
+
         for name, param in module.named_parameters():
             if not param.requires_grad:
                 continue
 
-            if mpu.is_spiral_pipeline_parallel():
+            if args.spiral:
                 assert (is_spiral_param(param))
                 if param.spiral_status == SpiralParamStatus.REMOTE:
                     param = param.spiral_tensor
 
             if no_weight_decay_cond is not None:
-                if mpu.is_spiral_pipeline_parallel():
-                    warnings.warn("no_weight_decay_cond is not supported in spiral pipeline parallelism. Consequencies are not known.")
+                if args.spiral:
+                    warnings.warn("no_weight_decay_cond is not supported in SpiralPipe. Consequencies are not known.")
                 no_wd = no_weight_decay_cond(name, param)
             else:
                 # do not regularize biases nor Norm parameters
                 no_wd = name.endswith(".bias") or len(param.shape) == 1
 
             if scale_lr_cond is not None:
-                if mpu.is_spiral_pipeline_parallel():
-                    warnings.warn("scale_lr_cond is not supported in spiral pipeline parallelism. Consequencies are not known.")
+                if args.spiral:
+                    warnings.warn("scale_lr_cond is not supported in SpiralPipe. Consequencies are not known.")
                 scale_lr = scale_lr_cond(name, param)
             else:
                 scale_lr = False
@@ -88,28 +99,44 @@ def get_megatron_optimizer(model,
     if args.DDP_impl == 'local':
         params_have_main_grad = True
 
-    # Spiral optimizer.
-    if mpu.is_spiral_pipeline_parallel():
-        assert args.optimizer == 'adam', 'Spiral Pipeline only support Adam'
+    if (
+        args.spiral
+        and args.spiral_stage_optimizer
+        and args.spiral_backward_virtual_size > 1
+    ):
+        if not hasattr(model, "_spiral_optimizer_entered"):
+            # NOTE (SpiralPipe) top level model[], recursively collect optimizer for each **BWD** stage. FWD stages are skipped, even though they will naturally be skipped due to logic in get_param_groups, in order to prevent optimizer with empty param group.
+            optimizer_list = []
+            for bwd_stage_id in range(args.spiral_backward_virtual_size):
+                # NOTE (SpiralPipe) SpiralStageOptimizer requires optimizer list to be sorted in **ascending** order of bwd stage id. SpiralPipe w/o remapping has stage models that have both fwd/bwd id and hence in opposite bwd stage order w.r.t SpiralPipe w/ remapping.
+                if args.spiral_remap:
+                    _idx_bwd_stage_id = -bwd_stage_id - 1
+                else:
+                    _idx_bwd_stage_id = bwd_stage_id
+                setattr(model[_idx_bwd_stage_id], "_spiral_optimizer_entered", True)
+                optimizer_list.append(
+                    get_megatron_optimizer(
+                        model[_idx_bwd_stage_id],
+                        no_weight_decay_cond,
+                        scale_lr_cond,
+                        lr_mult,
+                    )
+                )
+            return SpiralStageOptimizer(
+                optimizer_list,
+                args.clip_grad,
+                args.log_num_zeros_in_grad,
+                params_have_main_grad,
+                args.use_contiguous_buffers_in_local_ddp,
+                model,
+            )
+        else:
+            # NOTE (SpiralPipe) second level model of DDP class
+            # Wrap itself in order to work as an iterable of size 1
 
-        optimizer_list = []
-        for bwd_stage_id in range(mpu.get_spiral_pipeline_parallel_backward_virtual_size()):
-            param_groups = get_param_groups([model[-bwd_stage_id - 1]],
-                                            no_weight_decay_cond,
-                                            scale_lr_cond,
-                                            lr_mult)
-            optimizer = DeepSpeedCPUAdam(param_groups,
-                                         lr=args.lr,
-                                         weight_decay=args.weight_decay,
-                                         betas=(args.adam_beta1, args.adam_beta2),
-                                         eps=args.adam_eps)
-            optimizer_list.append(optimizer)
-
-        return SpiralOptimizer(optimizer_list, args.clip_grad,
-                               args.log_num_zeros_in_grad,
-                               params_have_main_grad,
-                               args.use_contiguous_buffers_in_local_ddp,
-                               model)
+            # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here (with L149)
+            # delattr(model, "_spiral_optimizer_entered")
+            model = [model]
 
     # Base optimizer.
     param_groups = get_param_groups(model,
@@ -117,29 +144,42 @@ def get_megatron_optimizer(model,
                                     scale_lr_cond,
                                     lr_mult)
 
-    if args.optimizer == 'adam':
-        optimizer = Adam(param_groups,
-                         lr=args.lr,
-                         weight_decay=args.weight_decay,
-                         betas=(args.adam_beta1, args.adam_beta2),
-                         eps=args.adam_eps)
-    elif args.optimizer == 'sgd':
-        optimizer = SGD(param_groups,
-                        lr=args.lr,
-                        weight_decay=args.weight_decay,
-                        momentum=args.sgd_momentum)
+    if args.spiral:
+        assert args.optimizer == 'adam', 'SpiralPipe only support Adam'
+        optimizer = DeepSpeedCPUAdam(param_groups,
+                                     lr=args.lr,
+                                     weight_decay=args.weight_decay,
+                                     betas=(args.adam_beta1, args.adam_beta2),
+                                     eps=args.adam_eps)
+        # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here
+        if args.spiral_stage_optimizer:
+            _unwrapped_model = model[0]
+            assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
+            delattr(_unwrapped_model, "_spiral_optimizer_entered")
+            return optimizer
     else:
-        raise Exception('{} optimizer is not supported.'.format(
-            args.optimizer))
-
-
+        if args.optimizer == 'adam':
+            optimizer = Adam(param_groups,
+                            lr=args.lr,
+                            weight_decay=args.weight_decay,
+                            betas=(args.adam_beta1, args.adam_beta2),
+                            eps=args.adam_eps)
+        elif args.optimizer == 'sgd':
+            optimizer = SGD(param_groups,
+                            lr=args.lr,
+                            weight_decay=args.weight_decay,
+                            momentum=args.sgd_momentum)
+        else:
+            raise Exception('{} optimizer is not supported.'.format(
+                args.optimizer))
 
     # Mixed precision optimizer.
     # - Note: both the Float16Optimizer and the DistributedOptimizer inherit
     #   from the MixedPrecisionOptimizer, which manages any optimizer where
     #   the model params and main params are distinct.
     if args.fp16 or args.bf16 or args.use_distributed_optimizer:
-
+        if args.spiral:
+            raise RuntimeError("SpiralPipe currently only supports FP32 optimizer.")
         # Grad scaler:
         #    if loss-scale is provided, instantiate the constant scaler.
         #    if we are using fp16 and loss-scale is not present, use a

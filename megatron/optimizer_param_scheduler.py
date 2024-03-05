@@ -5,7 +5,7 @@
 import math
 
 from megatron import print_rank_0
-from megatron.spiral.optimizer import SpiralOptimizer
+from megatron.spiral.optimizer import SpiralStageOptimizer
 
 class OptimizerParamScheduler(object):
     """Anneals learning rate and weight decay"""
@@ -123,7 +123,7 @@ class OptimizerParamScheduler(object):
         new_lr = self.get_lr()
         new_wd = self.get_wd()
 
-        if isinstance(self.optimizer, SpiralOptimizer):
+        if isinstance(self.optimizer, SpiralStageOptimizer):
             param_groups = self.optimizer.get_total_param_groups()
         else:
             param_groups = self.optimizer.param_groups
@@ -173,7 +173,7 @@ class OptimizerParamScheduler(object):
             max_lr_ = sd['max_lr']
         self.max_lr = self._check_and_set(self.max_lr, max_lr_,
                                           'learning rate')
-        
+
         self.min_lr = self._check_and_set(self.min_lr, sd['min_lr'],
                                           'minimum learning rate')
 
@@ -224,7 +224,7 @@ class OptimizerParamScheduler(object):
             self.wd_incr_style = self._check_and_set(self.wd_incr_style,
                                                 sd['wd_incr_style'],
                                                 "weight decay incr style")
-            
+
 
 
 

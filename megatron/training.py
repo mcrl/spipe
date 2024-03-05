@@ -46,7 +46,7 @@ from megatron.spiral import get_thunder_group, SpiralInitContext, SpiralWrapperI
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
 from megatron.spiral.utils import is_spiral_param
-from megatron.spiral.debug import spiral_print, debug_param2id_shape_status
+from megatron.spiral.debug import spiral_print, debug_param2id_shape_status, debug_module2name_id
 from megatron.spiral.init_context import patch_extra_repr
 
 from megatron.model.vision.knn_monitor import compute_feature_bank
@@ -156,9 +156,9 @@ def pretrain(train_valid_test_dataset_provider,
                                for data_iterators in all_data_iterators]
         test_data_iterator = [data_iterators[2]
                               for data_iterators in all_data_iterators]
-    elif mpu.is_spiral_pipeline_parallel():
-        # NOTE (mcrl): Duplicated with above code, but just to separate spiral logic from virtual pipeline
-        # NOTE (mcrl): data iterator for bwd stages is also created, in sync with megatron/spiral/schedules.py recomputation logic
+    elif mpu.is_spiral():
+        # NOTE (SpiralPipe) Duplicated with above code, but just to separate spiral logic from virtual pipeline
+        # NOTE (SpiralPipe) For SpiralPipe with remapping, data iterator for bwd stages is also created, in sync with megatron/spiral/schedules.py recomputation logic
         all_data_iterators = [
             build_train_valid_test_data_iterators(
                 train_valid_test_dataset_provider)
@@ -267,17 +267,22 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             )
             this_model.model_type = model_type
             model.append(this_model)
-    elif mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_spiral_pipeline_parallel():
-        assert model_type != ModelType.encoder_and_decoder, \
-            "SpiralPipe schedule not supported for model with both encoder and decoder"
+    elif mpu.get_pipeline_model_parallel_world_size() > 1 and mpu.is_spiral():
+        assert (
+            model_type != ModelType.encoder_and_decoder
+        ), "SpiralPipe not supported for model with both encoder and decoder"
 
-        get_thunder_group().SetSpiralCPUAllocator()
+        if mpu.is_spiral_remap():
+            get_thunder_group().SetSpiralCPUAllocator()
+
         init_contexts = [SpiralInitContext(enabled=True, dtype=args.params_dtype)]
         model = []
 
+        # SpiralPipe model build logic
+        #
         # Example:
-        # _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = 3
-        # _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = 3
+        # _SPIRAL_FORWARD_VIRTUAL_SIZE = 3
+        # _SPIRAL_BACKWARD_VIRTUAL_SIZE = 3
         # _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = 4
         #
         #     | fvr 0 | fvr 1 | fvr 2 | bvr 2 | bvr 1 | bvr 0 |
@@ -289,8 +294,8 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         # In specific, the total build phases of forward and backward stages are equal to the lcm of forward and backward virtual sizes.
         # This allows remapping of the forward params to the corresponding backward params of the same build phase id.
         # Example:
-        # _SPIRAL_PIPELINE_PARALLEL_FORWARD_VIRTUAL_SIZE = 2
-        # _SPIRAL_PIPELINE_PARALLEL_BACKWARD_VIRTUAL_SIZE = 3
+        # _SPIRAL_FORWARD_VIRTUAL_SIZE = 2
+        # _SPIRAL_BACKWARD_VIRTUAL_SIZE = 3
         # _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = 4
         #
         #     |   fvr 0  |   fvr 1  | bvr 2 | bvr 1 | bvr 0 |
@@ -299,49 +304,58 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         # r2  |  7  8  9 | 19 20 21 | 20 19 | 12 11 |  4  3 |
         # r3  | 10 11 12 | 22 23 24 | 18 17 | 10  9 |  2  1 |
 
-        # TODO (mcrl): Refactor as decorator
+        # Without remapping, fvr == bvr and the total build phases == fwd / bwd virtual size.
+        # Hence, separate backward building is not required.
+        #
+        #     | vr 0  | vr 1  | vr 2  |
+        # r0  | prep  |       |       |
+        # r1  |       |       |       |
+        # r2  |       |       |       |
+        # r3  |       |       | postp |
+
+        # TODO (SpiralPipe) Refactor as decorator
         def _model_provider_func_wrapper(
             model_type, fvr=None, bvr=None, fbp=None, bbp=None
         ):
             # hold old states of the caller
-            _old_fvr = mpu.get_spiral_pipeline_parallel_forward_virtual_rank()
-            _old_bvr = mpu.get_spiral_pipeline_parallel_backward_virtual_rank()
-            if mpu.is_spiral_pipeline_parallel_forward_stage():
-                _old_fbp = sbs.get_spiral_pipeline_parallel_forward_stage_build_phase()
-            if mpu.is_spiral_pipeline_parallel_backward_stage():
-                _old_bbp = sbs.get_spiral_pipeline_parallel_backward_stage_build_phase()
+            _old_fvr = mpu.get_spiral_forward_virtual_rank()
+            _old_bvr = mpu.get_spiral_backward_virtual_rank()
+            if mpu.is_spiral_forward_stage():
+                _old_fbp = sbs.get_spiral_forward_stage_build_phase()
+            if mpu.is_spiral_backward_stage():
+                _old_bbp = sbs.get_spiral_backward_stage_build_phase()
 
             # set new states of the callee
-            mpu.set_spiral_pipeline_parallel_forward_virtual_rank(fvr)
-            mpu.set_spiral_pipeline_parallel_backward_virtual_rank(bvr)
-            if mpu.is_spiral_pipeline_parallel_forward_stage():
-                sbs.set_spiral_pipeline_parallel_forward_stage_build_phase(fbp)
-            if mpu.is_spiral_pipeline_parallel_backward_stage():
-                sbs.set_spiral_pipeline_parallel_backward_stage_build_phase(bbp)
+            mpu.set_spiral_forward_virtual_rank(fvr)
+            mpu.set_spiral_backward_virtual_rank(bvr)
+            if mpu.is_spiral_forward_stage():
+                sbs.set_spiral_forward_stage_build_phase(fbp)
+            if mpu.is_spiral_backward_stage():
+                sbs.set_spiral_backward_stage_build_phase(bbp)
 
             # init model
-            if mpu.is_spiral_pipeline_parallel_forward_stage():
+            if mpu.is_spiral_forward_stage():
                 pre_process = (
                     mpu.is_pipeline_first_stage()
-                    and sbs.get_spiral_pipeline_parallel_forward_stage_build_phase()
+                    and sbs.get_spiral_forward_stage_build_phase()
                     == 0
                 )
                 post_process = (
                     mpu.is_pipeline_last_stage()
-                    and sbs.get_spiral_pipeline_parallel_forward_stage_build_phase()
-                    == sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+                    and sbs.get_spiral_forward_stage_build_phase()
+                    == sbs.get_spiral_forward_stage_build_phase_size()
                     - 1
                 )
-            if mpu.is_spiral_pipeline_parallel_backward_stage():
+            if mpu.is_spiral_backward_stage():
                 pre_process = (
                     mpu.is_pipeline_first_stage()
-                    and sbs.get_spiral_pipeline_parallel_backward_stage_build_phase()
+                    and sbs.get_spiral_backward_stage_build_phase()
                     == 0
                 )
                 post_process = (
                     mpu.is_pipeline_last_stage()
-                    and sbs.get_spiral_pipeline_parallel_backward_stage_build_phase()
-                    == sbs.get_spiral_pipeline_parallel_backward_stage_build_phase_size()
+                    and sbs.get_spiral_backward_stage_build_phase()
+                    == sbs.get_spiral_backward_stage_build_phase_size()
                     - 1
                 )
             this_model = model_provider_func(
@@ -350,132 +364,171 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             this_model.model_type = model_type
 
             # reset states of the callee
-            if mpu.is_spiral_pipeline_parallel_forward_stage():
-                sbs.set_spiral_pipeline_parallel_forward_stage_build_phase(None)
-            if mpu.is_spiral_pipeline_parallel_backward_stage():
-                sbs.set_spiral_pipeline_parallel_backward_stage_build_phase(None)
-            mpu.set_spiral_pipeline_parallel_forward_virtual_rank(None)
-            mpu.set_spiral_pipeline_parallel_backward_virtual_rank(None)
+            if mpu.is_spiral_forward_stage():
+                sbs.set_spiral_forward_stage_build_phase(None)
+            if mpu.is_spiral_backward_stage():
+                sbs.set_spiral_backward_stage_build_phase(None)
+            mpu.set_spiral_forward_virtual_rank(None)
+            mpu.set_spiral_backward_virtual_rank(None)
 
             # restore old states of the caller
-            mpu.set_spiral_pipeline_parallel_forward_virtual_rank(_old_fvr)
-            mpu.set_spiral_pipeline_parallel_backward_virtual_rank(_old_bvr)
-            if mpu.is_spiral_pipeline_parallel_forward_stage():
-                sbs.set_spiral_pipeline_parallel_forward_stage_build_phase(_old_fbp)
-            if mpu.is_spiral_pipeline_parallel_backward_stage():
-                sbs.set_spiral_pipeline_parallel_backward_stage_build_phase(_old_bbp)
+            mpu.set_spiral_forward_virtual_rank(_old_fvr)
+            mpu.set_spiral_backward_virtual_rank(_old_bvr)
+            if mpu.is_spiral_forward_stage():
+                sbs.set_spiral_forward_stage_build_phase(_old_fbp)
+            if mpu.is_spiral_backward_stage():
+                sbs.set_spiral_backward_stage_build_phase(_old_bbp)
 
             return this_model
 
         with ContextManagers(init_contexts):
             # Build forward
             spiral_print(f"Building forward stages")
-            for i in range(mpu.get_spiral_pipeline_parallel_forward_virtual_size()):
-                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(i)
+            for i in range(mpu.get_spiral_forward_virtual_size()):
+                mpu.set_spiral_forward_virtual_rank(i)
 
                 __stage_models = [
                     lambda i=i, j=j: _model_provider_func_wrapper(model_type, fvr=i, bvr=None, fbp=j, bbp=None)
                     for j in range(
-                        sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size()
+                        sbs.get_spiral_forward_stage_build_phase_size()
                     )
                 ]
-                this_model = SpiralPhaseList(map(lambda f: f(), __stage_models))
+                this_model = SpiralPhaseList(
+                    map(lambda f: f(), __stage_models),
+                    save_input_tensors=True,
+                    save_output_tensors=not mpu.is_spiral_remap() and not args.spiral_recompute_activations,
+                )
                 this_model.model_type = model_type
                 model.append(this_model)
 
-                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(None)
+                mpu.set_spiral_forward_virtual_rank(None)
 
             # Sync after forward building
             spiral_print(f"Done building forward stages")
-            with patch_extra_repr():
-                for stage_id, stage_models in enumerate(model[:mpu.get_spiral_pipeline_parallel_forward_virtual_size()]):
-                    for phase_id, phase_model in enumerate(stage_models.module_list):
-                        spiral_print(f"===== fwd stage {stage_id} phase {phase_id} =====")
-                        spiral_print(str(phase_model))
-                        for param in phase_model.parameters(recurse=True):
-                            if is_spiral_param(param):
-                                spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
+            # with patch_extra_repr():
+            #     for stage_id, stage_models in enumerate(model[:mpu.get_spiral_forward_virtual_size()]):
+            #         for phase_id, phase_model in enumerate(stage_models.module_list):
+            #             spiral_print(f"===== fwd stage {stage_id} phase {phase_id} =====")
+            #             spiral_print(str(phase_model))
+            #             for param in phase_model.parameters(recurse=True):
+            #                 if is_spiral_param(param):
+            #                     spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
 
             # Build phase to num spiral param map
             num_params_per_fwd_build_phase = np.empty(
                 (
                     mpu.get_pipeline_model_parallel_world_size(),
-                    mpu.get_spiral_pipeline_parallel_forward_virtual_size(),
-                    sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size(),
+                    mpu.get_spiral_forward_virtual_size(),
+                    sbs.get_spiral_forward_stage_build_phase_size(),
                 ),
                 dtype=np.uintc,
             )
             num_params_per_fwd_build_phase[mpu.get_pipeline_model_parallel_rank()] = [
                 [m.num_spiral_params_recurse for m in __stage_models.module_list]
-                for __stage_models in model[:mpu.get_spiral_pipeline_parallel_forward_virtual_size()]
+                for __stage_models in model[:mpu.get_spiral_forward_virtual_size()]
             ]
             num_params_per_fwd_build_phase = get_thunder_group().AllGather(num_params_per_fwd_build_phase)
             __phase = 0
             __phase_nparam_dict = {}
-            for i in range(mpu.get_spiral_pipeline_parallel_forward_virtual_size()):
+            for i in range(mpu.get_spiral_forward_virtual_size()):
                 for j in range(mpu.get_pipeline_model_parallel_world_size()):
-                    for k in range(sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size()):
+                    for k in range(sbs.get_spiral_forward_stage_build_phase_size()):
                         __phase_nparam_dict[__phase] = num_params_per_fwd_build_phase[j, i, k]
                         __phase += 1
-            sbs.set_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict(__phase_nparam_dict)
-            spiral_print("=====global phase dict=====\n" + str(sbs.get_spiral_pipeline_parallel_global_build_phase_num_spiral_params_dict()))
+            sbs.set_spiral_global_build_phase_num_spiral_params_dict(__phase_nparam_dict)
+            spiral_print("=====global phase dict=====\n" + str(sbs.get_spiral_global_build_phase_num_spiral_params_dict()))
 
             # Build backward
             spiral_print(f"Building backward stages")
-            for i in range(mpu.get_spiral_pipeline_parallel_backward_virtual_size() - 1, -1, -1):
-                mpu.set_spiral_pipeline_parallel_backward_virtual_rank(i)
+            if mpu.is_spiral_remap():
+                for i in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                    mpu.set_spiral_backward_virtual_rank(i)
 
-                __stage_models = [
-                    lambda i=i, j=j: _model_provider_func_wrapper(model_type, fvr=None, bvr=i, fbp=None, bbp=j)
-                    for j in range(
-                        sbs.get_spiral_pipeline_parallel_backward_stage_build_phase_size()
+                    __stage_models = [
+                        lambda i=i, j=j: _model_provider_func_wrapper(model_type, fvr=None, bvr=i, fbp=None, bbp=j)
+                        for j in range(
+                            sbs.get_spiral_backward_stage_build_phase_size()
+                        )
+                    ]
+                    this_model = SpiralPhaseList(
+                        map(lambda f: f(), __stage_models),
+                        save_input_tensors=False,
+                        save_output_tensors=False,
                     )
-                ]
-                this_model = SpiralPhaseList(map(lambda f: f(), __stage_models))
-                this_model.model_type = model_type
-                model.append(this_model)
+                    this_model.model_type = model_type
+                    model.append(this_model)
 
-                mpu.set_spiral_pipeline_parallel_backward_virtual_rank(None)
+                    mpu.set_spiral_backward_virtual_rank(None)
 
             # Sync after backward building
             spiral_print(f"Done building backward stages")
-            with patch_extra_repr():
-                for reverse_stage_id, stage_models in enumerate(model[mpu.get_spiral_pipeline_parallel_forward_virtual_size():]):
-                    for phase_id, phase_model in enumerate(stage_models.module_list):
-                        stage_id = mpu.get_spiral_pipeline_parallel_backward_virtual_size() - reverse_stage_id - 1
-                        spiral_print(f"===== bwd stage {stage_id} phase {phase_id} =====")
-                        spiral_print(str(phase_model))
-                        for param in phase_model.parameters(recurse=True):
-                            if is_spiral_param(param):
-                                spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
-            for stage_models in model[mpu.get_spiral_pipeline_parallel_forward_virtual_size():]:
-                for phase_model in stage_models.module_list:
-                    phase_model.spiral_save_params_info()
-            torch.distributed.barrier(group = mpu.get_pipeline_model_parallel_group()) # IMPORTANT
+            # with patch_extra_repr():
+            #     for reverse_stage_id, stage_models in enumerate(
+            #         model[mpu.get_spiral_forward_virtual_size():]
+            #         if mpu.is_spiral_remap()
+            #         else model
+            #     ):
+            #         for phase_id, phase_model in enumerate(stage_models.module_list):
+            #             stage_id = (
+            #                 mpu.get_spiral_backward_virtual_size()
+            #                 - reverse_stage_id
+            #                 - 1
+            #             )
+            #             spiral_print(
+            #                 f"===== bwd stage {stage_id} phase {phase_id} ====="
+            #             )
+            #             spiral_print(str(phase_model))
+            #             for param in phase_model.parameters(recurse=True):
+            #                 if is_spiral_param(param):
+            #                     spiral_print(
+            #                         debug_param2id_shape_status(param)
+            #                         + str(param.spiral_tensor.data)
+            #                     )
+
+            if mpu.is_spiral_remap():
+                for stage_models in model[mpu.get_spiral_forward_virtual_size():]:
+                    for phase_model in stage_models.module_list:
+                        phase_model.spiral_save_params_info()
+                torch.distributed.barrier(group = mpu.get_pipeline_model_parallel_group()) # IMPORTANT
+            elif mpu.is_spiral() and not mpu.is_spiral_remap():
+                # sync bid to fid since skips BWD build
+                for stage_models in model:
+                    stage_models.apply(
+                        lambda m: setattr(
+                            m, "spiral_backward_stage_id", m.spiral_forward_stage_id
+                        )
+                    )
 
             # Remap forward
             spiral_print(f"Remapping forward stages")
-            sbs.reset_spiral_pipeline_parallel_forward_stage_build_phase_num_spiral_params_allocated() # reset for proper spiral id mapping
-            for i in range(mpu.get_spiral_pipeline_parallel_forward_virtual_size()):
-                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(i)
-                for j in range(sbs.get_spiral_pipeline_parallel_forward_stage_build_phase_size()):
-                    sbs.set_spiral_pipeline_parallel_forward_stage_build_phase(j)
+            sbs.reset_spiral_forward_stage_build_phase_num_spiral_params_allocated() # reset for proper spiral id mapping
+            for i in range(mpu.get_spiral_forward_virtual_size()):
+                mpu.set_spiral_forward_virtual_rank(i)
+
+                for j in range(sbs.get_spiral_forward_stage_build_phase_size()):
+                    sbs.set_spiral_forward_stage_build_phase(j)
                     model[i].module_list[j].spiral_remap()
-                    sbs.set_spiral_pipeline_parallel_forward_stage_build_phase(None)
-                mpu.set_spiral_pipeline_parallel_forward_virtual_rank(None)
+                    sbs.set_spiral_forward_stage_build_phase(None)
+
+                mpu.set_spiral_forward_virtual_rank(None)
 
             # Sync after forward remapping
             spiral_print(f"Done remapping forward stages")
-            with patch_extra_repr():
-                for stage_id, stage_models in enumerate(model[:mpu.get_spiral_pipeline_parallel_forward_virtual_size()]):
-                    for phase_id, phase_model in enumerate(stage_models.module_list):
-                        spiral_print(f"===== fwd stage {stage_id} phase {phase_id} =====")
-                        spiral_print(str(phase_model))
-                        for param in phase_model.parameters(recurse=True):
-                            if is_spiral_param(param):
-                                spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
+            # with patch_extra_repr():
+            #     for stage_id, stage_models in enumerate(model[:mpu.get_spiral_forward_virtual_size()]):
+            #         for phase_id, phase_model in enumerate(stage_models.module_list):
+            #             if mpu.is_spiral_remap():
+            #                 spiral_print(f"===== fwd stage {stage_id} phase {phase_id} =====")
+            #             elif mpu.is_spiral() and not mpu.is_spiral_remap():
+            #                 spiral_print(f"===== fwd/bwd stage {stage_id} phase {phase_id} =====")
+            #             spiral_print(str(phase_model))
+            #             for param in phase_model.parameters(recurse=True):
+            #                 if is_spiral_param(param):
+            #                     spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
 
-        get_thunder_group().UnsetSpiralCPUAllocator()
+        if mpu.is_spiral_remap():
+            get_thunder_group().UnsetSpiralCPUAllocator()
+
     else:
         pre_process = mpu.is_pipeline_first_stage()
         post_process = mpu.is_pipeline_last_stage()
@@ -543,7 +596,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         init_contexts = []
 
         def _wrap_ddp(model_module):
-            if mpu.is_spiral_pipeline_parallel():
+            if mpu.is_spiral():
                 model_module.spiral_fetch(non_blocking=False)
 
             if args.DDP_impl == 'torch':
@@ -562,12 +615,12 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                 raise NotImplementedError('Unknown DDP implementation specified: '
                                           '{}. Exiting.'.format(args.DDP_impl))
 
-            if mpu.is_spiral_pipeline_parallel():
+            if mpu.is_spiral():
                 model_module.spiral_free()
 
             return ddp_module
 
-        if mpu.is_spiral_pipeline_parallel():
+        if mpu.is_spiral():
             warnings.warn("SpiralPipe does not guaranteed DDP correctness.")
             # DDP wrapper copies spiral attributes from `model_module`
             init_contexts = [SpiralWrapperInitContext(enabled=True)]
@@ -638,7 +691,6 @@ def setup_model_and_optimizer(model_provider_func,
     model = get_model(model_provider_func, model_type)
     unwrapped_model = unwrap_model(model,
                                    (torchDDP, LocalDDP, Float16Module))
-
     optimizer = get_megatron_optimizer(model, no_wd_decay_cond,
                                        scale_lr_cond, lr_mult)
     opt_param_scheduler = get_optimizer_param_scheduler(optimizer)
@@ -685,9 +737,9 @@ def train_step(forward_step_func, data_iterator,
     forward_backward_func = get_forward_backward_func()
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
 
-    spiral_kwargs = {}
-    if mpu.is_spiral_pipeline_parallel():
-        spiral_kwargs = {"optimizer": optimizer}
+    kwargs = {}
+    if args.spiral_stage_optimizer:
+        kwargs["spiral_stage_optimizer"] = optimizer
 
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,
@@ -702,7 +754,7 @@ def train_step(forward_step_func, data_iterator,
         batch_p2p_comm=not args.overlap_p2p_comm,
         forward_only=False,
         timers=fwd_bwd_timers,
-        **spiral_kwargs)
+        **kwargs)
     timers('forward-backward').stop()
 
     # Empty unused memory.
@@ -719,13 +771,12 @@ def train_step(forward_step_func, data_iterator,
         unwrapped_model.cancel_gradients_last_layer(args.curr_iteration)
 
     # Update parameters.
-    if not mpu.is_spiral_pipeline_parallel():
+    if not args.spiral_stage_optimizer:
         timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
         timers('optimizer').stop()
     else:
-        # TODO (mcrl): Need to remove when async option was enabled
-        torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
+        torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group()) # TODO (SpiralPipe) Need to remove when async option was enabled
         update_successful = True
         grad_norm = num_zeros_in_grad = 0
 
@@ -753,7 +804,7 @@ def train_step(forward_step_func, data_iterator,
     if args.empty_unused_memory_level >= 2:
         torch.cuda.empty_cache()
 
-    if mpu.is_pipeline_last_stage(ignore_virtual=True):
+    if mpu.get_pipeline_model_parallel_rank() == (mpu.get_pipeline_model_parallel_world_size() - 1):
         # Average loss across microbatches.
         loss_reduced = {}
         for key in losses_reduced[0]:
@@ -1104,7 +1155,7 @@ def evaluate(forward_step_func,
             if args.empty_unused_memory_level >= 1:
                 torch.cuda.empty_cache()
 
-            if mpu.is_pipeline_last_stage(ignore_virtual=True):
+            if mpu.get_pipeline_model_parallel_rank() == (mpu.get_pipeline_model_parallel_world_size() - 1):
                 # Reduce across processes.
                 for loss_dict in loss_dicts:
                     for key in loss_dict:
