@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+
 from megatron.optimizer import FP32Optimizer
 
 
@@ -22,6 +24,7 @@ class SpiralStageOptimizer(FP32Optimizer):
         )
 
         self.optimizer_list = optimizer_list
+        self.optimizer_thread_pool = ThreadPoolExecutor(max_workers=len(optimizer_list))
 
     def set_bwd_stage(self, stage_id):
         assert stage_id < len(self.optimizer_list)

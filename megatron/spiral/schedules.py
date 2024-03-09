@@ -4,7 +4,7 @@ import nvtx
 import sys
 from typing import Callable, Iterator, List, Optional, Union, Tuple
 from enum import Enum
-import threading
+from concurrent.futures import wait, as_completed
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -156,12 +156,13 @@ class CkptSendRecvSchedule:
 def _post_wait_set_spiral_param_status(module, status: SpiralParamStatus):
     for param in module.parameters(recurse=True):
         if is_spiral_param(param):
-            param.spiral_param_status = status
+            assert hasattr(param, "spiral_status"), "spiral_status not found in param"
+            setattr(param, "spiral_status", status)
 
 
 def _weight_update(optimizer, bwd_stage_id, event_query, args, timers):
     if (
-        get_thunder_cuda_manager().sync_event(event_query)
+        get_thunder_cuda_manager().wait_event(event_query, sync=True)
         == -1
     ):
         raise RuntimeError("sync_event failed")
@@ -270,7 +271,7 @@ def forward_backward_pipelining_with_spiral_remap(
         assert "spiral_stage_optimizer" in kwargs, "spiral_stage_optimizer not found in kwargs"
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
-        optimizer_threads = []
+        optimizer_threads_status = []
 
     # TODO (SpiralPipe) Move to spiral_p2p
     @nvtx.annotate("comm_input_ckpt", color="red")
@@ -772,9 +773,9 @@ def forward_backward_pipelining_with_spiral_remap(
         if optimize_after_bwd_stage:
             torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
             # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
-            _optimizer_thread = threading.Thread(
-                target=_weight_update,
-                args=(
+            _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
+                _weight_update,
+                *(
                     optimizer,
                     bwd_stage_id,
                     offload_event_queries.pop(0), # TODO (SpiralPipe) This is very error-prone, since here and prefetch stream both pops head from the offload event queries. Pop after querying with appropriate tag.
@@ -782,8 +783,7 @@ def forward_backward_pipelining_with_spiral_remap(
                     timers,
                 ),
             )
-            _optimizer_thread.start()
-            optimizer_threads.append(_optimizer_thread)
+            optimizer_threads_status.append(_optimizer_thread_status)
             torch.cuda.nvtx.range_pop()
 
         mpu.set_spiral_backward_virtual_rank(None)
@@ -802,14 +802,18 @@ def forward_backward_pipelining_with_spiral_remap(
 
     # join spiral stage optimizer
     if optimize_after_bwd_stage:
-        for _opt_thread in optimizer_threads:
-            _opt_thread.join()
-    else:
-        if (
-            get_thunder_cuda_manager().sync_event(offload_event_queries.pop(0))
-            == -1
-        ):
-            raise RuntimeError("sync_event failed")
+        for _optimizer_thread_status in as_completed(optimizer_threads_status):
+            try:
+                _optimizer_thread_status.result()
+            except Exception as e:
+                raise Exception(f"Optimizer thread raised an exception: {e}")
+
+    if (
+        get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+        == -1
+    ):
+        # wait event with tag="offload:b0"
+        raise RuntimeError("wait_event failed")
 
     _cleanup()
     return forward_data_store
@@ -912,7 +916,7 @@ def forward_backward_pipelining_with_spiral(
         assert "spiral_stage_optimizer" in kwargs, "spiral_stage_optimizer not found in kwargs"
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
-        optimizer_threads = []
+        optimizer_threads_status = []
 
     def _cleanup():
         # cleanup checkpointed input tensors and output tensors
@@ -937,6 +941,10 @@ def forward_backward_pipelining_with_spiral(
         == mpu.get_pipeline_model_parallel_world_size() - 1
     ):
         losses = []
+
+    # NOTE (SpiralPipe) microbatch data is yielded by the data iterator into _recompute_data_iterator, in order to guarantee the same data for re-computation. This issue is present only when (1) a stage is used both as fwd and bwd stage, and (2) re-computation is performed. Using a data iterator for forward_step() in original fwd and re-compute fwd incurs some microbatches only being fed to re-compute fwd.
+    if not forward_only and recompute:
+        _recompute_data_iterator = [[] for _ in range(len(data_iterator))]
 
     prefetch_event_queries = []
     compute_event_queries = []
@@ -1026,6 +1034,13 @@ def forward_backward_pipelining_with_spiral(
                 )
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
+                # NOTE (SpiralPipe) Creating a new iterator with _data results in deep copy of _data. So, calling detach_variable() as in backward() of CheckpointFunction (random.py) is not necessary. However, we must note that a redundant data storage is created here, while a detached tensor shares the underlying storage with the original. https://pytorch.org/docs/stable/generated/torch.Tensor.detach.html
+                # TODO (SpiralPipe) Seek better solution to use detached tensor, using detach_variable().
+                _data = next(data_iterator[fwd_stage_id])
+                _data_iterator = iter([_data]) # wrap
+                if not forward_only and recompute:
+                    _recompute_data_iterator[fwd_stage_id].append(_data)
+
                 # wait for recv input tensor
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
                 if recv_handles is not None:
@@ -1038,7 +1053,7 @@ def forward_backward_pipelining_with_spiral(
                 with ContextManagers(_ctx):
                     output_tensor = forward_step(
                         forward_step_func,
-                        data_iterator[fwd_stage_id],
+                        _data_iterator,
                         model[fwd_stage_id],
                         num_microbatches,
                         input_tensor,
@@ -1202,8 +1217,7 @@ def forward_backward_pipelining_with_spiral(
                     with torch.enable_grad():
                         output_tensor = forward_step(
                             forward_step_func,
-                            # TODO (SpiralPipe): Need to use a different data_iterator than forward for recomputation
-                            data_iterator[bwd_stage_id],
+                            iter(_recompute_data_iterator[bwd_stage_id]),
                             model[bwd_stage_id],
                             num_microbatches,
                             input_tensor_ckpt,
@@ -1307,9 +1321,9 @@ def forward_backward_pipelining_with_spiral(
         if optimize_after_bwd_stage:
             torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
             # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
-            _optimizer_thread = threading.Thread(
-                target=_weight_update,
-                args=(
+            _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
+                _weight_update,
+                *(
                     optimizer,
                     bwd_stage_id,
                     offload_event_queries.pop(0), # TODO (SpiralPipe) This is very error-prone, since here and prefetch stream both pops head from the offload event queries. Pop after querying with appropriate tag.
@@ -1317,8 +1331,7 @@ def forward_backward_pipelining_with_spiral(
                     timers,
                 ),
             )
-            _optimizer_thread.start()
-            optimizer_threads.append(_optimizer_thread)
+            optimizer_threads_status.append(_optimizer_thread_status)
             torch.cuda.nvtx.range_pop()
 
         mpu.set_spiral_backward_virtual_rank(None)
@@ -1326,14 +1339,18 @@ def forward_backward_pipelining_with_spiral(
 
     # join spiral stage optimizer
     if optimize_after_bwd_stage:
-        for _opt_thread in optimizer_threads:
-            _opt_thread.join()
-    else:
-        if (
-            get_thunder_cuda_manager().sync_event(offload_event_queries.pop(0))
-            == -1
-        ):
-            raise RuntimeError("sync_event failed")
+        for _optimizer_thread_status in as_completed(optimizer_threads_status):
+            try:
+                _optimizer_thread_status.result()
+            except Exception as e:
+                raise Exception(f"Optimizer thread raised an exception: {e}")
+
+    if (
+        get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+        == -1
+    ):
+        # wait event with tag="offload:b0"
+        raise RuntimeError("wait_event failed")
 
     _cleanup()
     return forward_data_store

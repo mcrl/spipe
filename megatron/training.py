@@ -776,9 +776,11 @@ def train_step(forward_step_func, data_iterator,
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
         timers('optimizer').stop()
     else:
-        torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group()) # TODO (SpiralPipe) Need to remove when async option was enabled
         update_successful = True
         grad_norm = num_zeros_in_grad = 0
+
+    # TODO (SpiralPipe) Need to remove when async option was enabled
+    torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
 
     # Gather params.
     if update_successful:

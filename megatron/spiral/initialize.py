@@ -59,6 +59,7 @@ class SpiralCUDAManager:
         }
 
         self.__unrecorded_event_hdl_deque = deque()
+        self.__completed_event_hdl_deque = deque() # sorted new ~ old for efficient query
 
     def Stream(self, stream_name: str):
         assert (
@@ -77,7 +78,7 @@ class SpiralCUDAManager:
                 self.__stream_dict.get(wait_stream_name) is not None
             ), f"Stream {wait_stream_name} is not initialized"
         eventhdl = SpiralCUDAEventHandle(
-            *self.__stream_dict.get(record_stream_name),
+            self.__stream_dict.get(record_stream_name)[0],
             self.__stream_dict.get(wait_stream_name)[0] if wait_stream_name else None,
             *args,
             **kwargs,
@@ -88,24 +89,34 @@ class SpiralCUDAManager:
         )
 
     def record_event(self, query: SpiralCUDAEventQuery_t) -> int:
+        _target_stream, _target_event_hdl_deque = self._get_stream_event_hdl_deque(query.record_stream_name)
         for eventhdl in self.__unrecorded_event_hdl_deque:
             if getattr(eventhdl.event, "spiral_tag") == query.tag:
+                assert eventhdl.record_stream == _target_stream
                 eventhdl.record()
                 self.__unrecorded_event_hdl_deque.remove(eventhdl)
+                _target_event_hdl_deque.append(eventhdl)
                 return 0
         return -1
 
-    def wait_event(self, query: SpiralCUDAEventQuery_t) -> int:
-        for eventhdl in self._get_stream_event_hdl_deque(query.record_stream_name):
+    def wait_event(self, query: SpiralCUDAEventQuery_t, sync=False) -> int:
+        _target_event_hdl_deque = self._get_stream_event_hdl_deque(query.record_stream_name)[1]
+        for eventhdl in _target_event_hdl_deque:
             if getattr(eventhdl.event, "spiral_tag") == query.tag:
-                eventhdl.wait()
+                if sync:
+                    eventhdl.synchronize()
+                else:
+                    eventhdl.wait()
+                _target_event_hdl_deque.remove(eventhdl)
+                self.__completed_event_hdl_deque.appendleft(eventhdl)
                 return 0
-        return -1
-
-    def sync_event(self, query: SpiralCUDAEventQuery_t) -> int:
-        for eventhdl in self._get_stream_event_hdl_deque(query.record_stream_name):
+        # Query event from completed list if not found
+        for eventhdl in self.__completed_event_hdl_deque:
             if getattr(eventhdl.event, "spiral_tag") == query.tag:
-                eventhdl.synchronize()
+                if sync:
+                    eventhdl.synchronize()
+                else:
+                    eventhdl.wait()
                 return 0
         return -1
 
@@ -113,14 +124,20 @@ class SpiralCUDAManager:
         assert (
             self.__stream_dict.get(stream_name) is not None
         ), f"Stream {stream_name} is not initialized"
-        return self.__stream_dict.get(stream_name)[1]
+        return self.__stream_dict.get(stream_name)
+
+    def __del__(self):
+        for stream_name, (stream, event_hdl_deque) in self.__stream_dict.items():
+            if len(event_hdl_deque) > 0:
+                print(f"WARNING: {len(event_hdl_deque)} unwaited events on {stream_name} stream")
+        if len(self.__unrecorded_event_hdl_deque) > 0:
+            print(f"WARNING: {len(self.__unrecorded_event_hdl_deque)} unrecorded events")
 
 
 class SpiralCUDAEventHandle:
     def __init__(
         self,
         record_stream: torch.cuda.Stream,
-        record_stream_event_deque: deque,
         wait_stream: Optional[torch.cuda.Stream],
         pre_wait_fn: Optional[callable] = None,
         post_wait_fn: Optional[callable] = None,
@@ -133,7 +150,6 @@ class SpiralCUDAEventHandle:
         An event can be recorded on a single predetermined stream, but can be waited on multiple streams.
         Arguments:
             record_stream: the stream on which the event will be recorded
-            record_stream_event_deque: the deque to store the event for the record stream
             wait_stream: the stream on which the event will be waited. If None, any stream can wait on the event
 
         Keyword Arguments:
@@ -147,7 +163,6 @@ class SpiralCUDAEventHandle:
         # wait by polling-based or event-driven, so we do not care about it here.
         # https://github.com/pytorch/pytorch/issues/82061
         self.record_stream = record_stream
-        self.record_stream_event_deque = record_stream_event_deque
         self.wait_stream = wait_stream
         self.pre_wait_fn = pre_wait_fn
         self.post_wait_fn = post_wait_fn
@@ -157,7 +172,6 @@ class SpiralCUDAEventHandle:
     def record(self):
         """Record the event on the record stream"""
         self.event.record(self.record_stream)
-        self.record_stream_event_deque.append(self)
 
     def wait(self):
         if self.wait_stream is not None:
@@ -171,36 +185,18 @@ class SpiralCUDAEventHandle:
 
         self.event.wait(stream=torch.cuda.current_stream())
 
-        # flush completed events from the record stream event deque, including the event itself
-        # TODO (SpiralPipe) handle case when multiple streams wait on the same event
-        while (
-            self.record_stream_event_deque
-            and self.record_stream_event_deque[0].event.query()
-        ):
-            completed_event_hdl = self.record_stream_event_deque.popleft()
-            if completed_event_hdl == self:
-                break
-
         if self.post_wait_fn is not None:
             self.post_wait_fn()
 
     def synchronize(self):
-        assert self.wait_stream is None, "EventSynchronize would block cpu processing, so wait_stream should be None"
+        assert (
+            self.wait_stream is None
+        ), "EventSynchronize would block cpu processing, so wait_stream should be None"
 
         if self.pre_wait_fn is not None:
             self.pre_wait_fn()
 
         self.event.synchronize()
-
-        # flush completed events from the record stream event deque, including the event itself
-        # TODO (SpiralPipe): handle case when multiple streams wait on the same event
-        while (
-            self.record_stream_event_deque
-            and self.record_stream_event_deque[0].event.query()
-        ):
-            completed_event_hdl = self.record_stream_event_deque.popleft()
-            if completed_event_hdl == self:
-                break
 
         if self.post_wait_fn is not None:
             self.post_wait_fn()
