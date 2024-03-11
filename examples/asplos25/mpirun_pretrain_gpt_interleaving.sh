@@ -1,23 +1,29 @@
 #!/bin/bash
 
-MPIRUN=/usr/local/bin/mpirun
+#SBATCH -J spiral
+#SBATCH --mincpus=4
+#SBATCH --exclusive
+#SBATCH --mem=0
+
+MPIRUN=$(which mpirun)
 MPI_OPTIONS="-mca btl ^openib -mca pml ucx"
-MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
+MEGATRON_PATH=${HOME}/SpiralPipe/Megatron-LM-mcrl
 
 # Change for your system
 
 ## conda
-source ~/anaconda3/etc/profile.d/conda.sh
-conda activate Megatron-cuda11.7
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate spiral
 
 ## mpi
-NP=4
 GPUS_PER_NODE=4
-HOSTS="b4:${GPUS_PER_NODE}" # b3:2,b4:2
+NP=$(( $GPUS_PER_NODE * $SLURM_JOB_NUM_NODES ))
+UNWRAPPED_NODELIST=$(scontrol show hostnames $SLURM_NODELIST) # b3 b4
+HOSTS=$(for node in $UNWRAPPED_NODELIST; do echo -n "$node:$GPUS_PER_NODE,"; done | sed 's/,$//') # b3:2,b4:2
 
 ## torch dist.
-export MASTER_ADDR="b4"
-export MASTER_PORT=6003
+export MASTER_ADDR=$(echo $UNWRAPPED_NODELIST | awk '{print $1}')
+export MASTER_PORT=6000
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 

@@ -19,7 +19,7 @@ setup(
             library_dirs=[
                 os.path.join(os.environ['MPI_BUILD_DIR'], 'lib'),
             ],
-            libraries=['mpi', 'mpi_cxx', 'rt', 'pthread', 'cuda', 'cudart'], # linker. -lmpi, -lmpi_cxx
+            libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart'], # linker. -lmpi
             extra_compile_args=['-g', '-fvisibility=hidden']),
     ],
     cmdclass={
