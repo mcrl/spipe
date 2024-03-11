@@ -17,11 +17,12 @@
 #include <sys/types.h>
 #include <cstddef>
 #include <pybind11/numpy.h>
+#include <cuda_runtime.h>
 
 const char* sharedMemoryName = "/thunder";
 
 // const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
-const size_t kCpuBufferSize = 1L << 35; // 32GB, per host
+const size_t kCpuBufferSize = 1L << 37; // 128GB, per host
 const size_t kCpuBufferHeaderSize = 1L << 30; // 1GB, per host
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
@@ -241,6 +242,9 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   // Initialize param mapping tbl
   param_mapping_tbl_ = (ParamDataInfo*)shared_ptr_;
 
+  // Pin shared memory buffer
+  CHECK_CUDA(cudaHostRegister((void*)GetBase(comm_info_.mpi_rank_), kCpuBufferSize, cudaHostRegisterPortable));
+
   // Initialize allocator
   assert(allocator_ == nullptr); // allocator_ must be nullptr before first calling instance
   allocator_ = c10::SpiralCPUAllocator::instance(GetBase(comm_info_.mpi_rank_), kCpuBufferSize / comm_info_.intra_size_ * comm_info_.intra_rank_, kCpuBufferSize / comm_info_.intra_size_, sizeof(float)); // Shared memory is divided equally among host processes
@@ -267,6 +271,9 @@ Comm::~Comm() {
 
   // NOTE: since allocator is designed to be a singleton,
   // we do not need to delete it here.
+
+  // Unpin shared memory buffer
+  CHECK_CUDA(cudaHostUnregister((void*)GetBase(comm_info_.mpi_rank_)));
 
   // Free shared_ptrs_
   free(shared_ptrs_);
