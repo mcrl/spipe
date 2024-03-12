@@ -142,8 +142,9 @@ private:
   
   int fd_;
   void* shared_ptr_ = nullptr;
-  uintptr_t* shared_ptrs_;        // shared_ptr_ virtual address of each mpi rank
-  size_t shared_memory_size_ = 0; // size > 0 indicates shmem initialized
+  uintptr_t* shared_ptrs_;                    // shared_ptr_ virtual address of each mpi rank
+  size_t shared_memory_size_ = 0;             // size > 0 indicates shmem initialized
+  std::vector<void*> additional_pinned_ptrs_; // additional pinned pointers, else than allocator buffer
 
   struct ParamDataInfo {
     int mpi_rank_;      // mpi rank of initializer of param data
@@ -242,9 +243,6 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   // Initialize param mapping tbl
   param_mapping_tbl_ = (ParamDataInfo*)shared_ptr_;
 
-  // Pin shared memory buffer
-  CHECK_CUDA(cudaHostRegister((void*)GetBase(comm_info_.mpi_rank_), kCpuBufferSize, cudaHostRegisterPortable));
-
   // Initialize allocator
   assert(allocator_ == nullptr); // allocator_ must be nullptr before first calling instance
   allocator_ = c10::SpiralCPUAllocator::instance(GetBase(comm_info_.mpi_rank_), kCpuBufferSize / comm_info_.intra_size_ * comm_info_.intra_rank_, kCpuBufferSize / comm_info_.intra_size_, sizeof(float)); // Shared memory is divided equally among host processes
@@ -272,8 +270,10 @@ Comm::~Comm() {
   // NOTE: since allocator is designed to be a singleton,
   // we do not need to delete it here.
 
-  // Unpin shared memory buffer
-  CHECK_CUDA(cudaHostUnregister((void*)GetBase(comm_info_.mpi_rank_)));
+  // Unpin additional pinned pointers
+  for (void* ptr : additional_pinned_ptrs_) {
+    CHECK_CUDA(cudaHostUnregister(ptr));
+  }
 
   // Free shared_ptrs_
   free(shared_ptrs_);
@@ -318,6 +318,15 @@ void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, co
   std::ptrdiff_t offset = addr - GetBase(param_mapping_tbl_[param_id].mpi_rank_);
   void* srcptr = (void*)(GetBase(comm_info_.mpi_rank_) + offset);
   c10::DataPtr srcdataptr = { srcptr, srcptr, nullptr, at::Device(at::DeviceType::CPU) }; // disallow delete
+
+  // pin source ptr
+  cudaPointerAttributes attributes;
+  CHECK_CUDA(cudaPointerGetAttributes(&attributes, srcptr));
+  // NOTE (SpiralPipe) May require separate logic for different memory types (unregistered, host, device)
+  if (attributes.cudaMemoryType != cudaMemoryTypeManaged) {
+    CHECK_CUDA(cudaHostRegister(srcptr, param_mapping_tbl_[param_id].size_bytes_, cudaHostRegisterPortable));
+    additional_pinned_ptrs_.push_back(srcptr);
+  }
 
   // change tensor metadata
   c10::TensorImpl* tensor_impl = tensor.unsafeGetTensorImpl();
