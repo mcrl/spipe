@@ -161,6 +161,7 @@ def _post_wait_set_spiral_param_status(module, status: SpiralParamStatus):
 
 
 def _weight_update(optimizer, bwd_stage_id, event_query, args, timers):
+    torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
     if (
         get_thunder_cuda_manager().wait_event(event_query, sync=True)
         == -1
@@ -174,6 +175,7 @@ def _weight_update(optimizer, bwd_stage_id, event_query, args, timers):
     optimizer.step(args, get_timers())
     if timers is not None:
         timers('optimizer').stop()
+    torch.cuda.nvtx.range_pop()
 
 
 def forward_backward_pipelining_with_spiral_remap(
@@ -771,7 +773,6 @@ def forward_backward_pipelining_with_spiral_remap(
 
         # spiral stage optimizer
         if optimize_after_bwd_stage:
-            torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
             # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
             _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
                 _weight_update,
@@ -784,7 +785,6 @@ def forward_backward_pipelining_with_spiral_remap(
                 ),
             )
             optimizer_threads_status.append(_optimizer_thread_status)
-            torch.cuda.nvtx.range_pop()
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -1319,7 +1319,6 @@ def forward_backward_pipelining_with_spiral(
 
         # spiral stage optimizer
         if optimize_after_bwd_stage:
-            torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
             # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
             _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
                 _weight_update,
@@ -1332,7 +1331,6 @@ def forward_backward_pipelining_with_spiral(
                 ),
             )
             optimizer_threads_status.append(_optimizer_thread_status)
-            torch.cuda.nvtx.range_pop()
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
