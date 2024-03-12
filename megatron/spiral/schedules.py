@@ -2,7 +2,7 @@ import contextlib
 import warnings
 import nvtx
 import sys
-from typing import Callable, Iterator, List, Optional, Union, Tuple, Dict
+from typing import Callable, Iterator, List, Optional, Union, Tuple
 from enum import Enum
 from concurrent.futures import wait, as_completed
 
