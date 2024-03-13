@@ -63,6 +63,8 @@ class CkptSendRecvSchedule:
     def __init__(self, num_microbatches: Optional[int]):
         if num_microbatches is None:
             num_microbatches = get_num_microbatches()
+        assert num_microbatches >= mpu.get_pipeline_model_parallel_world_size(), \
+            "CkptSendRecvSchedule requires num_microbatches >= pipeline model parallel world size"
         self.num_microbatches = num_microbatches
 
         num_compute_ts = (
