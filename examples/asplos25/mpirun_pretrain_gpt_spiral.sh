@@ -40,11 +40,13 @@ DATASET_NAME=openwebtext
 DATASET_CONFIG=plan_text
 DATA_PATH=/data/z0/heehoon/openwebtext-mg/openwebtext_text_document
 
+
+
 # --spiral-stage-optimizer
 SPIRAL_ARGS="
     --spiral \
     --spiral-remap \
-    --spiral-forward-virtual-size 2 \
+    --spiral-forward-virtual-size 1 \
     --spiral-backward-virtual-size 3 \
     --spiral-recompute-activations \
     --spiral-debug-backend \
@@ -67,7 +69,7 @@ GPT_ARGS="
     --micro-batch-size 1 \
     --global-batch-size 4 \
     --lr 0.00015 \
-    --train-iters 3 \
+    --train-iters 100 \
     --eval-iters 0 \
     --lr-decay-iters 320000 \
     --lr-decay-style cosine \
@@ -88,5 +90,9 @@ DATA_ARGS="
     --split 949,50,1
 "
 
+LOGGING_ARGS="
+    --log-interval 10 \
+"
+
 ${MPIRUN} -np $NP -host $HOSTS $MPI_OPTIONS \
-    python $MEGATRON_PATH/pretrain_gpt.py $SPIRAL_ARGS $GPT_ARGS $DATA_ARGS --load $MODEL_PATH
+    python $MEGATRON_PATH/pretrain_gpt.py $SPIRAL_ARGS $GPT_ARGS $DATA_ARGS $LOGGING_ARGS --load $MODEL_PATH

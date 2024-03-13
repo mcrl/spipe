@@ -490,6 +490,7 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                     for phase_model in stage_models.module_list:
                         phase_model.spiral_save_params_info()
                 torch.distributed.barrier(group = mpu.get_pipeline_model_parallel_group()) # IMPORTANT
+                get_thunder_group().SyncParamDataInfo()
             elif mpu.is_spiral() and not mpu.is_spiral_remap():
                 # sync bid to fid since skips BWD build
                 for stage_models in model:
