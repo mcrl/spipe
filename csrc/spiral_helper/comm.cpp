@@ -19,7 +19,7 @@
 #include <pybind11/numpy.h>
 #include <cuda_runtime.h>
 
-const char* sharedMemoryName = "/thunder";
+const char* sharedMemoryName = "/thunder"; // set differently
 
 // const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
 const size_t kCpuBufferSize = 1L << 37; // 128GB, per host
@@ -109,7 +109,7 @@ public:
   void SetSpiralCPUAllocator();
   void UnsetSpiralCPUAllocator();
 
-  void RemapParamData(torch::Tensor& tensor, const unsigned int param_id, const c10::IntArrayRef sizes, const c10::IntArrayRef strides, const int64_t storage_offset) const;
+  void RemapParamData(torch::Tensor& tensor, const unsigned int param_id, const c10::IntArrayRef sizes, const c10::IntArrayRef strides, const int64_t storage_offset);
   void SetParamDataInfo(const unsigned int param_id, const uintptr_t dataptr, const size_t size_bytes);
 
   const py::dict GetCommInfo() const;
@@ -313,7 +313,7 @@ void Comm::UnsetSpiralCPUAllocator() {
   prev_allocator_ptr_ = nullptr;
 }
 
-void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, const c10::IntArrayRef sizes, const c10::IntArrayRef strides, const int64_t storage_offset) const {
+void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, const c10::IntArrayRef sizes, const c10::IntArrayRef strides, const int64_t storage_offset) {
   uintptr_t addr = param_mapping_tbl_[param_id].dataptr_;
   std::ptrdiff_t offset = addr - GetBase(param_mapping_tbl_[param_id].mpi_rank_);
   void* srcptr = (void*)(GetBase(comm_info_.mpi_rank_) + offset);
@@ -323,7 +323,7 @@ void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, co
   cudaPointerAttributes attributes;
   CHECK_CUDA(cudaPointerGetAttributes(&attributes, srcptr));
   // NOTE (SpiralPipe) May require separate logic for different memory types (unregistered, host, device)
-  if (attributes.cudaMemoryType != cudaMemoryTypeManaged) {
+  if (attributes.type != cudaMemoryTypeManaged) {
     CHECK_CUDA(cudaHostRegister(srcptr, param_mapping_tbl_[param_id].size_bytes_, cudaHostRegisterPortable));
     additional_pinned_ptrs_.push_back(srcptr);
   }
