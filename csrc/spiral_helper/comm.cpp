@@ -17,11 +17,12 @@
 #include <sys/types.h>
 #include <cstddef>
 #include <pybind11/numpy.h>
+#include <cuda_runtime.h>
 
 const char* sharedMemoryName = "/thunder";
 
 // const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
-const size_t kCpuBufferSize = 1L << 35; // 32GB, per host
+const size_t kCpuBufferSize = 1L << 37; // 128GB, per host
 const size_t kCpuBufferHeaderSize = 1L << 30; // 1GB, per host
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
@@ -141,8 +142,9 @@ private:
   
   int fd_;
   void* shared_ptr_ = nullptr;
-  uintptr_t* shared_ptrs_;        // shared_ptr_ virtual address of each mpi rank
-  size_t shared_memory_size_ = 0; // size > 0 indicates shmem initialized
+  uintptr_t* shared_ptrs_;                    // shared_ptr_ virtual address of each mpi rank
+  size_t shared_memory_size_ = 0;             // size > 0 indicates shmem initialized
+  std::vector<void*> additional_pinned_ptrs_; // additional pinned pointers, else than allocator buffer
 
   struct ParamDataInfo {
     int mpi_rank_;      // mpi rank of initializer of param data
@@ -268,6 +270,11 @@ Comm::~Comm() {
   // NOTE: since allocator is designed to be a singleton,
   // we do not need to delete it here.
 
+  // Unpin additional pinned pointers
+  for (void* ptr : additional_pinned_ptrs_) {
+    CHECK_CUDA(cudaHostUnregister(ptr));
+  }
+
   // Free shared_ptrs_
   free(shared_ptrs_);
 
@@ -311,6 +318,15 @@ void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, co
   std::ptrdiff_t offset = addr - GetBase(param_mapping_tbl_[param_id].mpi_rank_);
   void* srcptr = (void*)(GetBase(comm_info_.mpi_rank_) + offset);
   c10::DataPtr srcdataptr = { srcptr, srcptr, nullptr, at::Device(at::DeviceType::CPU) }; // disallow delete
+
+  // pin source ptr
+  cudaPointerAttributes attributes;
+  CHECK_CUDA(cudaPointerGetAttributes(&attributes, srcptr));
+  // NOTE (SpiralPipe) May require separate logic for different memory types (unregistered, host, device)
+  if (attributes.cudaMemoryType != cudaMemoryTypeManaged) {
+    CHECK_CUDA(cudaHostRegister(srcptr, param_mapping_tbl_[param_id].size_bytes_, cudaHostRegisterPortable));
+    additional_pinned_ptrs_.push_back(srcptr);
+  }
 
   // change tensor metadata
   c10::TensorImpl* tensor_impl = tensor.unsafeGetTensorImpl();

@@ -14,7 +14,7 @@ from megatron.core import mpu
 from megatron.core.enums import ModelType
 from megatron.core.utils import get_model_type, get_attr_wrapped_model
 from megatron.core.pipeline_parallel import forward_step, backward_step
-from megatron.spiral import get_thunder_cuda_manager
+from megatron.spiral.initialize import get_thunder_cuda_manager
 from megatron.spiral.debug import spiral_print
 import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.spiral.init_context import SpiralParamStatus
@@ -161,6 +161,7 @@ def _post_wait_set_spiral_param_status(module, status: SpiralParamStatus):
 
 
 def _weight_update(optimizer, bwd_stage_id, event_query, args, timers):
+    torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
     if (
         get_thunder_cuda_manager().wait_event(event_query, sync=True)
         == -1
@@ -174,6 +175,7 @@ def _weight_update(optimizer, bwd_stage_id, event_query, args, timers):
     optimizer.step(args, get_timers())
     if timers is not None:
         timers('optimizer').stop()
+    torch.cuda.nvtx.range_pop()
 
 
 def forward_backward_pipelining_with_spiral_remap(
@@ -388,19 +390,15 @@ def forward_backward_pipelining_with_spiral_remap(
     # Data structures for training
     forward_data_store = []
 
-    prefetch_event_queries = []
-    compute_event_queries = []
-    offload_event_queries = []
+    # Event dictionaries. Key is the event tag, thus an event necessarily requires it.
+    prefetch_event_queries = {}
+    compute_event_queries = {}
+    offload_event_queries = {}
 
-    prefetch_query = None
-    compute_query = None
-    offload_query = None
+    # Placeholders
     recv_handles = None
 
     """ Start training """
-
-    # TODO (SpiralPipe) below line is temporarily added to sync between minibatches. Remove after optimizer sync is implemented
-    # torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
 
     # nop pre-pipeline non-compute timesteps
     __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
@@ -411,7 +409,7 @@ def forward_backward_pipelining_with_spiral_remap(
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
         model[0].spiral_fetch(non_blocking=True)
-        prefetch_query = get_thunder_cuda_manager().Event(
+        prefetch_f0 = get_thunder_cuda_manager().Event(
             "prefetch",
             "compute",
             tag="prefetch:f0",
@@ -419,9 +417,9 @@ def forward_backward_pipelining_with_spiral_remap(
                 model[0], SpiralParamStatus.ACTIVE
             ),
         )
-        if get_thunder_cuda_manager().record_event(prefetch_query) == -1:
+        if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
             raise RuntimeError("record_event failed")
-        prefetch_event_queries.append(prefetch_query)
+        prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
@@ -437,7 +435,7 @@ def forward_backward_pipelining_with_spiral_remap(
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
             if not fwd_stage_id == 0:
                 if (
-                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:f{fwd_stage_id - 1}"))
                     == -1
                 ):
                     raise RuntimeError("wait_event failed")
@@ -448,12 +446,12 @@ def forward_backward_pipelining_with_spiral_remap(
                 and fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1
             ):
                 model[fwd_stage_id + 1].spiral_fetch(non_blocking=True)
-                tag = (
-                    "prefetch:" + f"f{fwd_stage_id + 1}"
+                tag = "prefetch:" + (
+                    f"f{fwd_stage_id + 1}"
                     if fwd_stage_id + 1 < mpu.get_spiral_forward_virtual_size()
                     else f"b{mpu.get_spiral_backward_virtual_size() - 1}"
                 )
-                prefetch_query = get_thunder_cuda_manager().Event(
+                prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
                     tag=tag,
@@ -461,14 +459,14 @@ def forward_backward_pipelining_with_spiral_remap(
                         model[fwd_stage_id + 1], SpiralParamStatus.ACTIVE
                     ),
                 )
-                if get_thunder_cuda_manager().record_event(prefetch_query) == -1:
+                if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
                     raise RuntimeError("record_event failed")
-                prefetch_event_queries.append(prefetch_query)
+                prefetch_event_queries[prefetch_next.tag] = prefetch_next
 
         # compute stream wait for prefetch current stage
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
             if (
-                get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(f"prefetch:f{fwd_stage_id}"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
@@ -519,30 +517,29 @@ def forward_backward_pipelining_with_spiral_remap(
                         enable_autocast,
                     )
 
-                compute_query = get_thunder_cuda_manager().Event(
+                compute_microbatch = get_thunder_cuda_manager().Event(
                     "compute",
                     None,
                     tag=f"compute:f{fwd_stage_id}m{i}",
                 )
-                if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                if get_thunder_cuda_manager().record_event(compute_microbatch) == -1:
                     raise RuntimeError("record_event failed")
-                compute_event_queries.append(compute_query)
+                compute_event_queries[compute_microbatch.tag] = compute_microbatch
 
                 if i == num_microbatches - 1:
                     # notify offload stream to act
-                    compute_query = get_thunder_cuda_manager().Event(
+                    compute_microbatches_end = get_thunder_cuda_manager().Event(
                         "compute", "offload", tag=f"compute:f{fwd_stage_id}end"
                     )
-                    if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                    if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
-                    compute_event_queries.append(compute_query)
+                    compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
 
             # send output tensor
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{i}"))
                 == -1
             ):
-                # wait event with tag=f"compute:f{fwd_stage_id}m{i}"
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_last_stage():
                 _ = spiral_p2p.send_output_tensor(
@@ -557,10 +554,9 @@ def forward_backward_pipelining_with_spiral_remap(
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}end"))
                 == -1
             ):
-                # wait event with tag=f"compute:f{fwd_stage_id}end"
                 raise RuntimeError("wait_event failed")
 
             # free fwd stage
@@ -569,17 +565,17 @@ def forward_backward_pipelining_with_spiral_remap(
                 forward_only
                 and fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1
             ):
-                offload_query = get_thunder_cuda_manager().Event(
+                free_curr = get_thunder_cuda_manager().Event(
                     "offload",
                     "prefetch",
-                    tag=f"offload:f{fwd_stage_id}",
+                    tag=f"free:f{fwd_stage_id}",
                     post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
                         model[fwd_stage_id], SpiralParamStatus.REMOTE
                     ),
                 )
-                if get_thunder_cuda_manager().record_event(offload_query) == -1:
+                if get_thunder_cuda_manager().record_event(free_curr) == -1:
                     raise RuntimeError("record_event failed")
-                offload_event_queries.append(offload_query)
+                offload_event_queries[free_curr.tag] = free_curr
 
         mpu.set_spiral_forward_virtual_rank(None)
 
@@ -605,14 +601,20 @@ def forward_backward_pipelining_with_spiral_remap(
         # prefetch next stage
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
             if (
-                get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(
+                    offload_event_queries.pop(
+                        f"free:f{fwd_stage_id}"
+                        if bwd_stage_id == mpu.get_spiral_backward_virtual_size() - 1
+                        else f"free:b{bwd_stage_id + 1}"
+                    )
+                )
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
 
             if not bwd_stage_id == 0:
                 model[-bwd_stage_id].spiral_fetch(non_blocking=True)
-                prefetch_query = get_thunder_cuda_manager().Event(
+                prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
                     tag="prefetch:" + f"b{bwd_stage_id - 1}",
@@ -620,15 +622,15 @@ def forward_backward_pipelining_with_spiral_remap(
                         model[-bwd_stage_id], SpiralParamStatus.ACTIVE
                     ),
                 )
-                if get_thunder_cuda_manager().record_event(prefetch_query) == -1:
+                if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
                     raise RuntimeError("record_event failed")
-                prefetch_event_queries.append(prefetch_query)
+                prefetch_event_queries[prefetch_next.tag] = prefetch_next
 
         # compute stream wait for prefetch current stage
         # NOTE: prefetch for last bwd stage is called in the fwd loop
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
             if (
-                get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(f"prefetch:b{bwd_stage_id}"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
@@ -699,30 +701,29 @@ def forward_backward_pipelining_with_spiral_remap(
                     deallocate_pipeline_outputs,
                 )
 
-                compute_query = get_thunder_cuda_manager().Event(
+                compute_microbatch = get_thunder_cuda_manager().Event(
                     "compute",
                     None,
                     tag=f"compute:b{bwd_stage_id}m{i}",
                 )
-                if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                if get_thunder_cuda_manager().record_event(compute_microbatch) == -1:
                     raise RuntimeError("record_event failed")
-                compute_event_queries.append(compute_query)
+                compute_event_queries[compute_microbatch.tag] = compute_microbatch
 
                 if i == num_microbatches - 1:
                     # notify offload stream to act
-                    compute_query = get_thunder_cuda_manager().Event(
+                    compute_microbatches_end = get_thunder_cuda_manager().Event(
                         "compute", "offload", tag=f"compute:b{bwd_stage_id}end"
                     )
-                    if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                    if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
-                    compute_event_queries.append(compute_query)
+                    compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
 
             # send input tensor grad
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{i}"))
                 == -1
             ):
-                # wait event with tag=f"compute:b{bwd_stage_id}m{i}"
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_first_stage():
                 _ = spiral_p2p.send_input_tensor_grad(
@@ -737,54 +738,51 @@ def forward_backward_pipelining_with_spiral_remap(
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
                 == -1
             ):
-                # wait event with tag=f"compute:b{bwd_stage_id}end"
                 raise RuntimeError("wait_event failed")
-
-            # offload gradient
-            model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
-            if optimize_after_bwd_stage:
-                offload_query = get_thunder_cuda_manager().Event(
-                    "offload",
-                    None,
-                    tag=f"optimizer:b{bwd_stage_id}"
-                )
-                if get_thunder_cuda_manager().record_event(offload_query) == -1:
-                    raise RuntimeError("record_event failed")
-                offload_event_queries.append(offload_query)
 
             # free bwd stage
             model[-bwd_stage_id - 1].spiral_free()
-            offload_query = get_thunder_cuda_manager().Event(
+            free_curr = get_thunder_cuda_manager().Event(
                 "offload",
                 None if bwd_stage_id == 0 else "prefetch",
-                tag=f"offload:b{bwd_stage_id}",
+                tag=f"free:b{bwd_stage_id}",
                 post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
                     model[-bwd_stage_id - 1], SpiralParamStatus.REMOTE
                 ),
             )
-            if get_thunder_cuda_manager().record_event(offload_query) == -1:
+            if get_thunder_cuda_manager().record_event(free_curr) == -1:
                 raise RuntimeError("record_event failed")
-            offload_event_queries.append(offload_query)
+            offload_event_queries[free_curr.tag] = free_curr
+
+            # offload gradient
+            model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
+            if optimize_after_bwd_stage:
+                offload_grad_curr = get_thunder_cuda_manager().Event(
+                    "offload",
+                    None,
+                    tag=f"optimizer:b{bwd_stage_id}"
+                )
+                if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
+                    raise RuntimeError("record_event failed")
+                offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
 
         # spiral stage optimizer
         if optimize_after_bwd_stage:
-            torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
             # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
             _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
                 _weight_update,
                 *(
                     optimizer,
                     bwd_stage_id,
-                    offload_event_queries.pop(0), # TODO (SpiralPipe) This is very error-prone, since here and prefetch stream both pops head from the offload event queries. Pop after querying with appropriate tag.
+                    offload_event_queries.pop(f"optimizer:b{bwd_stage_id}"),
                     get_args(),
                     timers,
                 ),
             )
             optimizer_threads_status.append(_optimizer_thread_status)
-            torch.cuda.nvtx.range_pop()
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -809,10 +807,9 @@ def forward_backward_pipelining_with_spiral_remap(
                 raise Exception(f"Optimizer thread raised an exception: {e}")
 
     if (
-        get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+        get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))
         == -1
     ):
-        # wait event with tag="offload:b0"
         raise RuntimeError("wait_event failed")
 
     _cleanup()
@@ -946,13 +943,12 @@ def forward_backward_pipelining_with_spiral(
     if not forward_only and recompute:
         _recompute_data_iterator = [[] for _ in range(len(data_iterator))]
 
-    prefetch_event_queries = []
-    compute_event_queries = []
-    offload_event_queries = []
+    # Event dictionaries. Key is the event tag, thus an event necessarily requires it.
+    prefetch_event_queries = {}
+    compute_event_queries = {}
+    offload_event_queries = {}
 
-    prefetch_query = None
-    compute_query = None
-    offload_query = None
+    # Placeholders
     recv_handles = None
 
     """ Start training """
@@ -960,7 +956,7 @@ def forward_backward_pipelining_with_spiral(
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
         model[0].spiral_fetch(non_blocking=True)
-        prefetch_query = get_thunder_cuda_manager().Event(
+        prefetch_f0 = get_thunder_cuda_manager().Event(
             "prefetch",
             "compute",
             tag="prefetch:f0",
@@ -968,9 +964,9 @@ def forward_backward_pipelining_with_spiral(
                 model[0], SpiralParamStatus.ACTIVE
             ),
         )
-        if get_thunder_cuda_manager().record_event(prefetch_query) == -1:
+        if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
             raise RuntimeError("record_event failed")
-        prefetch_event_queries.append(prefetch_query)
+        prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
@@ -986,7 +982,7 @@ def forward_backward_pipelining_with_spiral(
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
             if not fwd_stage_id == 0:
                 if (
-                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:f{fwd_stage_id - 1}"))
                     == -1
                 ):
                     raise RuntimeError("wait_event failed")
@@ -995,7 +991,7 @@ def forward_backward_pipelining_with_spiral(
             if not fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1:
                 model[fwd_stage_id + 1].spiral_fetch(non_blocking=True)
                 tag = "prefetch:" + f"f{fwd_stage_id + 1}"
-                prefetch_query = get_thunder_cuda_manager().Event(
+                prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
                     tag=tag,
@@ -1003,14 +999,14 @@ def forward_backward_pipelining_with_spiral(
                         model[fwd_stage_id + 1], SpiralParamStatus.ACTIVE
                     ),
                 )
-                if get_thunder_cuda_manager().record_event(prefetch_query) == -1:
+                if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
                     raise RuntimeError("record_event failed")
-                prefetch_event_queries.append(prefetch_query)
+                prefetch_event_queries[prefetch_next.tag] = prefetch_next
 
         # compute stream wait for prefetch current stage
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
             if (
-                get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(f"prefetch:f{fwd_stage_id}"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
@@ -1073,30 +1069,29 @@ def forward_backward_pipelining_with_spiral(
                     assert isinstance(output_tensor, torch.Tensor) and output_tensor.numel() == 1
                     losses.append(output_tensor)
 
-                compute_query = get_thunder_cuda_manager().Event(
+                compute_microbatch = get_thunder_cuda_manager().Event(
                     "compute",
                     None,
                     tag=f"compute:f{fwd_stage_id}m{i}",
                 )
-                if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                if get_thunder_cuda_manager().record_event(compute_microbatch) == -1:
                     raise RuntimeError("record_event failed")
-                compute_event_queries.append(compute_query)
+                compute_event_queries[compute_microbatch.tag] = compute_microbatch
 
                 if i == num_microbatches - 1:
                     # notify offload stream to act
-                    compute_query = get_thunder_cuda_manager().Event(
+                    compute_microbatches_end = get_thunder_cuda_manager().Event(
                         "compute", "offload", tag=f"compute:f{fwd_stage_id}end"
                     )
-                    if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                    if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
-                    compute_event_queries.append(compute_query)
+                    compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
 
             # send output tensor
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{i}"))
                 == -1
             ):
-                # wait event with tag=f"compute:f{fwd_stage_id}m{i}"
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_last_stage():
                 _ = spiral_p2p.send_output_tensor(
@@ -1111,25 +1106,25 @@ def forward_backward_pipelining_with_spiral(
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}end"))
                 == -1
             ):
-                # wait event with tag=f"compute:f{fwd_stage_id}end"
                 raise RuntimeError("wait_event failed")
             # skip free if processing last fwd stage, as it will be reused as last bwd stage
             if not fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1:
                 model[fwd_stage_id].spiral_free()
-                offload_query = get_thunder_cuda_manager().Event(
+                free_curr = get_thunder_cuda_manager().Event(
                     "offload",
                     "prefetch",
-                    tag=f"offload:f{fwd_stage_id}",
+                    tag=f"free:f{fwd_stage_id}",
                     post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
                         model[fwd_stage_id], SpiralParamStatus.REMOTE
                     ),
                 )
-                if get_thunder_cuda_manager().record_event(offload_query) == -1:
+                if get_thunder_cuda_manager().record_event(free_curr) == -1:
                     raise RuntimeError("record_event failed")
-                offload_event_queries.append(offload_query)
+                offload_event_queries[free_curr.tag] = free_curr
+
         mpu.set_spiral_forward_virtual_rank(None)
 
     if forward_only:
@@ -1155,14 +1150,14 @@ def forward_backward_pipelining_with_spiral(
             # skip offload wait if processing last bwd stage, as last fwd stage doesn't free
             if not bwd_stage_id == mpu.get_spiral_backward_virtual_size() - 1:
                 if (
-                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b{bwd_stage_id + 1}"))
                     == -1
                 ):
                     raise RuntimeError("wait_event failed")
 
             if not bwd_stage_id == 0:
                 model[bwd_stage_id - 1].spiral_fetch(non_blocking=True)
-                prefetch_query = get_thunder_cuda_manager().Event(
+                prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
                     tag="prefetch:" + f"b{bwd_stage_id - 1}",
@@ -1170,16 +1165,16 @@ def forward_backward_pipelining_with_spiral(
                         model[bwd_stage_id - 1], SpiralParamStatus.ACTIVE
                     ),
                 )
-                if get_thunder_cuda_manager().record_event(prefetch_query) == -1:
+                if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
                     raise RuntimeError("record_event failed")
-                prefetch_event_queries.append(prefetch_query)
+                prefetch_event_queries[prefetch_next.tag] = prefetch_next
 
         # compute stream wait for prefetch current stage
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
             # skip prefetch wait if processing last bwd stage, as last bwd stage reuse last fwd stage
             if not bwd_stage_id == mpu.get_spiral_backward_virtual_size() - 1:
                 if (
-                    get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(0))
+                    get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(f"prefetch:b{bwd_stage_id}"))
                     == -1
                 ):
                     raise RuntimeError("wait_event failed")
@@ -1247,30 +1242,29 @@ def forward_backward_pipelining_with_spiral(
                     deallocate_pipeline_outputs,
                 )
 
-                compute_query = get_thunder_cuda_manager().Event(
+                compute_microbatch = get_thunder_cuda_manager().Event(
                     "compute",
                     None,
                     tag=f"compute:b{bwd_stage_id}m{i}",
                 )
-                if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                if get_thunder_cuda_manager().record_event(compute_microbatch) == -1:
                     raise RuntimeError("record_event failed")
-                compute_event_queries.append(compute_query)
+                compute_event_queries[compute_microbatch.tag] = compute_microbatch
 
                 if i == num_microbatches - 1:
                     # notify offload stream to act
-                    compute_query = get_thunder_cuda_manager().Event(
+                    compute_microbatches_end = get_thunder_cuda_manager().Event(
                         "compute", "offload", tag=f"compute:b{bwd_stage_id}end"
                     )
-                    if get_thunder_cuda_manager().record_event(compute_query) == -1:
+                    if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
-                    compute_event_queries.append(compute_query)
+                    compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
 
             # send input tensor grad
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{i}"))
                 == -1
             ):
-                # wait event with tag=f"compute:b{bwd_stage_id}m{i}"
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_first_stage():
                 _ = spiral_p2p.send_input_tensor_grad(
@@ -1285,54 +1279,51 @@ def forward_backward_pipelining_with_spiral(
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(0))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
                 == -1
             ):
-                # wait event with tag=f"compute:b{bwd_stage_id}end"
                 raise RuntimeError("wait_event failed")
-
-            # offload gradient
-            model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
-            if optimize_after_bwd_stage:
-                offload_query = get_thunder_cuda_manager().Event(
-                    "offload",
-                    None,
-                    tag=f"optimizer:b{bwd_stage_id}"
-                )
-                if get_thunder_cuda_manager().record_event(offload_query) == -1:
-                    raise RuntimeError("record_event failed")
-                offload_event_queries.append(offload_query)
 
             # free bwd stage
             model[bwd_stage_id].spiral_free()
-            offload_query = get_thunder_cuda_manager().Event(
+            free_curr = get_thunder_cuda_manager().Event(
                 "offload",
                 None if bwd_stage_id == 0 else "prefetch",
-                tag=f"offload:b{bwd_stage_id}",
+                tag=f"free:b{bwd_stage_id}",
                 post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
                     model[bwd_stage_id], SpiralParamStatus.REMOTE
                 ),
             )
-            if get_thunder_cuda_manager().record_event(offload_query) == -1:
+            if get_thunder_cuda_manager().record_event(free_curr) == -1:
                 raise RuntimeError("record_event failed")
-            offload_event_queries.append(offload_query)
+            offload_event_queries[free_curr.tag] = free_curr
+
+            # offload gradient
+            model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
+            if optimize_after_bwd_stage:
+                offload_grad_curr = get_thunder_cuda_manager().Event(
+                    "offload",
+                    None,
+                    tag=f"optimizer:b{bwd_stage_id}"
+                )
+                if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
+                    raise RuntimeError("record_event failed")
+                offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
 
         # spiral stage optimizer
         if optimize_after_bwd_stage:
-            torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
             # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
             _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
                 _weight_update,
                 *(
                     optimizer,
                     bwd_stage_id,
-                    offload_event_queries.pop(0), # TODO (SpiralPipe) This is very error-prone, since here and prefetch stream both pops head from the offload event queries. Pop after querying with appropriate tag.
+                    offload_event_queries.pop(f"optimizer:b{bwd_stage_id}"),
                     get_args(),
                     timers,
                 ),
             )
             optimizer_threads_status.append(_optimizer_thread_status)
-            torch.cuda.nvtx.range_pop()
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -1346,10 +1337,9 @@ def forward_backward_pipelining_with_spiral(
                 raise Exception(f"Optimizer thread raised an exception: {e}")
 
     if (
-        get_thunder_cuda_manager().wait_event(offload_event_queries.pop(0))
+        get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))
         == -1
     ):
-        # wait event with tag="offload:b0"
         raise RuntimeError("wait_event failed")
 
     _cleanup()
