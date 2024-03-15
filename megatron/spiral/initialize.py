@@ -1,32 +1,41 @@
 from typing import Optional, Union, Tuple
 from collections import deque
 from dataclasses import dataclass
+import atexit
 
 import torch
 
 import spiral_helper
 
-global thunder_group
-global thunder_cuda_manager
+SPIRAL_BACKEND = None
 
 
 class SpiralBackend:
     def __init__(self, ranks, init_shmem):
-        global thunder_group
-        thunder_group = spiral_helper.Comm(sorted(ranks), init_shmem)
+        self.thunder_group = spiral_helper.Comm(sorted(ranks), init_shmem)
+        self.thunder_cuda_manager = SpiralCUDAManager()
+        global SPIRAL_BACKEND
+        SPIRAL_BACKEND = self
 
-        global thunder_cuda_manager
-        thunder_cuda_manager = SpiralCUDAManager()
+        # NOTE (SpiralPipe) Below enforces invocation of destructor for all objects in SpiralBackend when the program exits, either normally or abnormally. This is especially critical for spiral_helper.Comm, which allocates a hugh shared memory.
+        atexit.register(self.__del__)
+
+    def __del__(self):
+        global SPIRAL_BACKEND
+        if SPIRAL_BACKEND is not None:
+            SPIRAL_BACKEND = None
 
 
 def get_thunder_group():
-    assert thunder_group is not None, "thunder_group is not initialized"
-    return thunder_group
+    global SPIRAL_BACKEND
+    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
+    return SPIRAL_BACKEND.thunder_group
 
 
 def get_thunder_cuda_manager():
-    assert thunder_cuda_manager is not None, "thunder_cuda_manager is not initialized"
-    return thunder_cuda_manager
+    global SPIRAL_BACKEND
+    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
+    return SPIRAL_BACKEND.thunder_cuda_manager
 
 
 @dataclass(frozen=True)
