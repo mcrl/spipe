@@ -19,10 +19,10 @@
 #include <pybind11/numpy.h>
 #include <cuda_runtime.h>
 
-const char* sharedMemoryName = "/thunder-jy"; // set differently
+const char* sharedMemoryName = "/thunder"; // set differently
 
-const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
-// const size_t kCpuBufferSize = 1L << 37; // 128GB, per host
+// const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
+const size_t kCpuBufferSize = 1L << 36; // 32GB, per host
 const size_t kCpuBufferHeaderSize = 1L << 30; // 1GB, per host
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
@@ -196,7 +196,9 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
 
   // Open shared memory
   if (comm_info_.is_host_leader_) {
-    fd_ = shm_open(sharedMemoryName, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR);
+    // O_EXCL to ensure a fresh shared memory creation on every exection.
+    // Error indicates that shared memory from previous execition has not been cleaned up properly.
+    fd_ = shm_open(sharedMemoryName, O_CREAT | O_EXCL | O_RDWR, S_IRUSR | S_IWUSR);
     assert(fd_ != -1);
     CHECK_ERRNO(ftruncate(fd_, shared_memory_size_));
 
@@ -319,16 +321,17 @@ void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, co
   void* srcptr = (void*)(GetBase(comm_info_.mpi_rank_) + offset);
   c10::DataPtr srcdataptr = { srcptr, srcptr, nullptr, at::Device(at::DeviceType::CPU) }; // disallow delete
 
-  // pin source ptr  
-
+  // pin srcptr if not already pinned 
   cudaPointerAttributes attributes;
   CHECK_CUDA(cudaPointerGetAttributes(&attributes, srcptr));
-  // NOTE (SpiralPipe) May require separate logic for different memory types (unregistered, host, device)
-
-  bool is_mine = (comm_info_.mpi_rank_ == param_mapping_tbl_[param_id].mpi_rank_);
-  spdlog::info("attribute.type = {} is_mine = {}", attributes.type, is_mine);
-  if (attributes.type != cudaMemoryTypeManaged) {
-    CHECK_CUDA(cudaHostRegister(srcptr, param_mapping_tbl_[param_id].size_bytes_, cudaHostRegisterPortable));
+  bool is_assigned_bwd_param = (comm_info_.mpi_rank_ == param_mapping_tbl_[param_id].mpi_rank_);
+  if (is_assigned_bwd_param) {
+    assert(attributes.type == cudaMemoryTypeHost); // assert already pinned
+    // skip pin for assigned bwd param
+  } else {
+    assert(attributes.type == cudaMemoryTypeUnregistered);
+    // pin as readonly for remapped fwd param
+    CHECK_CUDA(cudaHostRegister(srcptr, param_mapping_tbl_[param_id].size_bytes_, cudaHostRegisterReadOnly));
     additional_pinned_ptrs_.push_back(srcptr);
   }
 
