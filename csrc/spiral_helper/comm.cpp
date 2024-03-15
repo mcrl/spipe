@@ -22,7 +22,7 @@
 const char* sharedMemoryName = "/thunder"; // set differently
 
 // const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
-const size_t kCpuBufferSize = 1L << 36; // 32GB, per host
+const size_t kCpuBufferSize = 1L << 37; // 128GB, per host
 const size_t kCpuBufferHeaderSize = 1L << 30; // 1GB, per host
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
