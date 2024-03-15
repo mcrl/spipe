@@ -1,3 +1,6 @@
 [submodule "csrc/external/spdlog"]
 	path = csrc/external/spdlog
 	url = git@github.com:gabime/spdlog.git
+[submodule "csrc/external/DeepSpeed"]
+	path = csrc/external/DeepSpeed
+	url = git@github.com:microsoft/DeepSpeed.git
