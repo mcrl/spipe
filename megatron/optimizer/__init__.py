@@ -4,7 +4,7 @@ import warnings
 
 from apex.optimizers import FusedAdam as Adam
 from apex.optimizers import FusedSGD as SGD
-from deepspeed.ops.adam import DeepSpeedCPUAdam
+from csrc.external.DeepSpeed.deepspeed.ops.adam import DeepSpeedCPUAdam
 
 from megatron import get_args
 from megatron.core import mpu
@@ -151,6 +151,8 @@ def get_megatron_optimizer(model,
                                      weight_decay=args.weight_decay,
                                      betas=(args.adam_beta1, args.adam_beta2),
                                      eps=args.adam_eps)
+        print("Optimizer success")
+        exit()
         # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here
         if args.spiral_stage_optimizer:
             _unwrapped_model = model[0]
