@@ -19,10 +19,10 @@
 #include <pybind11/numpy.h>
 #include <cuda_runtime.h>
 
-const char* sharedMemoryName = "/thunder"; // set differently
+const char* sharedMemoryName = "/thunder-jy"; // set differently
 
-// const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
-const size_t kCpuBufferSize = 1L << 37; // 128GB, per host
+const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
+// const size_t kCpuBufferSize = 1L << 37; // 128GB, per host
 const size_t kCpuBufferHeaderSize = 1L << 30; // 1GB, per host
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
@@ -319,10 +319,14 @@ void Comm::RemapParamData(torch::Tensor& tensor, const unsigned int param_id, co
   void* srcptr = (void*)(GetBase(comm_info_.mpi_rank_) + offset);
   c10::DataPtr srcdataptr = { srcptr, srcptr, nullptr, at::Device(at::DeviceType::CPU) }; // disallow delete
 
-  // pin source ptr
+  // pin source ptr  
+
   cudaPointerAttributes attributes;
   CHECK_CUDA(cudaPointerGetAttributes(&attributes, srcptr));
   // NOTE (SpiralPipe) May require separate logic for different memory types (unregistered, host, device)
+
+  bool is_mine = (comm_info_.mpi_rank_ == param_mapping_tbl_[param_id].mpi_rank_);
+  spdlog::info("attribute.type = {} is_mine = {}", attributes.type, is_mine);
   if (attributes.type != cudaMemoryTypeManaged) {
     CHECK_CUDA(cudaHostRegister(srcptr, param_mapping_tbl_[param_id].size_bytes_, cudaHostRegisterPortable));
     additional_pinned_ptrs_.push_back(srcptr);

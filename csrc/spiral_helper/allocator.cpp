@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <cuda_runtime.h>
 #include "util.hpp"
+#include <unistd.h>
 
 inline bool is_aligned(uintptr_t ptr, size_t align) {
   return ptr % align == 0;
@@ -61,13 +62,14 @@ SpiralCPUAllocator* SpiralCPUAllocator::instance(uintptr_t base, size_t offset, 
 
 void SpiralCPUAllocator::lazy_init(uintptr_t base, size_t offset, size_t size, size_t align) {
   assert(is_aligned(base + offset, align));
-
+  assert(is_aligned(base + offset, getpagesize()));
   base_ = base;
   offset_ = offset;
   size_ = size;
   align_ = align;
 
   // pin allocator memory
+  spdlog::info("Pinning allocator memory at ptr = {} size = {}", (void*)(base_ + offset_), size_);
   CHECK_CUDA(cudaHostRegister((void*)(base_ + offset_), size_, cudaHostRegisterPortable));
   
   Block* dummy_head = new Block(offset_, 0, nullptr, nullptr);
