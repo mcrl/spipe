@@ -171,9 +171,6 @@ private:
 bool Comm::debug = false;
 
 Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
-  //  if (Comm::debug)
-  //    spdlog::info("Creating SpiralPipe Comm");
-
   MPI_Initialized(&mpi_initialized_);
   if (!mpi_initialized_)
     MPI_Init(NULL, NULL);
@@ -289,17 +286,12 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
 }
 
 Comm::~Comm() {
-  //  if (Comm::debug)
-  //    spdlog::info("Destroying SpiralPipe Comm");
-
   // We guarantee all process joins at this point,
   // and no more access to shared objects are requested.
   MPI_Barrier(intra_comm_);
   MPI_Barrier(inter_comm_);
 
-  spdlog::info("Deleting MPI window");
   CHECK_MPI(MPI_Win_free(&window_));
-  spdlog::info("Done MPI window");
 
   // Destroy communicators
   CHECK_MPI(MPI_Comm_free(&mpi_comm_));
@@ -335,8 +327,6 @@ void Comm::SetSpiralCPUAllocator() {
   TORCH_CHECK(prev_allocator_ptr_ == nullptr,
               "Already within the scope of another non-default cpu allocator."
               "Cannot set another allocator.");
-  //  if (Comm::debug)
-  //    spdlog::info("Setting SpiralCPUAllocator");
 
   // Setting the priority high to make sure no other allocator gets used instead
   // of this.
@@ -350,8 +340,6 @@ void Comm::UnsetSpiralCPUAllocator() {
   TORCH_CHECK(prev_allocator_ptr_ != nullptr,
               "SetSpiralCPUAllocator must have been called "
               "before UnsetSpiralCPUAllocator.");
-  //  if (Comm::debug)
-  //    spdlog::info("Unsetting SpiralCPUAllocator");
 
   // Setting the priority high to make sure no other allocator gets used instead
   // of this.
@@ -405,15 +393,6 @@ void Comm::SetParamDataInfo(const unsigned int param_id,
   param_mapping_tbl_[param_id].intra_rank_ = comm_info_.intra_rank_;
   param_mapping_tbl_[param_id].dataptr_ = dataptr;
   param_mapping_tbl_[param_id].size_bytes_ = size_bytes;
-
-  if (Comm::debug) {
-    spdlog::info("Set param_mapping_tbl_[{}] mpi_rank = {} inter_rank = {} "
-                 "intra_rank = {} dataptr = {}",
-                 param_id, param_mapping_tbl_[param_id].mpi_rank_,
-                 param_mapping_tbl_[param_id].inter_rank_,
-                 param_mapping_tbl_[param_id].intra_rank_,
-                 (void *)param_mapping_tbl_[param_id].dataptr_);
-  }
 }
 
 int Comm::GetParamDataRank(const unsigned int param_id) const {
