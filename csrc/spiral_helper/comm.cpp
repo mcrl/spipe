@@ -17,9 +17,9 @@
 #include <unistd.h>
 #include <vector>
 
+#include <time.h>
 #include <c10/cuda/CUDAStream.h>
 #include <cstddef>
-#include <cuda_runtime.h>
 #include <nvToolsExt.h>
 #include <pybind11/numpy.h>
 #include <sys/types.h>
@@ -456,11 +456,22 @@ void CUDART_CB _FetchRemoteParam(FetchRemoteArgs *args) {
   sprintf((char *)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
   nvtxRangeId_t id = nvtx_range_start((char *)nvtx_name);
 
+  struct timespec s, e;
+  clock_gettime(CLOCK_MONOTONIC, &s);
+
   CHECK_MPI(MPI_Win_lock(MPI_LOCK_SHARED, target_rank, 0, window));
   CHECK_MPI(MPI_Get((void *)dataptr, size, MPI_BYTE, target_rank, disp, size,
                     MPI_BYTE, window));
   CHECK_MPI(MPI_Win_unlock(target_rank, window));
-  delete args;
+
+  clock_gettime(CLOCK_MONOTONIC, &e);
+  double elapsed_time =
+      (e.tv_sec - s.tv_sec) * 1000. + (e.tv_nsec - s.tv_nsec) / 1000000.;
+  spdlog::info("[DY {}] Size: {}, Elapsed time: {} ms, Bandwidth: {} GB/s",
+               rank, size, elapsed_time,
+               1000. * size / elapsed_time / (1ul << 30));
+
+  free(args);
   nvtx_range_stop(id);
 }
 
@@ -474,7 +485,8 @@ void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
   MPI_Aint disp = param_mapping_tbl_[param_id].dataptr_ - GetBase(target_rank);
   assert((disp + size) < kCpuBufferSize);
 
-  FetchRemoteArgs *args = new FetchRemoteArgs();
+  FetchRemoteArgs *args = (FetchRemoteArgs*)malloc(sizeof(FetchRemoteArgs));
+  assert (args != nullptr);
   args->param_id = param_id;
   args->dataptr = dataptr;
   args->rank = rank;
