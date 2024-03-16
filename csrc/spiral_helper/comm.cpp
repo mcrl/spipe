@@ -18,13 +18,17 @@
 #include <vector>
 
 #include <c10/cuda/CUDAStream.h>
-#include <torch/extension.h>
+#include <cstddef>
+#include <cuda_runtime.h>
+#include <nvToolsExt.h>
+#include <pybind11/numpy.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-const char *sharedMemoryName = "/thunder";
+const char *sharedMemoryName = "/thunder"; // set differently
 
-// const size_t kCpuBufferSize = 1L << 38; // 256GB, per host
-const size_t kCpuBufferSize = 1L << 35;       // 32GB, per host
-const size_t kCpuBufferHeaderSize = 1L << 30; // 1GB, per host
+const size_t kCpuBufferSize = (1L << 37);       // 256GB, per host
+const size_t kCpuBufferHeaderSize = (1L << 30); // 1GB, per host
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
   int size;
@@ -104,7 +108,7 @@ public:
   void RemapParamData(torch::Tensor &tensor, const unsigned int param_id,
                       const c10::IntArrayRef sizes,
                       const c10::IntArrayRef strides,
-                      const int64_t storage_offset) const;
+                      const int64_t storage_offset);
   void SetParamDataInfo(const unsigned int param_id, const uintptr_t dataptr,
                         const size_t size_bytes);
   int GetParamDataRank(const unsigned int param_id) const;
@@ -144,8 +148,11 @@ private:
 
   int fd_;
   void *shared_ptr_ = nullptr;
+  void *data_ptr_ = nullptr;
   uintptr_t *shared_ptrs_; // shared_ptr_ virtual address of each mpi rank
   size_t shared_memory_size_ = 0; // size > 0 indicates shmem initialized
+  std::vector<void *> additional_pinned_ptrs_; // additional pinned pointers,
+                                               // else than allocator buffer
 
   struct ParamDataInfo {
     int mpi_rank_;      // mpi rank of initializer of param data
@@ -199,40 +206,40 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
 
   // Configure shared memory
   shared_memory_size_ = kCpuBufferHeaderSize + kCpuBufferSize;
-  std::string shmem_name_per_node =
-      sharedMemoryName + std::to_string(comm_info_.inter_rank_);
 
   // Open shared memory
   if (comm_info_.is_host_leader_) {
-    fd_ = shm_open(shmem_name_per_node.c_str(), O_CREAT | O_RDWR,
+    // O_EXCL to ensure a fresh shared memory creation on every exection.
+    // Error indicates that shared memory from previous execition has not been
+    // cleaned up properly.
+    fd_ = shm_open(sharedMemoryName, O_CREAT | O_EXCL | O_RDWR,
                    S_IRUSR | S_IWUSR);
+    if (fd_ == -1) {
+      CHECK_ERRNO(shm_unlink(sharedMemoryName));
+      fd_ = shm_open(sharedMemoryName, O_CREAT | O_EXCL | O_RDWR,
+                     S_IRUSR | S_IWUSR);
+    }
     assert(fd_ != -1);
     CHECK_ERRNO(ftruncate(fd_, shared_memory_size_));
 
     // test
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
-    //    if (Comm::debug)
-    //      spdlog::info("Shared memory created fd = {} sz = {}", fd_,
-    //      sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
 
   CHECK_MPI(MPI_Barrier(intra_comm_));
   if (!comm_info_.is_host_leader_) {
-    fd_ = shm_open(shmem_name_per_node.c_str(), O_RDWR, 0);
+    fd_ = shm_open(sharedMemoryName, O_RDWR, 0);
     assert(fd_ != -1);
 
     // test
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
-    //    if (Comm::debug)
-    //      spdlog::info("Shared memory opened fd = {} sz = {}", fd_,
-    //      sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
   shared_ptr_ = mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE,
-                     MAP_SHARED, fd_, 0);
+                     MAP_SHARED | MAP_POPULATE, fd_, 0);
   assert(shared_ptr_ != MAP_FAILED);
   close(fd_);
 
@@ -240,7 +247,7 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   shared_ptrs_ = (uintptr_t *)malloc(sizeof(uintptr_t) * comm_info_.mpi_size_);
   shared_ptrs_[comm_info_.mpi_rank_] = (uintptr_t)shared_ptr_;
 
-  //  spdlog::info("Shared memory address ={}", shared_ptr_);
+  data_ptr_ = (((char *)shared_ptr_) + kCpuBufferHeaderSize);
 
 #if __WORDSIZE == 64
   CHECK_MPI(MPI_Allgather(&shared_ptrs_[comm_info_.mpi_rank_], 1,
@@ -267,11 +274,16 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
       kCpuBufferSize / comm_info_.intra_size_,
       sizeof(float)); // Shared memory is divided equally among host processes
 
-  spdlog::info("Creating MPI window");
-  CHECK_MPI(MPI_Win_create(param_mapping_tbl_,
-                           kCpuBufferHeaderSize + kCpuBufferSize, 1,
-                           MPI_INFO_NULL, MPI_COMM_WORLD, &window_));
-  spdlog::info("Done MPI window");
+  CHECK_MPI(MPI_Win_create(data_ptr_, kCpuBufferSize, 1, MPI_INFO_NULL,
+                           MPI_COMM_WORLD, &window_));
+
+  void *base;
+  MPI_Aint *size;
+  int *disp;
+  int flag;
+  CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_BASE, (void *)&base, &flag));
+  CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_SIZE, (void *)&size, &flag));
+  CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_DISP_UNIT, (void *)&disp, &flag));
 
   CHECK_MPI(MPI_Barrier(mpi_comm_));
 }
@@ -300,16 +312,19 @@ Comm::~Comm() {
   // NOTE: since allocator is designed to be a singleton,
   // we do not need to delete it here.
 
+  // Unpin additional pinned pointers
+  //  for (void *ptr : additional_pinned_ptrs_) {
+  //    CHECK_CUDA(cudaHostUnregister(ptr));
+  //  }
+
   // Free shared_ptrs_
   free(shared_ptrs_);
 
   // Destroy shared memory
   if (shared_ptr_ != nullptr) {
-    std::string shmem_name_per_node =
-        sharedMemoryName + std::to_string(comm_info_.inter_rank_);
     CHECK_ERRNO(munmap(shared_ptr_, shared_memory_size_));
     if (comm_info_.is_host_leader_) {
-      CHECK_ERRNO(shm_unlink(shmem_name_per_node.c_str()));
+      CHECK_ERRNO(shm_unlink(sharedMemoryName));
     }
   }
 }
@@ -347,7 +362,7 @@ void Comm::UnsetSpiralCPUAllocator() {
 void Comm::RemapParamData(torch::Tensor &tensor, const unsigned int param_id,
                           const c10::IntArrayRef sizes,
                           const c10::IntArrayRef strides,
-                          const int64_t storage_offset) const {
+                          const int64_t storage_offset) {
   uintptr_t addr = param_mapping_tbl_[param_id].dataptr_;
   std::ptrdiff_t offset =
       addr - GetBase(param_mapping_tbl_[param_id].mpi_rank_);
@@ -355,6 +370,23 @@ void Comm::RemapParamData(torch::Tensor &tensor, const unsigned int param_id,
   c10::DataPtr srcdataptr = {
       srcptr, srcptr, nullptr,
       at::Device(at::DeviceType::CPU)}; // disallow delete
+
+  // pin srcptr if not already pinned
+  cudaPointerAttributes attributes;
+  CHECK_CUDA(cudaPointerGetAttributes(&attributes, srcptr));
+  bool is_assigned_bwd_param =
+      (comm_info_.mpi_rank_ == param_mapping_tbl_[param_id].mpi_rank_);
+  if (is_assigned_bwd_param) {
+    assert(attributes.type == cudaMemoryTypeHost); // assert already pinned
+    // skip pin for assigned bwd param
+  } else {
+    assert(attributes.type == cudaMemoryTypeUnregistered);
+    // pin as readonly for remapped fwd param
+    //    CHECK_CUDA(cudaHostRegister(srcptr,
+    //                                param_mapping_tbl_[param_id].size_bytes_,
+    //                                cudaHostRegisterReadOnly));
+    additional_pinned_ptrs_.push_back(srcptr);
+  }
 
   // change tensor metadata
   c10::TensorImpl *tensor_impl = tensor.unsafeGetTensorImpl();
@@ -374,14 +406,14 @@ void Comm::SetParamDataInfo(const unsigned int param_id,
   param_mapping_tbl_[param_id].dataptr_ = dataptr;
   param_mapping_tbl_[param_id].size_bytes_ = size_bytes;
 
-  //  if (Comm::debug) {
-  //    spdlog::info("Set param_mapping_tbl_[{}] mpi_rank = {} inter_rank = {} "
-  //                 "intra_rank = {} dataptr = {}",
-  //                 param_id, param_mapping_tbl_[param_id].mpi_rank_,
-  //                 param_mapping_tbl_[param_id].inter_rank_,
-  //                 param_mapping_tbl_[param_id].intra_rank_,
-  //                 param_mapping_tbl_[param_id].dataptr_);
-  //  }
+  if (Comm::debug) {
+    spdlog::info("Set param_mapping_tbl_[{}] mpi_rank = {} inter_rank = {} "
+                 "intra_rank = {} dataptr = {}",
+                 param_id, param_mapping_tbl_[param_id].mpi_rank_,
+                 param_mapping_tbl_[param_id].inter_rank_,
+                 param_mapping_tbl_[param_id].intra_rank_,
+                 (void *)param_mapping_tbl_[param_id].dataptr_);
+  }
 }
 
 int Comm::GetParamDataRank(const unsigned int param_id) const {
@@ -407,22 +439,75 @@ void Comm::SyncParamDataInfo() {
   MPI_Barrier(MPI_COMM_WORLD);
 }
 
+struct FetchRemoteArgs {
+  unsigned int param_id;
+  uintptr_t dataptr;
+  int rank;
+  int target_rank;
+  int size;
+  MPI_Aint disp;
+  MPI_Win window;
+};
+
+nvtxRangeId_t nvtx_range_start(const char *message) {
+  nvtxEventAttributes_t eventAttrib = {0};
+  eventAttrib.version = NVTX_VERSION;
+  eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
+  eventAttrib.colorType = NVTX_COLOR_ARGB;
+  eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII;
+  eventAttrib.message.ascii = message;
+  eventAttrib.color = 0xFF800080;
+
+  return nvtxRangeStartEx(&eventAttrib);
+}
+
+void nvtx_range_stop(nvtxRangeId_t nvtx_id) { nvtxRangeEnd(nvtx_id); }
+
+void CUDART_CB _FetchRemoteParam(FetchRemoteArgs *args) {
+
+  unsigned int param_id = args->param_id;
+  uintptr_t dataptr = args->dataptr;
+  int rank = args->rank;
+  int target_rank = args->target_rank;
+  int size = args->size;
+  MPI_Aint disp = args->disp;
+  MPI_Win window = args->window;
+
+  char nvtx_name[32] = {0};
+  sprintf((char *)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
+  nvtxRangeId_t id = nvtx_range_start((char *)nvtx_name);
+
+  CHECK_MPI(MPI_Win_lock(MPI_LOCK_SHARED, target_rank, 0, window));
+  CHECK_MPI(MPI_Get((void *)dataptr, size, MPI_BYTE, target_rank, disp, size,
+                    MPI_BYTE, window));
+  CHECK_MPI(MPI_Win_unlock(target_rank, window));
+  delete args;
+  nvtx_range_stop(id);
+}
+
 void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
                             const uintptr_t dataptr) {
-  spdlog::info("[DY]: Fetching param {} from {} to {}", param_id,
-               GetParamDataRank(param_id), comm_info_.mpi_rank_);
-  c10::cuda::CUDAStream stream = c10::cuda::getCurrentCUDAStream();
-
   int rank = comm_info_.mpi_rank_;
   int target_rank = param_mapping_tbl_[param_id].mpi_rank_;
   int size = param_mapping_tbl_[param_id].size_bytes_;
+  assert(size_bytes_ <= INT_MAX);
+
   MPI_Aint disp = param_mapping_tbl_[param_id].dataptr_ - GetBase(target_rank);
-  CHECK_MPI(MPI_Get((void *)dataptr, size,
-                    MPI_BYTE, target_rank,
-                    disp,
-                    0,
-                    size, MPI_BYTE, window_));
-  CHECK_MPI(MPI_Win_fence(rank, window_));
+  assert((disp + size) < kCpuBufferSize);
+
+  FetchRemoteArgs *args = new FetchRemoteArgs();
+  args->param_id = param_id;
+  args->dataptr = dataptr;
+  args->rank = rank;
+  args->target_rank = target_rank;
+  args->size = size;
+  args->disp = disp;
+  args->window = window_;
+
+  cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
+  CHECK_CUDA(cudaLaunchHostFunc(stream, (cudaHostFn_t)_FetchRemoteParam, args));
+  if (!non_blocking)
+    CHECK_CUDA(cudaStreamSynchronize(stream));
 }
 
 const py::dict Comm::GetCommInfo() const {

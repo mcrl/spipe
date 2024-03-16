@@ -8,6 +8,7 @@ import sys
 import time
 import warnings
 import numpy as np
+
 # The earliest we can measure the start time.
 _TRAIN_START_TIME = time.time()
 import torch
@@ -42,11 +43,21 @@ from megatron.utils import calc_params_l2_norm
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.utils import report_memory
 
-from megatron.spiral import get_thunder_group, SpiralInitContext, SpiralWrapperInitContext, ContextManagers
+from megatron.spiral import (
+    get_thunder_group,
+    SpiralInitContext,
+    SpiralWrapperInitContext,
+    ContextManagers,
+)
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
 from megatron.spiral.utils import is_spiral_param
-from megatron.spiral.debug import spiral_print, debug_param2id_shape_status, debug_module2name_id
+from megatron.spiral.debug import (
+    spiral_print,
+    debug_param2id_shape_status,
+    debug_module2name_id,
+    debug_param2name_id,
+)
 from megatron.spiral.init_context import patch_extra_repr
 
 from megatron.model.vision.knn_monitor import compute_feature_bank
@@ -526,6 +537,12 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             #             for param in phase_model.parameters(recurse=True):
             #                 if is_spiral_param(param):
             #                     spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
+
+            # NOTE (SpiralPipe) Modify this assertion after multi-node support @DY
+            for stage_model in model:
+                for param in stage_model.parameters(recurse=True):
+                    if is_spiral_param(param):
+                        assert getattr(param, "spiral_tensor").is_pinned(), f"{debug_param2name_id(param)} is not pinned. This will change in multi-node setting, as the parameters allocated in the host will only be pinned"
 
         if mpu.is_spiral_remap():
             get_thunder_group().UnsetSpiralCPUAllocator()

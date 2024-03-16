@@ -1,23 +1,30 @@
 #!/bin/bash
 
-MPIRUN=/usr/local/bin/mpirun
-MPI_OPTIONS="-mca btl ^openib -mca pml ucx"
-MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
+#SBATCH -J spiral
+#SBATCH --exclusive
+#SBATCH --mem=0
+
+MPIRUN=$(which mpirun)
+MEGATRON_PATH=${HOME}/SpiralPipe/Megatron-LM-mcrl
 
 # Change for your system
 
 ## conda
-source ~/anaconda3/etc/profile.d/conda.sh
-conda activate Megatron-cuda11.7
+source ~/miniconda3/etc/profile.d/conda.sh
+conda activate spiral
+
+export MAX_JOBS=32
+ulimit -v unlimited
 
 ## mpi
-NP=4
 GPUS_PER_NODE=4
-HOSTS="b4:${GPUS_PER_NODE}" # b3:2,b4:2
+NP=$(( $GPUS_PER_NODE * $SLURM_JOB_NUM_NODES ))
+UNWRAPPED_NODELIST=$(scontrol show hostnames $SLURM_NODELIST) # b3 b4
+HOSTS=$(for node in $UNWRAPPED_NODELIST; do echo -n "$node:$GPUS_PER_NODE,"; done | sed 's/,$//') # b3:2,b4:2
 
 ## torch dist.
-export MASTER_ADDR="b4"
-export MASTER_PORT=6003
+export MASTER_ADDR=$(echo $UNWRAPPED_NODELIST | awk '{print $1}')
+export MASTER_PORT=6000
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
@@ -30,11 +37,13 @@ DATASET_NAME=openwebtext
 DATASET_CONFIG=plan_text
 DATA_PATH=/data/z0/heehoon/openwebtext-mg/openwebtext_text_document
 
+
+
 # --spiral-stage-optimizer
 SPIRAL_ARGS="
     --spiral \
     --spiral-remap \
-    --spiral-forward-virtual-size 2 \
+    --spiral-forward-virtual-size 1 \
     --spiral-backward-virtual-size 3 \
     --spiral-recompute-activations \
     --spiral-debug-backend \
@@ -49,13 +58,13 @@ GPT_ARGS="
     --distributed-backend nccl \
     --overlap-p2p-communication \
     --sequence-parallel \
-    --num-layers 24 \
-    --hidden-size 1024 \
-    --num-attention-heads 16 \
+    --num-layers 48 \
+    --hidden-size 5120 \
+    --num-attention-heads 40 \
     --seq-length 1024 \
     --max-position-embeddings 1024 \
     --micro-batch-size 1 \
-    --global-batch-size 4 \
+    --global-batch-size $NP \
     --lr 0.00015 \
     --train-iters 3 \
     --eval-iters 0 \
@@ -78,5 +87,10 @@ DATA_ARGS="
     --split 949,50,1
 "
 
+LOGGING_ARGS="
+    --log-interval 10 \
+"
+
 ${MPIRUN} -np $NP -host $HOSTS $MPI_OPTIONS \
-    python $MEGATRON_PATH/pretrain_gpt.py $SPIRAL_ARGS $GPT_ARGS $DATA_ARGS --load $MODEL_PATH
+    nsys profile --trace=cuda,nvtx,mpi,osrt,opengl \
+    python $MEGATRON_PATH/pretrain_gpt.py $SPIRAL_ARGS $GPT_ARGS $DATA_ARGS $LOGGING_ARGS --load $MODEL_PATH
