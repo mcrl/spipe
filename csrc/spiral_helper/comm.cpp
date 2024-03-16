@@ -473,7 +473,7 @@ void CUDART_CB _FetchRemoteParam(FetchRemoteArgs *args) {
   MPI_Aint disp = args->disp;
   MPI_Win window = args->window;
 
-  char nvtx_name[32] = {0};
+  char nvtx_name[64] = {0};
   sprintf((char *)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
   nvtxRangeId_t id = nvtx_range_start((char *)nvtx_name);
 
