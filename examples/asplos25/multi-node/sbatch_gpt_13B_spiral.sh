@@ -92,5 +92,4 @@ LOGGING_ARGS="
 "
 
 ${MPIRUN} -np $NP -host $HOSTS $MPI_OPTIONS \
-    nsys profile --trace=cuda,nvtx,mpi,osrt,opengl \
     python $MEGATRON_PATH/pretrain_gpt.py $SPIRAL_ARGS $GPT_ARGS $DATA_ARGS $LOGGING_ARGS --load $MODEL_PATH
