@@ -456,20 +456,10 @@ void CUDART_CB _FetchRemoteParam(FetchRemoteArgs *args) {
   sprintf((char *)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
   nvtxRangeId_t id = nvtx_range_start((char *)nvtx_name);
 
-  struct timespec s, e;
-  clock_gettime(CLOCK_MONOTONIC, &s);
-
   CHECK_MPI(MPI_Win_lock(MPI_LOCK_SHARED, target_rank, 0, window));
   CHECK_MPI(MPI_Get((void *)dataptr, size, MPI_BYTE, target_rank, disp, size,
                     MPI_BYTE, window));
   CHECK_MPI(MPI_Win_unlock(target_rank, window));
-
-  clock_gettime(CLOCK_MONOTONIC, &e);
-  double elapsed_time =
-      (e.tv_sec - s.tv_sec) * 1000. + (e.tv_nsec - s.tv_nsec) / 1000000.;
-  spdlog::info("[DY {}] Size: {}, Elapsed time: {} ms, Bandwidth: {} GB/s",
-               rank, size, elapsed_time,
-               1000. * size / elapsed_time / (1ul << 30));
 
   free(args);
   nvtx_range_stop(id);
