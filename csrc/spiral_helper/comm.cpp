@@ -305,9 +305,9 @@ Comm::~Comm() {
   // we do not need to delete it here.
 
   // Unpin additional pinned pointers
-  //  for (void *ptr : additional_pinned_ptrs_) {
-  //    CHECK_CUDA(cudaHostUnregister(ptr));
-  //  }
+  // for (void *ptr : additional_pinned_ptrs_) {
+  //   CHECK_CUDA(cudaHostUnregister(ptr));
+  // }
 
   // Free shared_ptrs_
   free(shared_ptrs_);

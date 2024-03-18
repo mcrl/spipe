@@ -206,8 +206,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
                     # attach spiral module recurse attributes
                     num_module_spiral_parameters_after = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
-                    setattr(module, "num_spiral_params_recurse",
-                            num_module_spiral_parameters_after - num_module_spiral_parameters_before)
+                    setattr(module, "num_spiral_params_recurse", num_module_spiral_parameters_after - num_module_spiral_parameters_before)
 
             return wrapper
 
@@ -429,7 +428,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                         "Offloading to empty spiral tensor should be executed only once during SpiralPipe w/o remapping forward stage build phase"
                 param.spiral_tensor = param.data.to(
                     device=self.remote_device, non_blocking=non_blocking
-                )  # NOTE (SpiralPipe) pin_memory() should not be called
+                ) # NOTE (SpiralPipe) pin_memory() should not be called
             else:
                 assert (
                     param.spiral_tensor.shape == param.data.shape
@@ -459,8 +458,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 assert (
                     param.spiral_tensor.shape == param.data.shape
                 ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
-                param.data.copy_(param.spiral_tensor,
-                                 non_blocking=non_blocking)
+                param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
             if not non_blocking:
                 # NOTE: for non-blocking fetch, spiral_status should be changed after waiting in the caller
                 param.spiral_status = SpiralParamStatus.ACTIVE
@@ -509,37 +507,31 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             param, *args, **kwargs
         )
 
-    @ nvtx.annotate("fetch_module", color="orange")
+    @nvtx.annotate("fetch_module", color="orange")
     def _fetch_module(self, module, non_blocking=False):
-        spiral_report_memory(
-            f"before fetch module {debug_module2class_id(module)}")
+        spiral_report_memory(f"before fetch module {debug_module2class_id(module)}")
         for param in module.parameters(recurse=True):
             if is_spiral_param(param):
                 param.fetch(non_blocking=non_blocking)
-        spiral_report_memory(
-            f"after fetch module {debug_module2class_id(module)}")
+        spiral_report_memory(f"after fetch module {debug_module2class_id(module)}")
 
-    @ nvtx.annotate("offload_module", color="yellow")
+    @nvtx.annotate("offload_module", color="yellow")
     def _offload_module(self, module, non_blocking=False):
-        spiral_report_memory(
-            f"before offload module {debug_module2class_id(module)}")
+        spiral_report_memory(f"before offload module {debug_module2class_id(module)}")
         for param in module.parameters(recurse=True):
             if is_spiral_param(param):
                 param.offload(non_blocking=non_blocking)
-        spiral_report_memory(
-            f"after offload module {debug_module2class_id(module)}")
+        spiral_report_memory(f"after offload module {debug_module2class_id(module)}")
 
-    @ nvtx.annotate("free_module", color="darkgreen")
+    @nvtx.annotate("free_module", color="darkgreen")
     def _free_module(self, module):
-        spiral_report_memory(
-            f"before free module {debug_module2class_id(module)}")
+        spiral_report_memory(f"before free module {debug_module2class_id(module)}")
         for param in module.parameters(recurse=True):
             if is_spiral_param(param):
                 param.free()
-        spiral_report_memory(
-            f"after free module {debug_module2class_id(module)}")
+        spiral_report_memory(f"after free module {debug_module2class_id(module)}")
 
-    @ nvtx.annotate("offload_grad_module", color="white")
+    @nvtx.annotate("offload_grad_module", color="white")
     def _offload_grad_module(self, module, non_blocking=False):
         spiral_report_memory(
             f"before offload grad module {debug_module2class_id(module)}"
@@ -581,7 +573,6 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                         param.spiral_stride,
                         param.spiral_storage_offset,
                     )
-
                     if param.spiral_status == SpiralParamStatus.UNAVAILABLE:
                         param.spiral_status = SpiralParamStatus.REMOTE
         else:
