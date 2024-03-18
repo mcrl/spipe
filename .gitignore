@@ -10,3 +10,4 @@ logs
 .clang*
 **/tmp
 log*
+*.txt
