@@ -17,6 +17,7 @@ from .schedules import (
     forward_backward_pipelining_with_spiral,
 )
 from .module import SpiralPhaseList
+from .cpu_adam import SpiralCPUAdam
 
 from .build_state import (
     reset_spiral_forward_stage_build_phase_num_spiral_params_allocated,

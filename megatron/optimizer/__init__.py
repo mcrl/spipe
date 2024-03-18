@@ -4,12 +4,12 @@ import warnings
 
 from apex.optimizers import FusedAdam as Adam
 from apex.optimizers import FusedSGD as SGD
-from csrc.external.DeepSpeed.deepspeed.ops.adam import DeepSpeedCPUAdam
 
 from megatron import get_args
-from megatron.core import mpu
 from megatron.spiral.init_context import SpiralParamStatus
 from megatron.spiral.utils import is_spiral_param
+# from deepspeed.ops.adam import DeepSpeedCPUAdam
+from megatron.spiral.cpu_adam import SpiralCPUAdam
 
 from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
@@ -146,13 +146,20 @@ def get_megatron_optimizer(model,
 
     if args.spiral:
         assert args.optimizer == 'adam', 'SpiralPipe only support Adam'
-        optimizer = DeepSpeedCPUAdam(param_groups,
-                                     lr=args.lr,
-                                     weight_decay=args.weight_decay,
-                                     betas=(args.adam_beta1, args.adam_beta2),
-                                     eps=args.adam_eps)
-        print("Optimizer success")
-        exit()
+        optimizer = SpiralCPUAdam(
+            param_groups,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(args.adam_beta1, args.adam_beta2),
+            eps=args.adam_eps,
+        )
+        # optimizer = DeepSpeedCPUAdam(
+        #     param_groups,
+        #     lr=args.lr,
+        #     weight_decay=args.weight_decay,
+        #     betas=(args.adam_beta1, args.adam_beta2),
+        #     eps=args.adam_eps,
+        # )
         # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here
         if args.spiral_stage_optimizer:
             _unwrapped_model = model[0]

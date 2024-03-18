@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MPIRUN=/usr/local/bin/mpirun
+MPIRUN=$HOME/openmpi-5.0.2/build/bin/mpirun
 MPI_OPTIONS="-mca btl ^openib -mca pml ucx"
 MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
 
@@ -13,13 +13,16 @@ conda activate Megatron-cuda11.7
 ## mpi
 NP=4
 GPUS_PER_NODE=4
-HOSTS="b4:${GPUS_PER_NODE}" # b3:2,b4:2
+HOSTS="b0:${GPUS_PER_NODE}" # b3:2,b4:2
 
 ## torch dist.
-export MASTER_ADDR="b4"
+export MASTER_ADDR="b0"
 export MASTER_PORT=6003
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export CUDA_DEVICE_MAX_CONNECTIONS=1
+
+## deepspeed compile
+export LD_LIBRARY_PATH=$HOME/anaconda3/envs/Megatron-cuda11.7/lib/:$LD_LIBRARY_PATH
 
 ## Config file path
 MODEL_PATH=/home/n0/yujin/tmp/model/gpt-like-270m
@@ -78,5 +81,5 @@ DATA_ARGS="
     --split 949,50,1
 "
 
-${MPIRUN} -np $NP -host $HOSTS $MPI_OPTIONS \
+${MPIRUN} -np $NP -host $HOSTS $MPI_OPTIONS -x LD_LIBRARY_PATH \
     python $MEGATRON_PATH/pretrain_gpt.py $SPIRAL_ARGS $GPT_ARGS $DATA_ARGS --load $MODEL_PATH
