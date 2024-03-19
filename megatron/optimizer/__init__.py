@@ -8,7 +8,6 @@ from apex.optimizers import FusedSGD as SGD
 from megatron import get_args
 from megatron.spiral.init_context import SpiralParamStatus
 from megatron.spiral.utils import is_spiral_param
-# from deepspeed.ops.adam import DeepSpeedCPUAdam
 from megatron.spiral.cpu_adam import SpiralCPUAdam
 
 from .distrib_optimizer import DistributedOptimizer
@@ -102,8 +101,12 @@ def get_megatron_optimizer(model,
 
     # Determine whether the params have main-grad field.
     params_have_main_grad = False
-    if args.DDP_impl == 'local':
-        params_have_main_grad = True
+    if args.spiral:
+        # NOTE (SpiralPipe) `params` here annotates the params on the device of the optimizer. It is not always the same as the params referenced during training. For SpiralPipe, `params` are the offloaded params and should only have .grad field, while the params referred during can have both .main_grad and .grad field. Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary to be performed.
+        params_have_main_grad = False
+    else:
+        if args.DDP_impl == 'local':
+            params_have_main_grad = True
 
     if (
         args.spiral
