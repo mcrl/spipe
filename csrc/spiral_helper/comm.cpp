@@ -1,11 +1,13 @@
 #include "allocator.hpp"
 #include "util.hpp"
+#include <c10/cuda/CUDAStream.h>
 #include <cassert>
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <fcntl.h>
 #include <memory>
 #include <mpi.h>
+#include <nvToolsExt.h>
 #include <pybind11/numpy.h>
 #include <semaphore.h>
 #include <set>
@@ -14,16 +16,9 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 #include <vector>
-
-#include <time.h>
-#include <c10/cuda/CUDAStream.h>
-#include <cstddef>
-#include <nvToolsExt.h>
-#include <pybind11/numpy.h>
-#include <sys/types.h>
-#include <unistd.h>
 
 const char *sharedMemoryName = "/thunder"; // set differently
 
@@ -171,6 +166,9 @@ private:
 bool Comm::debug = false;
 
 Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
+  if (Comm::debug)
+    spdlog::info("Creating SpiralPipe Comm");
+
   MPI_Initialized(&mpi_initialized_);
   if (!mpi_initialized_)
     MPI_Init(NULL, NULL);
@@ -222,6 +220,8 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
     // test
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
+    if (Comm::debug)
+      spdlog::info("Shared memory created fd = {} sz = {}", fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
 
@@ -233,6 +233,8 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
     // test
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
+    if (Comm::debug)
+      spdlog::info("Shared memory opened fd = {} sz = {}", fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
   shared_ptr_ = mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE,
@@ -254,6 +256,13 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   CHECK_MPI(MPI_Allgather(&shared_ptrs_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED,
                           shared_ptrs_, 1, MPI_UNSIGNED, mpi_comm_));
 #endif
+
+  // test
+  if (Comm::debug) {
+    for (int i = 0; i < comm_info_.mpi_size_; i++) {
+      spdlog::info("rank = {} shared_ptr = {}", i, shared_ptrs_[i]);
+    }
+  }
 
   // Initialize param mapping tbl
   param_mapping_tbl_ = (ParamDataInfo *)shared_ptr_;
@@ -286,6 +295,9 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
 }
 
 Comm::~Comm() {
+  if (Comm::debug)
+    spdlog::info("Destroying SpiralPipe Comm");
+
   // We guarantee all process joins at this point,
   // and no more access to shared objects are requested.
   MPI_Barrier(intra_comm_);
@@ -327,6 +339,8 @@ void Comm::SetSpiralCPUAllocator() {
   TORCH_CHECK(prev_allocator_ptr_ == nullptr,
               "Already within the scope of another non-default cpu allocator."
               "Cannot set another allocator.");
+  if (Comm::debug)
+    spdlog::info("Setting SpiralCPUAllocator");
 
   // Setting the priority high to make sure no other allocator gets used instead
   // of this.
@@ -340,6 +354,8 @@ void Comm::UnsetSpiralCPUAllocator() {
   TORCH_CHECK(prev_allocator_ptr_ != nullptr,
               "SetSpiralCPUAllocator must have been called "
               "before UnsetSpiralCPUAllocator.");
+  if (Comm::debug)
+    spdlog::info("Unsetting SpiralCPUAllocator");
 
   // Setting the priority high to make sure no other allocator gets used instead
   // of this.
@@ -393,6 +409,12 @@ void Comm::SetParamDataInfo(const unsigned int param_id,
   param_mapping_tbl_[param_id].intra_rank_ = comm_info_.intra_rank_;
   param_mapping_tbl_[param_id].dataptr_ = dataptr;
   param_mapping_tbl_[param_id].size_bytes_ = size_bytes;
+
+  if (Comm::debug) {
+    spdlog::info("Set param_mapping_tbl_[{}] mpi_rank = {} dataptr = {}",
+                 param_id, param_mapping_tbl_[param_id].mpi_rank_,
+                 param_mapping_tbl_[param_id].dataptr_);
+  }
 }
 
 int Comm::GetParamDataRank(const unsigned int param_id) const {
