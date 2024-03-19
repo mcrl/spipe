@@ -35,7 +35,7 @@ private:
 
 ThreadPool::ThreadPool(size_t max_threads) : _max_threads(max_threads), _n_ready(0), _exit(false) {
   _threads.reserve(max_threads);
-  for (int i = 0; i < max_threads; i++) {
+  for (size_t i = 0; i < max_threads; i++) {
     _threads.emplace_back(thread(bind(&ThreadPool::execute, this)));
   }
 }
