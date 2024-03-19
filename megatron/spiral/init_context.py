@@ -458,24 +458,33 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         def _offload_grad(param, non_blocking=False):
             """Offload a gradient to remote device."""
 
-            if hasattr(param, "main_grad") and getattr(param, "main_grad") is not None:
+            # Determine whether the params have main-grad field
+            params_have_main_grad = False
+            if get_args().DDP_impl == "local":
+                params_have_main_grad = True
+
+            # Always offload param.grad/param.main_grad into param.spiral_tensor.grad
+            if params_have_main_grad:
+                assert hasattr(param, "main_grad") and getattr(param, "main_grad") is not None
+
                 if (
-                    hasattr(param.spiral_tensor, "main_grad")
-                    and getattr(param.spiral_tensor, "main_grad") is not None
+                    hasattr(param.spiral_tensor, "grad")
+                    and getattr(param.spiral_tensor, "grad") is not None
                 ):
                     # NOTE (SpiralPipe) Only check for numel, since main_grad shape "may" differ on GPU and CPU depending on optimizer
                     assert (
-                        param.main_grad.numel() == param.spiral_tensor.main_grad.numel()
-                    ), "Main grad numel mismatch"
-                    param.spiral_tensor.main_grad.copy_(
+                        param.main_grad.numel() == param.spiral_tensor.grad.numel()
+                    ), "param.main_grad and param.spiral_tensor.grad numel mismatch"
+                    param.spiral_tensor.grad.copy_(
                         param.main_grad, non_blocking=non_blocking
                     )
                 else:
-                    param.spiral_tensor.main_grad = param.main_grad.to(
+                    param.spiral_tensor.grad = param.main_grad.to(
                         self.remote_device, non_blocking=non_blocking
                     )
+            else:
+                assert hasattr(param, "grad") and getattr(param, "grad") is not None
 
-            if hasattr(param, "grad") and getattr(param, "grad") is not None:
                 if (
                     hasattr(param.spiral_tensor, "grad")
                     and getattr(param.spiral_tensor, "grad") is not None
@@ -483,7 +492,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     # NOTE (SpiralPipe) Only check for numel, since grad shape "may" differ on GPU and CPU depending on optimizer
                     assert (
                         param.grad.numel() == param.spiral_tensor.grad.numel()
-                    ), "Grad numel mismatch"
+                    ), "param.grad and param.spiral_tensor.grad numel mismatch"
                     param.spiral_tensor.grad.copy_(
                         param.grad, non_blocking=non_blocking
                     )
