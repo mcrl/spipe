@@ -4,19 +4,22 @@ from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
 import spiral_cpu_adam
 
+
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
 
-    def __init__(self,
-                 model_params,
-                 lr=1e-3,
-                 bias_correction=True,
-                 betas=(0.9, 0.999),
-                 eps=1e-8,
-                 weight_decay=0,
-                 amsgrad=False,
-                 adamw_mode=True,
-                 fp32_optimizer_states=True):
+    def __init__(
+        self,
+        model_params,
+        lr=1e-3,
+        bias_correction=True,
+        betas=(0.9, 0.999),
+        eps=1e-8,
+        weight_decay=0,
+        amsgrad=False,
+        adamw_mode=True,
+        fp32_optimizer_states=True,
+    ):
         """Fast vectorized implementation of two variations of Adam optimizer on CPU:
 
         * Adam: A Method for Stochastic Optimization: (https://arxiv.org/abs/1412.6980);
@@ -61,21 +64,29 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         the precision of the parameters (default: True)
         """
 
-        default_args = dict(lr=lr,
-                            betas=betas,
-                            eps=eps,
-                            weight_decay=weight_decay,
-                            bias_correction=bias_correction,
-                            amsgrad=amsgrad)
+        default_args = dict(
+            lr=lr,
+            betas=betas,
+            eps=eps,
+            weight_decay=weight_decay,
+            bias_correction=bias_correction,
+            amsgrad=amsgrad,
+        )
         super(SpiralCPUAdam, self).__init__(model_params, default_args)
 
         cpu_info = get_cpu_info()
-        self.cpu_vendor = cpu_info["vendor_id_raw"].lower() if "vendor_id_raw" in cpu_info else "unknown"
+        self.cpu_vendor = (
+            cpu_info["vendor_id_raw"].lower()
+            if "vendor_id_raw" in cpu_info
+            else "unknown"
+        )
         if "amd" in self.cpu_vendor:
             for group_id, group in enumerate(self.param_groups):
-                for param_id, p in enumerate(group['params']):
+                for param_id, p in enumerate(group["params"]):
                     if p.dtype == torch.half:
-                        logger.warning("FP16 params for CPUAdam may not work on AMD CPUs")
+                        logger.warning(
+                            "FP16 params for CPUAdam may not work on AMD CPUs"
+                        )
                         break
                 else:
                     continue
@@ -105,7 +116,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
     def __setstate__(self, state):
         super(SpiralCPUAdam, self).__setstate__(state)
         for group in self.param_groups:
-            group.setdefault('amsgrad', False)
+            group.setdefault("amsgrad", False)
 
     @torch.no_grad()
     def step(self, closure=None, fp16_param_groups=None):
@@ -133,7 +144,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                 loss = closure()
 
         # intended device for step
-        device = torch.device('cpu')
+        device = torch.device("cpu")
 
         # converting the fp16 params to a group of parameter
         if type(fp16_param_groups) is list:
@@ -143,41 +154,69 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             fp16_param_groups = [[fp16_param_groups]]
 
         for group_id, group in enumerate(self.param_groups):
-            for param_id, p in enumerate(group['params']):
+            for param_id, p in enumerate(group["params"]):
 
                 if p.grad is None:
                     continue
 
-                assert p.device == device, f"CPUAdam param is on {p.device} and must be 'cpu', make " \
-                        "sure you enabled 'offload_optimizer': 'cpu' in your ZeRO config."
+                assert p.device == device, (
+                    f"CPUAdam param is on {p.device} and must be 'cpu', make "
+                    "sure you enabled 'offload_optimizer': 'cpu' in your ZeRO config."
+                )
 
                 state = self.state[p]
                 # State initialization
                 if len(state) == 0:
                     # print(f'group {group_id} param {param_id} = {p.numel()}')
-                    state['step'] = 0
+                    state["step"] = 0
 
                     # use full precision by default unless self.fp32_optimizer_states is off
                     state_dtype = torch.float if self.fp32_optimizer_states else p.dtype
 
                     # gradient momentums
-                    state['exp_avg'] = torch.zeros_like(p.data, dtype=state_dtype, device=device)
+                    state["exp_avg"] = torch.zeros_like(
+                        p.data, dtype=state_dtype, device=device
+                    )
                     # memory_format=torch.preserve_format)
                     # gradient variances
-                    state['exp_avg_sq'] = torch.zeros_like(p.data, dtype=state_dtype, device=device)
+                    state["exp_avg_sq"] = torch.zeros_like(
+                        p.data, dtype=state_dtype, device=device
+                    )
                     # memory_format=torch.preserve_format)
 
-                state['step'] += 1
-                beta1, beta2 = group['betas']
+                state["step"] += 1
+                beta1, beta2 = group["betas"]
 
                 if fp16_param_groups is not None:
-                    self.ds_opt_adam.adam_update_copy(self.opt_id, state['step'], group['lr'], beta1, beta2,
-                                                      group['eps'], group['weight_decay'], group['bias_correction'],
-                                                      p.data, p.grad.data, state['exp_avg'], state['exp_avg_sq'],
-                                                      fp16_param_groups[group_id][param_id].data)
+                    self.ds_opt_adam.adam_update_copy(
+                        self.opt_id,
+                        state["step"],
+                        group["lr"],
+                        beta1,
+                        beta2,
+                        group["eps"],
+                        group["weight_decay"],
+                        group["bias_correction"],
+                        p.data,
+                        p.grad.data,
+                        state["exp_avg"],
+                        state["exp_avg_sq"],
+                        fp16_param_groups[group_id][param_id].data,
+                    )
                 else:
                     print(f"py call adam_update for param")
-                    self.ds_opt_adam.adam_update(self.opt_id, state['step'], group['lr'], beta1, beta2, group['eps'],
-                                                 group['weight_decay'], group['bias_correction'], p.data, p.grad.data,
-                                                 state['exp_avg'], state['exp_avg_sq'])
+                    self.ds_opt_adam.adam_update(
+                        self.opt_id,
+                        state["step"],
+                        group["lr"],
+                        beta1,
+                        beta2,
+                        group["eps"],
+                        group["weight_decay"],
+                        group["bias_correction"],
+                        p.data,
+                        p.grad.data,
+                        state["exp_avg"],
+                        state["exp_avg_sq"],
+                    )
         return loss
