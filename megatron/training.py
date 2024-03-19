@@ -666,9 +666,9 @@ def get_optimizer_param_scheduler(optimizer):
             optimizer_param_schedulers = []
             for opt_ty in getattr(optimizer, "optimizer_list"):
                 setattr(opt_ty, "_spiral_optimizer_param_scheduler_entered", True)
-                opt_ty_param_scheduler = get_optimizer_param_scheduler(opt_ty)
-                assert isinstance(opt_ty_param_scheduler, OptimizerParamScheduler)
-                optimizer_param_schedulers.append(opt_ty_param_scheduler)
+                opt_param_scheduler = get_optimizer_param_scheduler(opt_ty)
+                assert isinstance(opt_param_scheduler, OptimizerParamScheduler)
+                optimizer_param_schedulers.append(opt_param_scheduler)
             return SpiralStageOptimizerParamScheduler(optimizer_param_schedulers)
 
     if args.spiral_stage_optimizer:
