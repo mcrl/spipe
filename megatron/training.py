@@ -769,7 +769,11 @@ def train_step(forward_step_func, data_iterator,
     if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
         for partition in model:
             partition.zero_grad_buffer()
-    optimizer.zero_grad()
+    if args.spiral_stage_optimizer:
+        for opt_ty in getattr(optimizer, "optimizer_list"):
+            opt_ty.zero_grad()
+    else:
+        optimizer.zero_grad()
 
     # Forward pass.
     timers('forward-backward', log_level=1).start(
