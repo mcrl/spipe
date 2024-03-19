@@ -112,7 +112,7 @@ def get_megatron_optimizer(model,
     ):
         if not hasattr(model, "_spiral_optimizer_entered"):
             # NOTE (SpiralPipe) top level model[], recursively collect optimizer for each **BWD** stage. FWD stages are skipped, even though they will naturally be skipped due to logic in get_param_groups, in order to prevent optimizer with empty param group.
-            optimizer_list = []
+            bwd_stage_optimizers = []
             for bwd_stage_id in range(args.spiral_backward_virtual_size):
                 # NOTE (SpiralPipe) SpiralStageOptimizer requires optimizer list to be sorted in **ascending** order of bwd stage id. SpiralPipe w/o remapping has stage models that have both fwd/bwd id and hence in opposite bwd stage order w.r.t SpiralPipe w/ remapping.
                 if args.spiral_remap:
@@ -129,16 +129,8 @@ def get_megatron_optimizer(model,
                     lr_mult,
                 )
                 assert isinstance(opt_ty, FP32Optimizer), "SpiralStageOptimizer currently only supports SpiralCPUAdam wrapped into FP32Optimizer"
-                optimizer_list.append(opt_ty)
-
-            return SpiralStageOptimizer(
-                optimizer_list,
-                args.clip_grad,
-                args.log_num_zeros_in_grad,
-                params_have_main_grad,
-                args.use_contiguous_buffers_in_local_ddp,
-                model,
-            )
+                bwd_stage_optimizers.append(opt_ty)
+            return SpiralStageOptimizer(bwd_stage_optimizers)
 
     # Base optimizer.
     param_groups = get_param_groups(model,

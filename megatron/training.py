@@ -59,6 +59,10 @@ from megatron.spiral.debug import (
     debug_param2name_id,
 )
 from megatron.spiral.init_context import patch_extra_repr
+from megatron.spiral.optimizer import (
+    SpiralStageOptimizer,
+    SpiralStageOptimizerParamScheduler
+)
 
 from megatron.model.vision.knn_monitor import compute_feature_bank
 
@@ -651,6 +655,25 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
 def get_optimizer_param_scheduler(optimizer):
     """Build the learning rate scheduler."""
     args = get_args()
+
+    if (
+        args.spiral
+        and args.spiral_stage_optimizer
+        and args.spiral_backward_virtual_size > 1
+    ):
+        if not hasattr(optimizer, "_spiral_optimizer_param_scheduler_entered"):
+            assert isinstance(optimizer, SpiralStageOptimizer), "top level spiral stage optimizer should be SpiralStageOptimizer"
+            optimizer_param_schedulers = []
+            for opt_ty in getattr(optimizer, "optimizer_list"):
+                setattr(opt_ty, "_spiral_optimizer_param_scheduler_entered", True)
+                opt_ty_param_scheduler = get_optimizer_param_scheduler(opt_ty)
+                assert isinstance(opt_ty_param_scheduler, OptimizerParamScheduler)
+                optimizer_param_schedulers.append(opt_ty_param_scheduler)
+            return SpiralStageOptimizerParamScheduler(optimizer_param_schedulers)
+
+    if args.spiral_stage_optimizer:
+        assert hasattr(optimizer, "_spiral_optimizer_param_scheduler_entered")
+        delattr(optimizer, "_spiral_optimizer_param_scheduler_entered")
 
     # Iteration-based training.
     if args.train_iters:
