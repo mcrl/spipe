@@ -273,6 +273,7 @@ def forward_backward_pipelining_with_spiral_remap(
         assert "spiral_stage_optimizer" in kwargs, "spiral_stage_optimizer not found in kwargs"
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
+        grad_scaler = kwargs["spiral_grad_scaler"]
         optimizer_threads_status = []
 
     # TODO (SpiralPipe) Move to spiral_p2p
@@ -691,8 +692,14 @@ def forward_backward_pipelining_with_spiral_remap(
                     enable_autocast,
                 )
 
+                if optimize_after_bwd_stage:
+                    # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
+                    # (same as optimizer_list in SpiralStageOptimizer)
+                    _grad_scaler = grad_scaler[bwd_stage_id]
+                else:
+                    _grad_scaler = grad_scaler
                 input_tensor_grad = backward_step(
-                    grad_scaler,
+                    _grad_scaler,
                     input_tensor_ckpt,
                     output_tensor,
                     output_tensor_grad,
@@ -913,6 +920,7 @@ def forward_backward_pipelining_with_spiral(
         assert "spiral_stage_optimizer" in kwargs, "spiral_stage_optimizer not found in kwargs"
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
+        grad_scaler = kwargs["spiral_grad_scaler"]
         optimizer_threads_status = []
 
     def _cleanup():
@@ -1232,8 +1240,14 @@ def forward_backward_pipelining_with_spiral(
                         assert isinstance(output_tensor, torch.Tensor) and output_tensor.numel() == 1
                     assert output_tensor.requires_grad
 
+                if optimize_after_bwd_stage:
+                    # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
+                    # (same as optimizer_list in SpiralStageOptimizer)
+                    _grad_scaler = grad_scaler[bwd_stage_id]
+                else:
+                    _grad_scaler = grad_scaler
                 input_tensor_grad = backward_step(
-                    grad_scaler,
+                    _grad_scaler,
                     input_tensor_ckpt,
                     output_tensor,
                     output_tensor_grad,

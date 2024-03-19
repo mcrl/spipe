@@ -41,6 +41,7 @@ SPIRAL_ARGS="
     --spiral-backward-virtual-size 3 \
     --spiral-recompute-activations \
     --spiral-debug-backend \
+    --spiral-stage-optimizer \
     --megatron-mpi
 "
 
@@ -70,7 +71,8 @@ GPT_ARGS="
     --clip-grad 0.0 \
     --attention-dropout 0.0 \
     --hidden-dropout 0.0 \
-    --no-gradient-accumulation-fusion
+    --no-gradient-accumulation-fusion \
+    --no-contiguous-buffers-in-local-ddp
 "
 
 DATA_ARGS="

@@ -784,6 +784,8 @@ def train_step(forward_step_func, data_iterator,
     kwargs = {}
     if args.spiral_stage_optimizer:
         kwargs["spiral_stage_optimizer"] = optimizer
+        kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
+
 
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,
@@ -792,7 +794,7 @@ def train_step(forward_step_func, data_iterator,
         num_microbatches=get_num_microbatches(),
         dtype=args.params_dtype,
         tensor_shape=(args.seq_length, args.micro_batch_size, args.hidden_size),
-        grad_scaler=optimizer.scale_loss,
+        grad_scaler=getattr(optimizer, "scale_loss", None),
         sequence_parallel=args.sequence_parallel,
         overlap_p2p_comm=args.overlap_p2p_comm,
         batch_p2p_comm=not args.overlap_p2p_comm,

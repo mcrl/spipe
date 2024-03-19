@@ -390,6 +390,9 @@ def validate_args(args, defaults={}):
         if args.hidden_dropout > 0.0:
             raise RuntimeError(
                 "SpiralPipe does not support hidden_dropout > 0.0, since it yields different recomputation results from original fwd results")
+        if args.use_contiguous_buffers_in_local_ddp:
+            raise RuntimeError(
+                "SpiralPipe does not support use_contiguous_buffers_in_local_ddp, just to avoid assertion in MegatronOptimizer.__init__. This is not a limitation of SpiralPipe, but as Megatron optimizer currently does not consider offloaded optimizer. Specifically, it does not consider where param on GPU has `main_grad` (due to local DDP) but param on offloaded device only has `grad`")
         if args.spiral_forward_virtual_size is None:
             raise RuntimeError(
                 "SpiralPipe requires setting forward virtual size")
