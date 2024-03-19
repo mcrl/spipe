@@ -11,7 +11,10 @@ setup(
     ext_modules=[
         CUDAExtension(
             name='spiral_cpu_adam',
-            sources = sorted(glob('*.cpp')),
+            sources = [
+                os.path.join(csrc, 'spiral_cpu_adam/cpu_adam.cpp'),
+                os.path.join(csrc, 'external/DeepSpeed/csrc/adam/cpu_adam_impl.cpp')
+            ],
             include_dirs=[
                 os.path.join(csrc, 'external/spdlog/include'),
                 os.path.join(csrc, 'external/DeepSpeed/csrc/includes'),
@@ -21,8 +24,8 @@ setup(
             library_dirs=[
                 os.path.join(os.environ['CUDA_BUILD_DIR'], 'lib64'),
             ],
-            libraries=['rt', 'pthread', 'cuda', 'cudart'],
-            extra_compile_args=['-g', '-fvisibility=hidden']),
+            libraries=['rt', 'pthread', 'cuda', 'cudart', 'cublas', 'curand'],
+            extra_compile_args=['-g', '-fvisibility=hidden', '-fopenmp']),
     ],
     cmdclass={
         'build_ext': BuildExtension

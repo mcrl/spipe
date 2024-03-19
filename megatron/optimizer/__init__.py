@@ -33,6 +33,12 @@ def get_param_groups(modules,
     no_wd_no_scale_lr = []
     no_wd_scale_lr = []
 
+    if args.spiral and args.spiral_stage_optimizer:
+        # Spiral stage optimizer creates an optimizer per bwd stage. Hence, the `modules` provided
+        # here should not be a list of modules but a single module.
+        assert not isinstance(modules, list)
+        modules = [modules]
+
     for module in modules:
 
         # NOTE (SpiralPipe) Skip module that is not bwd stage. A module with both fwd / bwd stage id is not skipped. (e.g., SpiralPipe w/o remapping)
@@ -113,15 +119,18 @@ def get_megatron_optimizer(model,
                     _idx_bwd_stage_id = -bwd_stage_id - 1
                 else:
                     _idx_bwd_stage_id = bwd_stage_id
+                # Attach a flag to second level modules (i.e., stage model) to stop recursive call
                 setattr(model[_idx_bwd_stage_id], "_spiral_optimizer_entered", True)
-                optimizer_list.append(
-                    get_megatron_optimizer(
-                        model[_idx_bwd_stage_id],
-                        no_weight_decay_cond,
-                        scale_lr_cond,
-                        lr_mult,
-                    )
+                # Insert optimizer for each bwd stage
+                opt_ty = get_megatron_optimizer(
+                    model[_idx_bwd_stage_id],
+                    no_weight_decay_cond,
+                    scale_lr_cond,
+                    lr_mult,
                 )
+                assert isinstance(opt_ty, FP32Optimizer), "SpiralStageOptimizer currently only supports SpiralCPUAdam wrapped into FP32Optimizer"
+                optimizer_list.append(opt_ty)
+
             return SpiralStageOptimizer(
                 optimizer_list,
                 args.clip_grad,
@@ -130,13 +139,6 @@ def get_megatron_optimizer(model,
                 args.use_contiguous_buffers_in_local_ddp,
                 model,
             )
-        else:
-            # NOTE (SpiralPipe) second level model of DDP class
-            # Wrap itself in order to work as an iterable of size 1
-
-            # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here (with L149)
-            # delattr(model, "_spiral_optimizer_entered")
-            model = [model]
 
     # Base optimizer.
     param_groups = get_param_groups(model,
@@ -153,19 +155,10 @@ def get_megatron_optimizer(model,
             betas=(args.adam_beta1, args.adam_beta2),
             eps=args.adam_eps,
         )
-        # optimizer = DeepSpeedCPUAdam(
-        #     param_groups,
-        #     lr=args.lr,
-        #     weight_decay=args.weight_decay,
-        #     betas=(args.adam_beta1, args.adam_beta2),
-        #     eps=args.adam_eps,
-        # )
-        # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here
+
         if args.spiral_stage_optimizer:
-            _unwrapped_model = model[0]
-            assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
-            delattr(_unwrapped_model, "_spiral_optimizer_entered")
-            return optimizer
+            assert hasattr(model, "_spiral_optimizer_entered")
+            delattr(model, "_spiral_optimizer_entered")
     else:
         if args.optimizer == 'adam':
             optimizer = Adam(param_groups,

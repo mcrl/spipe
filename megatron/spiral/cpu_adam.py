@@ -1,10 +1,8 @@
-import os
 import torch
 from cpuinfo import get_cpu_info
 from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
-from deepspeed.ops.op_builder import TorchCPUOpBuilder
-
+import spiral_cpu_adam
 
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
@@ -87,12 +85,17 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         SpiralCPUAdam.optimizer_id = SpiralCPUAdam.optimizer_id + 1
         self.adam_w_mode = adamw_mode
         self.fp32_optimizer_states = fp32_optimizer_states
-        self.ds_opt_adam = SpiralCPUAdamBuilder().load()
-        print("SpiralCPUAdam.__init__ load success")
-        exit(0)
-
-        self.ds_opt_adam.create_adam(self.opt_id, lr, betas[0], betas[1], eps, weight_decay, adamw_mode,
-                                     should_log_le("info"))
+        self.ds_opt_adam = spiral_cpu_adam
+        self.ds_opt_adam.create_adam(
+            self.opt_id,
+            lr,
+            betas[0],
+            betas[1],
+            eps,
+            weight_decay,
+            adamw_mode,
+            should_log_le("info"),
+        )
 
     def __del__(self):
         # need to destroy the C++ object explicitly to avoid a memory leak when deepspeed.initialize
@@ -151,18 +154,18 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                 state = self.state[p]
                 # State initialization
                 if len(state) == 0:
-                    #print(f'group {group_id} param {param_id} = {p.numel()}')
+                    # print(f'group {group_id} param {param_id} = {p.numel()}')
                     state['step'] = 0
 
-                    #use full precision by default unless self.fp32_optimizer_states is off
+                    # use full precision by default unless self.fp32_optimizer_states is off
                     state_dtype = torch.float if self.fp32_optimizer_states else p.dtype
 
                     # gradient momentums
                     state['exp_avg'] = torch.zeros_like(p.data, dtype=state_dtype, device=device)
-                    #memory_format=torch.preserve_format)
+                    # memory_format=torch.preserve_format)
                     # gradient variances
                     state['exp_avg_sq'] = torch.zeros_like(p.data, dtype=state_dtype, device=device)
-                    #memory_format=torch.preserve_format)
+                    # memory_format=torch.preserve_format)
 
                 state['step'] += 1
                 beta1, beta2 = group['betas']
