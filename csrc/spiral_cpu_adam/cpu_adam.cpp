@@ -87,11 +87,11 @@ int _spiral_adam_step(int optimizer_id,
                  torch::Tensor& grads,
                  torch::Tensor& exp_avg,
                  torch::Tensor& exp_avg_sq,
-                 cudaEvent_t offload_grad_ev)
+                 /* offload_grad_ev passed as ptr since CUDAEvent deletes copy ctor */
+                 at::cuda::CUDAEvent* offload_grad_ev)
 {
     // NOTE (SpiralPipe) added event synchronization
-    // offload_grad_ev.synchronize();
-    cudaEventSynchronize(offload_grad_ev);
+    offload_grad_ev->synchronize();
 
     auto params_c = params.contiguous();
     auto grads_c = grads.contiguous();
@@ -136,11 +136,13 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
                            torch::Tensor& grads,
                            torch::Tensor& exp_avg,
                            torch::Tensor& exp_avg_sq,
-                           torch::Tensor& device_params)
+                           torch::Tensor& device_params,
+                           /* offload_grad_ev passed as ptr since CUDAEvent deletes copy ctor */
+                           at::cuda::CUDAEvent* offload_grad_ev)
 {
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
     // NOTE (SpiralPipe) added event synchronization
-    // offload_grad_ev.synchronize();
+    offload_grad_ev->synchronize();
 
     auto params_c = params.contiguous();
     auto device_params_c = device_params.contiguous();
@@ -189,7 +191,7 @@ int spiral_adam_step(int optimizer_id,
 {
     futures.emplace_back(pool.submit(_spiral_adam_step, optimizer_id, step, lr,
                                     beta1, beta2, epsilon, weight_decay,
-                                    bias_correction, params, grads, exp_avg, exp_avg_sq, offload_grad_ev.event()));
+                                    bias_correction, params, grads, exp_avg, exp_avg_sq, &offload_grad_ev));
     return 0;
 }
 
@@ -205,11 +207,12 @@ int spiral_adam_step_plus_copy(int optimizer_id,
                            torch::Tensor& grads,
                            torch::Tensor& exp_avg,
                            torch::Tensor& exp_avg_sq,
-                           torch::Tensor& device_params)
+                           torch::Tensor& device_params,
+                           at::cuda::CUDAEvent& offload_grad_ev)
 {
     futures.emplace_back(pool.submit(_spiral_adam_step_plus_copy, optimizer_id, step, lr,
                                     beta1, beta2, epsilon, weight_decay,
-                                    bias_correction, params, grads, exp_avg, exp_avg_sq, device_params));
+                                    bias_correction, params, grads, exp_avg, exp_avg_sq, device_params, &offload_grad_ev));
     return 0;
 }
 
