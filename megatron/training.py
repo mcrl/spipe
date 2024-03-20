@@ -765,6 +765,15 @@ def train_step(forward_step_func, data_iterator,
     args = get_args()
     timers = get_timers()
 
+    for p in model[-1].parameters(recurse=True):
+        spiral_print(f"before zero grad call >>" +
+                     f" param.grad: {p.grad}" +
+                     f" param.main_grad: " +
+                     f"{getattr(p, 'main_grad', 'not exist')}" +
+                     f"param.spiral_tensor.grad: {p.spiral_tensor.grad}" +
+                     f"param.spiral_tensor.main_grad: " +
+                     f"{getattr(p.spiral_tensor, 'main_grad', 'not exist')}")
+
     # Set grad to zero.
     if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
         for partition in model:
@@ -774,6 +783,15 @@ def train_step(forward_step_func, data_iterator,
             opt_ty.zero_grad()
     else:
         optimizer.zero_grad()
+
+    for p in model[-1].parameters(recurse=True):
+        spiral_print(f"after zero grad call >>" +
+                     f" param.grad: {p.grad}" +
+                     f" param.main_grad: " +
+                     f"{getattr(p, 'main_grad', 'not exist')}" +
+                     f"param.spiral_tensor.grad: {p.spiral_tensor.grad}" +
+                     f"param.spiral_tensor.main_grad: " +
+                     f"{getattr(p.spiral_tensor, 'main_grad', 'not exist')}")
 
     # Forward pass.
     timers('forward-backward', log_level=1).start(

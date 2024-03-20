@@ -274,7 +274,6 @@ def forward_backward_pipelining_with_spiral_remap(
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
-        optimizer_threads_status = []
 
     # TODO (SpiralPipe) Move to spiral_p2p
     @nvtx.annotate("comm_input_ckpt", color="red")

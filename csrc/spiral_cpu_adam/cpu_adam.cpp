@@ -1,4 +1,5 @@
 #include <torch/extension.h>
+#include <torch/csrc/cuda/Event.h>
 #include <cassert>
 #include <iostream>
 #include <stdio.h>
@@ -17,6 +18,7 @@
 
 #include <future>
 #include <spdlog/spdlog.h>
+#include <cuda_runtime.h>
 #include "thread_pool.hpp"
 
 static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
@@ -84,8 +86,13 @@ int _spiral_adam_step(int optimizer_id,
                  torch::Tensor& params,
                  torch::Tensor& grads,
                  torch::Tensor& exp_avg,
-                 torch::Tensor& exp_avg_sq)
+                 torch::Tensor& exp_avg_sq,
+                 cudaEvent_t offload_grad_ev)
 {
+    // NOTE (SpiralPipe) added event synchronization
+    // offload_grad_ev.synchronize();
+    cudaEventSynchronize(offload_grad_ev);
+
     auto params_c = params.contiguous();
     auto grads_c = grads.contiguous();
     auto exp_avg_c = exp_avg.contiguous();
@@ -132,6 +139,9 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
                            torch::Tensor& device_params)
 {
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
+    // NOTE (SpiralPipe) added event synchronization
+    // offload_grad_ev.synchronize();
+
     auto params_c = params.contiguous();
     auto device_params_c = device_params.contiguous();
     auto exp_avg_c = exp_avg.contiguous();
@@ -174,11 +184,12 @@ int spiral_adam_step(int optimizer_id,
                  torch::Tensor& params,
                  torch::Tensor& grads,
                  torch::Tensor& exp_avg,
-                 torch::Tensor& exp_avg_sq)
+                 torch::Tensor& exp_avg_sq,
+                 at::cuda::CUDAEvent& offload_grad_ev)
 {
     futures.emplace_back(pool.submit(_spiral_adam_step, optimizer_id, step, lr,
                                     beta1, beta2, epsilon, weight_decay,
-                                    bias_correction, params, grads, exp_avg, exp_avg_sq));
+                                    bias_correction, params, grads, exp_avg, exp_avg_sq, offload_grad_ev.event()));
     return 0;
 }
 
