@@ -457,8 +457,16 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             else:
                 assert (
                     param.spiral_tensor.shape == param.data.shape
-                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
-                param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
+                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"  
+                if get_thunder_group().IsParamDataLocal(param.spiral_id):  
+                    param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
+                else:
+                    param.data = torch.empty(param.spiral_shape, device=self.local_device)
+                    get_thunder_group().FetchRemoteParam(
+                        param.spiral_id,
+                        non_blocking,
+                        param.data.data_ptr()
+                    )
             if not non_blocking:
                 # NOTE: for non-blocking fetch, spiral_status should be changed after waiting in the caller
                 param.spiral_status = SpiralParamStatus.ACTIVE

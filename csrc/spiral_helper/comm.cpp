@@ -267,7 +267,7 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   // Initialize param mapping tbl
   param_mapping_tbl_ = (ParamDataInfo *)shared_ptr_;
   if (comm_info_.intra_rank_ == 0) {
-    memset(param_mapping_tbl_, 0, kCpuBufferSize);
+    memset(param_mapping_tbl_, 0, kCpuBufferHeaderSize);
   }
 
   // Initialize allocator
@@ -283,13 +283,16 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   CHECK_MPI(MPI_Win_create(data_ptr_, kCpuBufferSize, 1, MPI_INFO_NULL,
                            MPI_COMM_WORLD, &window_));
 
-  void *base;
-  MPI_Aint *size;
-  int *disp;
-  int flag;
-  CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_BASE, (void *)&base, &flag));
-  CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_SIZE, (void *)&size, &flag));
-  CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_DISP_UNIT, (void *)&disp, &flag));
+  {
+    void *base;
+    MPI_Aint *size;
+    int *disp;
+    int flag;
+    CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_BASE, (void *)&base, &flag));
+    CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_SIZE, (void *)&size, &flag));
+    CHECK_MPI(
+        MPI_Win_get_attr(window_, MPI_WIN_DISP_UNIT, (void *)&disp, &flag));
+  }
 
   CHECK_MPI(MPI_Barrier(mpi_comm_));
 }
@@ -427,9 +430,6 @@ bool Comm::IsParamDataLocal(const unsigned int param_id) const {
 
 void Comm::SyncParamDataInfo() {
   MPI_Barrier(MPI_COMM_WORLD);
-  int rank, size;
-  CHECK_MPI(MPI_Comm_rank(inter_comm_, &rank));
-  CHECK_MPI(MPI_Comm_size(inter_comm_, &size));
 
   if (comm_info_.intra_rank_ == 0) {
     CHECK_MPI(MPI_Allreduce(MPI_IN_PLACE, param_mapping_tbl_,
