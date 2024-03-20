@@ -262,7 +262,7 @@ class MegatronOptimizer(ABC):
                 args.sequence_parallel:
             grads = []
             for model_module in self.models:
-                unwrapped_model = unwrap_model( 
+                unwrapped_model = unwrap_model(
                     model_module, (torchDDP, LocalDDP, Float16Module))
                 for param in unwrapped_model.parameters():
                     if getattr(param, 'sequence_parallel', False):
@@ -587,7 +587,7 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
             for main_param in main_group:
                 if main_param.grad is not None:
                     main_grads.append(main_param.grad.data)
-        
+
         return main_grads
 
 
@@ -718,7 +718,7 @@ class FP32Optimizer(MegatronOptimizer):
 
 
     @torch.no_grad()
-    def step(self, args, timers):
+    def step(self, args, timers, **inner_step_kwargs):
         """Clip gradients (if needed) and step the base optimizer.
         Always return successful since there is no overflow."""
 
@@ -755,7 +755,7 @@ class FP32Optimizer(MegatronOptimizer):
         # Update parameters.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
-        self.optimizer.step()
+        self.optimizer.step(**inner_step_kwargs)
         timers('optimizer-inner-step').stop()
 
         # No overflow for FP32 optimizer.

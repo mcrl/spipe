@@ -765,15 +765,6 @@ def train_step(forward_step_func, data_iterator,
     args = get_args()
     timers = get_timers()
 
-    for p in model[-1].parameters(recurse=True):
-        spiral_print(f"before zero grad call >>" +
-                     f" param.grad: {p.grad}" +
-                     f" param.main_grad: " +
-                     f"{getattr(p, 'main_grad', 'not exist')}" +
-                     f"param.spiral_tensor.grad: {p.spiral_tensor.grad}" +
-                     f"param.spiral_tensor.main_grad: " +
-                     f"{getattr(p.spiral_tensor, 'main_grad', 'not exist')}")
-
     # Set grad to zero.
     if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
         for partition in model:
@@ -783,15 +774,6 @@ def train_step(forward_step_func, data_iterator,
             opt_ty.zero_grad()
     else:
         optimizer.zero_grad()
-
-    for p in model[-1].parameters(recurse=True):
-        spiral_print(f"after zero grad call >>" +
-                     f" param.grad: {p.grad}" +
-                     f" param.main_grad: " +
-                     f"{getattr(p, 'main_grad', 'not exist')}" +
-                     f"param.spiral_tensor.grad: {p.spiral_tensor.grad}" +
-                     f"param.spiral_tensor.main_grad: " +
-                     f"{getattr(p.spiral_tensor, 'main_grad', 'not exist')}")
 
     # Forward pass.
     timers('forward-backward', log_level=1).start(
@@ -803,7 +785,6 @@ def train_step(forward_step_func, data_iterator,
     if args.spiral_stage_optimizer:
         kwargs["spiral_stage_optimizer"] = optimizer
         kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
-
 
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,
@@ -840,6 +821,7 @@ def train_step(forward_step_func, data_iterator,
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
         timers('optimizer').stop()
     else:
+        # TODO (SpiralPipe) these values should be propagated from the retval of step()
         update_successful = True
         grad_norm = num_zeros_in_grad = 0
 
@@ -858,11 +840,19 @@ def train_step(forward_step_func, data_iterator,
 
     # Update learning rate.
     if update_successful:
-        increment = get_num_microbatches() * \
+        if args.spiral_stage_optimizer:
+            for spiral_stage_opt_param_scheduler in getattr(optimizer, "optimizer_param_scheduler_list"):
+                increment = get_num_microbatches() * \
                     args.micro_batch_size * \
                     args.data_parallel_size
-        opt_param_scheduler.step(increment=increment)
-        skipped_iter = 0
+                spiral_stage_opt_param_scheduler.step(increment=increment)
+            skipped_iter = 0
+        else:
+            increment = get_num_microbatches() * \
+                        args.micro_batch_size * \
+                        args.data_parallel_size
+            opt_param_scheduler.step(increment=increment)
+            skipped_iter = 0
     else:
         skipped_iter = 1
 

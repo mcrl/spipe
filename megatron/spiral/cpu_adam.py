@@ -119,7 +119,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             group.setdefault("amsgrad", False)
 
     @torch.no_grad()
-    def step(self, closure=None, fp16_param_groups=None):
+    def step(self, closure=None, fp16_param_groups=None, **kwargs):
         """Update the model parameters.
 
         .. note::
@@ -133,6 +133,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                 Defaults to ``None``.
             fp16_param_groups: FP16 GPU parameters to update. Performing the
                 copy here reduces communication time. Defaults to ``None``.
+            offload_grad_ev: Gradient offload event to synchronize before using grads to update weights
 
         Returns:
             loss: if ``closure`` is provided. Otherwise ``None``.
@@ -152,6 +153,9 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                 fp16_param_groups = [fp16_param_groups]
         elif fp16_param_groups is not None:
             fp16_param_groups = [[fp16_param_groups]]
+
+        # get spiral kwargs
+        offload_grad_ev = kwargs.get("spiral_offload_grad_ev", None)
 
         for group_id, group in enumerate(self.param_groups):
             for param_id, p in enumerate(group["params"]):
@@ -202,9 +206,9 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         state["exp_avg"],
                         state["exp_avg_sq"],
                         fp16_param_groups[group_id][param_id].data,
+                        offload_grad_ev,
                     )
                 else:
-                    print(f"py call adam_update for param")
                     self.ds_opt_adam.adam_update(
                         self.opt_id,
                         state["step"],
@@ -218,5 +222,10 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         p.grad.data,
                         state["exp_avg"],
                         state["exp_avg_sq"],
+                        offload_grad_ev,
                     )
         return loss
+
+    def sync(self):
+        self.ds_opt_adam.adam_sync()
+

@@ -129,6 +129,17 @@ class SpiralCUDAManager:
                 return 0
         return -1
 
+    def get_event(self, query: SpiralCUDAEventQuery_t) -> Optional[torch.cuda.Event]:
+        _target_event_hdl_deque = self._get_stream_event_hdl_deque(query.record_stream_name)[1]
+        for eventhdl in _target_event_hdl_deque:
+            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+                return eventhdl.event
+        # Query event from completed list if not found
+        for eventhdl in self.__completed_event_hdl_deque:
+            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+                return eventhdl.event
+        return None
+
     def _get_stream_event_hdl_deque(self, stream_name: str):
         assert (
             self.__stream_dict.get(stream_name) is not None

@@ -160,24 +160,6 @@ def _post_wait_set_spiral_param_status(module, status: SpiralParamStatus):
             setattr(param, "spiral_status", status)
 
 
-def _weight_update(optimizer, bwd_stage_id, event_query, args, timers):
-    torch.cuda.nvtx.range_push(f"opt b[{bwd_stage_id}]")
-    if (
-        get_thunder_cuda_manager().wait_event(event_query, sync=True)
-        == -1
-    ):
-        raise RuntimeError("sync_event failed")
-    optimizer.set_bwd_stage(bwd_stage_id)
-    if timers is not None:
-        timers('optimizer', log_level=1).start(barrier=args.barrier_with_L1_time)
-    # TODO (SpiralPipe) timers is None. Fix it
-    # optimizer.step(args, timers)
-    optimizer.step(args, get_timers())
-    if timers is not None:
-        timers('optimizer').stop()
-    torch.cuda.nvtx.range_pop()
-
-
 def forward_backward_pipelining_with_spiral_remap(
     *,
     forward_step_func,
@@ -771,24 +753,16 @@ def forward_backward_pipelining_with_spiral_remap(
                     None,
                     tag=f"optimizer:b{bwd_stage_id}"
                 )
+                # although currently unused, for backward compatibility
                 if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
-
-        # spiral stage optimizer
-        if optimize_after_bwd_stage:
-            # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
-            _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
-                _weight_update,
-                *(
-                    optimizer,
-                    bwd_stage_id,
-                    offload_event_queries.pop(f"optimizer:b{bwd_stage_id}"),
-                    get_args(),
-                    timers,
-                ),
-            )
-            optimizer_threads_status.append(_optimizer_thread_status)
+                # TODO (SpiralPipe) Must call optimizer[bwd_stage_id].reduce_model_grads() here
+                # spiral stage optimizer
+                inner_step_kwargs = {}
+                inner_step_kwargs["spiral_offload_grad_ev"] = get_thunder_cuda_manager().get_event(offload_grad_curr)
+                # TODO (SpiralPipe) timers is None. Fix it
+                update_successful, grad_norm, num_zeros_in_grad = optimizer[bwd_stage_id].step(get_args(), get_timers(), **inner_step_kwargs) # TODO (SpiralPipe) propagate these values to train_step
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -806,11 +780,9 @@ def forward_backward_pipelining_with_spiral_remap(
 
     # join spiral stage optimizer
     if optimize_after_bwd_stage:
-        for _optimizer_thread_status in as_completed(optimizer_threads_status):
-            try:
-                _optimizer_thread_status.result()
-            except Exception as e:
-                raise Exception(f"Optimizer thread raised an exception: {e}")
+        for bwd_stage_optimizer in optimizer:
+            assert hasattr(getattr(bwd_stage_optimizer, "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
+            bwd_stage_optimizer.optimizer.sync()
 
     if (
         get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))
@@ -1319,35 +1291,25 @@ def forward_backward_pipelining_with_spiral(
                     None,
                     tag=f"optimizer:b{bwd_stage_id}"
                 )
+                # NOTE (SpiralPipe) although currently unused, for backward compatibility
                 if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
-
-        # spiral stage optimizer
-        if optimize_after_bwd_stage:
-            # NOTE (SpiralPipe) multi-processing (either python multiprocessing or torch multiprocessing) does not work since cuda ctx is not shared between processes. So, we use threading.
-            _optimizer_thread_status = getattr(optimizer, "optimizer_thread_pool").submit(
-                _weight_update,
-                *(
-                    optimizer,
-                    bwd_stage_id,
-                    offload_event_queries.pop(f"optimizer:b{bwd_stage_id}"),
-                    get_args(),
-                    timers,
-                ),
-            )
-            optimizer_threads_status.append(_optimizer_thread_status)
+                # TODO (SpiralPipe) Must call optimizer[bwd_stage_id].reduce_model_grads() here
+                # spiral stage optimizer
+                inner_step_kwargs = {}
+                inner_step_kwargs["spiral_offload_grad_ev"] = get_thunder_cuda_manager().get_event(offload_grad_curr)
+                # TODO (SpiralPipe) timers is None. Fix it
+                update_successful, grad_norm, num_zeros_in_grad = optimizer[bwd_stage_id].step(get_args(), get_timers(), **inner_step_kwargs) # TODO (SpiralPipe) propagate these values to train_step
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
 
     # join spiral stage optimizer
     if optimize_after_bwd_stage:
-        for _optimizer_thread_status in as_completed(optimizer_threads_status):
-            try:
-                _optimizer_thread_status.result()
-            except Exception as e:
-                raise Exception(f"Optimizer thread raised an exception: {e}")
+        for bwd_stage_optimizer in optimizer:
+            assert hasattr(getattr(bwd_stage_optimizer, "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
+            bwd_stage_optimizer.optimizer.sync()
 
     if (
         get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))
