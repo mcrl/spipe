@@ -306,8 +306,6 @@ Comm::~Comm() {
   MPI_Barrier(intra_comm_);
   MPI_Barrier(inter_comm_);
 
-  CHECK_MPI(MPI_Win_free(&window_));
-
   // Destroy communicators
   CHECK_MPI(MPI_Comm_free(&mpi_comm_));
   CHECK_MPI(MPI_Comm_free(&inter_comm_));
@@ -315,6 +313,9 @@ Comm::~Comm() {
 
   if (shared_memory_size_ == 0)
     return;
+
+  // Distroy memory window
+  CHECK_MPI(MPI_Win_free(&window_));
 
   // NOTE: since allocator is designed to be a singleton,
   // we do not need to delete it here.

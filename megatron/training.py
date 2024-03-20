@@ -538,11 +538,13 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             #                 if is_spiral_param(param):
             #                     spiral_print(debug_param2id_shape_status(param) + str(param.spiral_tensor.data))
 
-            # NOTE (SpiralPipe) Modify this assertion after multi-node support @DY
+            # Assert pinned memory allocation
             for stage_model in model:
                 for param in stage_model.parameters(recurse=True):
                     if is_spiral_param(param):
-                        assert getattr(param, "spiral_tensor").is_pinned(), f"{debug_param2name_id(param)} is not pinned. This will change in multi-node setting, as the parameters allocated in the host will only be pinned"
+                        if mpu.is_spiral_remap() and get_thunder_group().IsParamDataLocal(param.spiral_id):
+                            continue
+                        assert getattr(param, "spiral_tensor").is_pinned(), f"{debug_param2name_id(param)} on local node is not pinned."
 
         if mpu.is_spiral_remap():
             get_thunder_group().UnsetSpiralCPUAllocator()
