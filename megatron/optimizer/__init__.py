@@ -95,7 +95,7 @@ def get_megatron_optimizer(model,
     # Determine whether the params have main-grad field.
     params_have_main_grad = False
     if args.spiral:
-        # NOTE (SpiralPipe) `params` here annotates the params on the device of the optimizer. It is not always the same as the params referenced during training. For SpiralPipe, `params` are the offloaded params and should only have .grad field, while the params referred during can have both .main_grad and .grad field. Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary to be performed.
+        # NOTE (SpiralPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training. For SpiralPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field. Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary.
         params_have_main_grad = False
     else:
         if args.DDP_impl == 'local':
