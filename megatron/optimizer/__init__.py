@@ -8,7 +8,6 @@ from apex.optimizers import FusedSGD as SGD
 from megatron import get_args
 from megatron.spiral.init_context import SpiralParamStatus
 from megatron.spiral.utils import is_spiral_param
-from megatron.spiral.cpu_adam import SpiralCPUAdam
 
 from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
@@ -142,7 +141,16 @@ def get_megatron_optimizer(model,
 
     if args.spiral:
         assert args.optimizer == 'adam', 'SpiralPipe only support Adam'
-        optimizer = SpiralCPUAdam(
+
+        # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
+        if args.spiral_stage_optimizer:
+            from megatron.spiral.cpu_adam import SpiralCPUAdam
+            inner_opt_ty = SpiralCPUAdam
+        else:
+            from deepspeed.ops.adam import DeepSpeedCPUAdam
+            inner_opt_ty = DeepSpeedCPUAdam
+
+        optimizer = inner_opt_ty(
             param_groups,
             lr=args.lr,
             weight_decay=args.weight_decay,
