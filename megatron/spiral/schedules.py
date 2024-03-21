@@ -4,7 +4,6 @@ import nvtx
 import sys
 from typing import Callable, Iterator, List, Optional, Union, Tuple
 from enum import Enum
-from concurrent.futures import wait, as_completed
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP

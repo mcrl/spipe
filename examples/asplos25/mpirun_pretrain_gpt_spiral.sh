@@ -1,6 +1,6 @@
 #!/bin/bash
 
-MPIRUN=$HOME/openmpi-5.0.2/build/bin/mpirun
+MPIRUN=$OPENMPI_ROOT/bin/mpirun
 MPI_OPTIONS="-mca btl ^openib -mca pml ucx"
 MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
 
@@ -13,10 +13,10 @@ conda activate Megatron-cuda11.7
 ## mpi
 NP=4
 GPUS_PER_NODE=4
-HOSTS="b0:${GPUS_PER_NODE}" # b3:2,b4:2
+HOSTS="b1:${GPUS_PER_NODE}" # b3:2,b4:2
 
 ## torch dist.
-export MASTER_ADDR="b0"
+export MASTER_ADDR="b1"
 export MASTER_PORT=6003
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export CUDA_DEVICE_MAX_CONNECTIONS=1
@@ -41,7 +41,6 @@ SPIRAL_ARGS="
     --spiral-backward-virtual-size 3 \
     --spiral-recompute-activations \
     --spiral-debug-backend \
-    --spiral-stage-optimizer \
     --megatron-mpi
 "
 
