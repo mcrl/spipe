@@ -3,12 +3,6 @@ class SpiralStageOptimizer:
     def __init__(self, optimizers, *args, **kwargs):
         self.optimizer_list = optimizers  # do not change attr name
 
-    def get_total_param_groups(self):
-        param_groups = []
-        for optimizer in self.optimizer_list:
-            param_groups.extend(optimizer.param_groups)
-        return param_groups
-
     # Required for checkpointing
     def state_dict(self):
         state_dict = {"optimizer_list": []}
