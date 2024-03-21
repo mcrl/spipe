@@ -69,8 +69,8 @@ void SpiralCPUAllocator::lazy_init(uintptr_t base, size_t offset, size_t size, s
   align_ = align;
 
   // pin allocator memory
-  CHECK_CUDA(cudaHostRegister((void*)(base_ + offset_), size_, cudaHostRegisterPortable));
-  
+  //CHECK_CUDA(cudaHostRegister((void*)(base_ + offset_), size_, cudaHostRegisterPortable));
+
   Block* dummy_head = new Block(offset_, 0, nullptr, nullptr);
   Block* body = new Block(offset_, size_, nullptr, nullptr);
   Block* dummy_tail = new Block(offset_, 0, nullptr, nullptr);

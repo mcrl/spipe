@@ -11,7 +11,7 @@ setup(
     ext_modules=[
         CUDAExtension(
             name='spiral_helper',
-            sources = sorted(glob('spiral_helper/*.cpp')),
+            sources=sorted(glob('spiral_helper/*.cpp')),
             include_dirs=[
                 srcpath / 'external/spdlog/include',
                 os.path.join(os.environ['MPI_BUILD_DIR'], 'include'),
@@ -21,8 +21,9 @@ setup(
                 os.path.join(os.environ['MPI_BUILD_DIR'], 'lib'),
                 os.path.join(os.environ['CUDA_BUILD_DIR'], 'lib64'),
             ],
-            libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart'], # linker. -lmpi
-            extra_compile_args=['-g', '-fvisibility=hidden']),
+            libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart', 'nvToolsExt'],
+            extra_compile_args=['-g', '-fvisibility=hidden']
+        )
     ],
     cmdclass={
         'build_ext': BuildExtension
