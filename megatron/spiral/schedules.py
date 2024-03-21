@@ -29,6 +29,8 @@ _PYTHON_VERSION = sys.version_info
 # Types
 Shape = Union[List[int], torch.Size]
 
+# Constants
+_DEBUG_SCHEDULE = True
 
 class CkptSendRecvType(Enum):
     SEND = "send"
@@ -260,7 +262,8 @@ def forward_backward_pipelining_with_spiral_remap(
     # TODO (SpiralPipe) Move to spiral_p2p
     @nvtx.annotate("comm_input_ckpt", color="red")
     def comm_input_ckpt(schedule):
-        spiral_print(f"comm: {schedule}")
+        if _DEBUG_SCHEDULE:
+            spiral_print(f"comm: {schedule}")
 
         tensor_sends = []
         send_ranks = []
@@ -284,11 +287,13 @@ def forward_backward_pipelining_with_spiral_remap(
                 ), f"[RECV] phase_fwd_rank = {phase_fwd_rank}, rank = {rank} mismatch"
 
                 if phase_id == 0:
-                    spiral_print(_prefix + " Phase 0 => insert None to recvs")
+                    if _DEBUG_SCHEDULE:
+                        spiral_print(_prefix + " Phase 0 => insert None to recvs")
                     insert_idx_to_recvs.append(recv_idx)
                     insert_value_to_recvs.append(None)
                 elif rank == mpu.get_pipeline_model_parallel_rank():
-                    spiral_print(_prefix + " Self recv => pop ckpt and insert to recvs")
+                    if _DEBUG_SCHEDULE:
+                        spiral_print(_prefix + " Self recv => pop ckpt and insert to recvs")
                     insert_idx_to_recvs.append(recv_idx)
                     # NOTE (SpiralPipe) Using the popped input tensor from original fwd stage can lead to trouble, as it contains
                     # the computation graph constructed already. We are prone to this error when #fwd != #bwd and hence the same rank
@@ -305,9 +310,10 @@ def forward_backward_pipelining_with_spiral_remap(
                     ), "Input ckpt must require grad before feeding to BWD"
                     insert_value_to_recvs.append(input_ckpt_)
                 else:
-                    spiral_print(
-                        _prefix + " Recv from other rank => append to recv_ranks"
-                    )
+                    if _DEBUG_SCHEDULE:
+                        spiral_print(
+                            _prefix + " Recv from other rank => append to recv_ranks"
+                        )
                     recv_ranks.append(rank)
                 recv_idx += 1
 
@@ -317,14 +323,17 @@ def forward_backward_pipelining_with_spiral_remap(
                 ), f"[SEND] phase_fwd_rank = {phase_fwd_rank}, self = {mpu.get_pipeline_model_parallel_rank()} mismatch"
 
                 if phase_id == 0:
-                    spiral_print(_prefix + " Phase 0 => skip")
+                    if _DEBUG_SCHEDULE:
+                        spiral_print(_prefix + " Phase 0 => skip")
                 elif rank == mpu.get_pipeline_model_parallel_rank():
-                    spiral_print(_prefix + " Self send => skip")
+                    if _DEBUG_SCHEDULE:
+                        spiral_print(_prefix + " Self send => skip")
                 else:
-                    spiral_print(
-                        _prefix
-                        + " Send to other rank => pop ckpt & append to tensor sends and append to send_ranks"
-                    )
+                    if _DEBUG_SCHEDULE:
+                        spiral_print(
+                            _prefix
+                            + " Send to other rank => pop ckpt & append to tensor sends and append to send_ranks"
+                        )
                     tensor_sends.append(
                         model[local_stage_id]
                         .module[local_phase_id]
@@ -405,7 +414,8 @@ def forward_backward_pipelining_with_spiral_remap(
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
-        spiral_print(f"Start fwd stage {fwd_stage_id}")
+        if _DEBUG_SCHEDULE:
+            spiral_print(f"Start fwd stage {fwd_stage_id}")
         mpu.set_spiral_forward_virtual_rank(fwd_stage_id)
 
         assert (
@@ -455,7 +465,8 @@ def forward_backward_pipelining_with_spiral_remap(
 
         # fwd microbatches
         for i in range(num_microbatches):
-            spiral_print(f" microbatch {i}")
+            if _DEBUG_SCHEDULE:
+                spiral_print(f" microbatch {i}")
             torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{i}]")
 
             # send input tensor ckpt
@@ -571,7 +582,8 @@ def forward_backward_pipelining_with_spiral_remap(
     for bwd_stage_id in range(
         mpu.get_spiral_backward_virtual_size() - 1, -1, -1
     ):
-        spiral_print(f"Start bwd stage {bwd_stage_id}")
+        if _DEBUG_SCHEDULE:
+            spiral_print(f"Start bwd stage {bwd_stage_id}")
         mpu.set_spiral_backward_virtual_rank(bwd_stage_id)
 
         assert (
@@ -619,7 +631,8 @@ def forward_backward_pipelining_with_spiral_remap(
 
         # bwd microbatches
         for i in range(num_microbatches):
-            spiral_print(f" microbatch {i}")
+            if _DEBUG_SCHEDULE:
+                spiral_print(f" microbatch {i}")
             torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{i}]")
 
             # recv input tensor ckpt
@@ -745,9 +758,12 @@ def forward_backward_pipelining_with_spiral_remap(
                 raise RuntimeError("record_event failed")
             offload_event_queries[free_curr.tag] = free_curr
 
-            # offload gradient
-            model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
+            # if not spiral stage optimizer, then gradient should be manually reduced and offloaded after `forward_backward_func` at train_step()
             if optimize_after_bwd_stage:
+                # reduce grads
+                optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
+                # offload grads
+                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
                     None,
@@ -757,8 +773,7 @@ def forward_backward_pipelining_with_spiral_remap(
                 if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
-                # TODO (SpiralPipe) Must call optimizer[bwd_stage_id].reduce_model_grads() here
-                # spiral stage optimizer
+                # optimizer step
                 inner_step_kwargs = {}
                 inner_step_kwargs["spiral_offload_grad_ev"] = get_thunder_cuda_manager().get_event(offload_grad_curr)
                 # TODO (SpiralPipe) timers is None. Fix it
@@ -949,7 +964,8 @@ def forward_backward_pipelining_with_spiral(
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
-        spiral_print(f"Start fwd stage {fwd_stage_id}")
+        if _DEBUG_SCHEDULE:
+            spiral_print(f"Start fwd stage {fwd_stage_id}")
         mpu.set_spiral_forward_virtual_rank(fwd_stage_id)
 
         assert (
@@ -992,7 +1008,8 @@ def forward_backward_pipelining_with_spiral(
 
         # fwd microbatches
         for i in range(num_microbatches):
-            spiral_print(f" microbatch {i}")
+            if _DEBUG_SCHEDULE:
+                spiral_print(f" microbatch {i}")
             torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{i}]")
 
             # set input tensor
@@ -1116,7 +1133,8 @@ def forward_backward_pipelining_with_spiral(
     for bwd_stage_id in range(
         mpu.get_spiral_backward_virtual_size() - 1, -1, -1
     ):
-        spiral_print(f"Start bwd stage {bwd_stage_id}")
+        if _DEBUG_SCHEDULE:
+            spiral_print(f"Start bwd stage {bwd_stage_id}")
         mpu.set_spiral_backward_virtual_rank(bwd_stage_id)
 
         assert (
@@ -1160,7 +1178,8 @@ def forward_backward_pipelining_with_spiral(
 
         # bwd microbatches
         for i in range(num_microbatches):
-            spiral_print(f" microbatch {i}")
+            if _DEBUG_SCHEDULE:
+                spiral_print(f" microbatch {i}")
             torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{i}]")
 
             # set output tensor grad
@@ -1283,20 +1302,22 @@ def forward_backward_pipelining_with_spiral(
                 raise RuntimeError("record_event failed")
             offload_event_queries[free_curr.tag] = free_curr
 
-            # offload gradient
-            model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
+            # if not spiral stage optimizer, then gradient should be manually reduced and offloaded after `forward_backward_func` at train_step()
             if optimize_after_bwd_stage:
+                # reduce grads
+                optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
+                # offload grads
+                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
                     None,
                     tag=f"optimizer:b{bwd_stage_id}"
                 )
-                # NOTE (SpiralPipe) although currently unused, for backward compatibility
+                # although currently unused, for backward compatibility
                 if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
-                # TODO (SpiralPipe) Must call optimizer[bwd_stage_id].reduce_model_grads() here
-                # spiral stage optimizer
+                # optimizer step
                 inner_step_kwargs = {}
                 inner_step_kwargs["spiral_offload_grad_ev"] = get_thunder_cuda_manager().get_event(offload_grad_curr)
                 # TODO (SpiralPipe) timers is None. Fix it

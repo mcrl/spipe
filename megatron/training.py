@@ -807,7 +807,12 @@ def train_step(forward_step_func, data_iterator,
         torch.cuda.empty_cache()
 
     # Reduce gradients.
-    optimizer.reduce_model_grads(args, timers)
+    if not args.spiral_stage_optimizer:
+        optimizer.reduce_model_grads(args, timers)
+        # blocking offload gradients, if not yet offloaded
+        if args.spiral:
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=False)
 
     # Vision gradients.
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
