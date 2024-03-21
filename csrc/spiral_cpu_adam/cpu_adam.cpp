@@ -18,7 +18,6 @@
 
 #include <future>
 #include <spdlog/spdlog.h>
-#include <cuda_runtime.h>
 #include "thread_pool.hpp"
 
 static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
@@ -87,11 +86,15 @@ int _spiral_adam_step(int optimizer_id,
                  torch::Tensor& grads,
                  torch::Tensor& exp_avg,
                  torch::Tensor& exp_avg_sq,
-                 /* offload_grad_ev passed as ptr since CUDAEvent deletes copy ctor */
-                 at::cuda::CUDAEvent* offload_grad_ev)
+                 py::object& offload_grad_ev)
 {
-    // NOTE (SpiralPipe) added event synchronization
-    offload_grad_ev->synchronize();
+    if (offload_grad_ev != py::none()) {
+        // NOTE (SpiralPipe) added event synchronization
+        // - offload_grad_ev: torch.cuda.Event
+        // - offload_grad_ev_sync: torch.cuda.Event.synchronize()
+        py::object offload_grad_ev_sync = offload_grad_ev.attr("synchronize");
+        offload_grad_ev_sync();
+    }
 
     auto params_c = params.contiguous();
     auto grads_c = grads.contiguous();
@@ -137,12 +140,16 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
                            torch::Tensor& exp_avg,
                            torch::Tensor& exp_avg_sq,
                            torch::Tensor& device_params,
-                           /* offload_grad_ev passed as ptr since CUDAEvent deletes copy ctor */
-                           at::cuda::CUDAEvent* offload_grad_ev)
+                           py::object& offload_grad_ev)
 {
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
-    // NOTE (SpiralPipe) added event synchronization
-    offload_grad_ev->synchronize();
+    if (offload_grad_ev != py::none()) {
+        // NOTE (SpiralPipe) added event synchronization
+        // - offload_grad_ev: torch.cuda.Event
+        // - offload_grad_ev_sync: torch.cuda.Event.synchronize()
+        py::object offload_grad_ev_sync = offload_grad_ev.attr("synchronize");
+        offload_grad_ev_sync();
+    }
 
     auto params_c = params.contiguous();
     auto device_params_c = device_params.contiguous();
@@ -187,11 +194,11 @@ int spiral_adam_step(int optimizer_id,
                  torch::Tensor& grads,
                  torch::Tensor& exp_avg,
                  torch::Tensor& exp_avg_sq,
-                 at::cuda::CUDAEvent& offload_grad_ev)
+                 py::object& offload_grad_ev)
 {
     futures.emplace_back(pool.submit(_spiral_adam_step, optimizer_id, step, lr,
                                     beta1, beta2, epsilon, weight_decay,
-                                    bias_correction, params, grads, exp_avg, exp_avg_sq, &offload_grad_ev));
+                                    bias_correction, params, grads, exp_avg, exp_avg_sq, offload_grad_ev));
     return 0;
 }
 
@@ -208,11 +215,11 @@ int spiral_adam_step_plus_copy(int optimizer_id,
                            torch::Tensor& exp_avg,
                            torch::Tensor& exp_avg_sq,
                            torch::Tensor& device_params,
-                           at::cuda::CUDAEvent& offload_grad_ev)
+                           py::object& offload_grad_ev)
 {
     futures.emplace_back(pool.submit(_spiral_adam_step_plus_copy, optimizer_id, step, lr,
                                     beta1, beta2, epsilon, weight_decay,
-                                    bias_correction, params, grads, exp_avg, exp_avg_sq, device_params, &offload_grad_ev));
+                                    bias_correction, params, grads, exp_avg, exp_avg_sq, device_params, offload_grad_ev));
     return 0;
 }
 
