@@ -797,6 +797,12 @@ def forward_backward_pipelining_with_spiral_remap(
         for bwd_stage_optimizer in optimizer:
             assert hasattr(getattr(bwd_stage_optimizer, "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
             bwd_stage_optimizer.optimizer.sync()
+        # flush offload event queries
+        for _, offload_event_query in offload_event_queries.items():
+            get_thunder_cuda_manager().wait_event(offload_event_query)
+        # free grads
+        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+            model[-bwd_stage_id - 1].spiral_free_grad()
 
     if (
         get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))
@@ -1330,6 +1336,12 @@ def forward_backward_pipelining_with_spiral(
         for bwd_stage_optimizer in optimizer:
             assert hasattr(getattr(bwd_stage_optimizer, "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
             bwd_stage_optimizer.optimizer.sync()
+        # flush offload event queries
+        for _, offload_event_query in offload_event_queries.items():
+            get_thunder_cuda_manager().wait_event(offload_event_query)
+        # free grads
+        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+            model[-bwd_stage_id - 1].spiral_free_grad()
 
     if (
         get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))

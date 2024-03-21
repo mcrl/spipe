@@ -369,6 +369,9 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         module.spiral_offload_grad = lambda *args, **kwargs: self._offload_grad_module(
             module, *args, **kwargs
         )
+        module.spiral_free_grad = lambda *args, **kwargs: self._free_grad_module(
+            module, *args, **kwargs
+        )
         module.spiral_save_params_info = lambda *args, **kwargs: self._save_module_params_info(
             module, *args, **kwargs
         )
@@ -500,6 +503,18 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     param.spiral_tensor.grad = param.grad.to(
                         self.remote_device, non_blocking=non_blocking
                     )
+        def _free_grad(param: Parameter) -> None:
+            """Free grad of a parameter."""
+            # Determine whether the params have main-grad field
+            params_have_main_grad = False
+            if get_args().DDP_impl == "local":
+                params_have_main_grad = True
+
+            if params_have_main_grad:
+                assert hasattr(param, "main_grad")
+                param.main_grad = None
+            if hasattr(param, "grad"):
+                param.grad = None
 
         param.free = lambda *args, **kwargs: _free_data(param, *args, **kwargs)
         param.offload = lambda *args, **kwargs: _offload_data(param, *args, **kwargs)
@@ -507,6 +522,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         param.offload_grad = lambda *args, **kwargs: _offload_grad(
             param, *args, **kwargs
         )
+        param.free_grad = lambda *args, **kwargs: _free_grad(param, *args, **kwargs)
 
     @nvtx.annotate("fetch_module", color="orange")
     def _fetch_module(self, module, non_blocking=False):
@@ -542,6 +558,18 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.offload_grad(non_blocking=non_blocking)
         spiral_report_memory(
             f"after offload grad module {debug_module2class_id(module)}"
+        )
+
+    @nvtx.annotate("free_grad_module", color="white")
+    def _free_grad_module(self, module, non_blocking=False):
+        spiral_report_memory(
+            f"before free grad module {debug_module2class_id(module)}"
+        )
+        for param in module.parameters(recurse=True):
+            if is_spiral_param(param):
+                param.free_grad()
+        spiral_report_memory(
+            f"after free grad module {debug_module2class_id(module)}"
         )
 
     # NOTE (SpiralPipe) Building w/o remapping skips this function call, as it does not remap param data, hence no need to save param data info
