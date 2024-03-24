@@ -24,6 +24,20 @@ class SpiralStageOptimizer:
         """
         pass
 
+    # Promote param_groups so it can be retrieved or set via
+    # "optimizer_instance.param_groups"
+    # (for example, to adjust the learning rate)
+    def _get_param_groups(self):
+        param_groups = []
+        for optimizer in self.optimizer_list:
+            param_groups.extend(optimizer.param_groups)
+        return param_groups
+
+    param_groups = property(_get_param_groups)
+
+    def get_loss_scale(self, opt_ty_idx=0):
+        return self.optimizer_list[opt_ty_idx].get_loss_scale()
+
     @staticmethod
     def process_step_returns(step_rets: list):
         """Static method to reduce the return values of individual optimizer steps."""
