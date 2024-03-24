@@ -156,6 +156,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
 
         # get spiral kwargs
         offload_grad_ev = kwargs.get("spiral_offload_grad_ev", None)
+        ev_long = getattr(offload_grad_ev, "cuda_event", -1)
 
         for group_id, group in enumerate(self.param_groups):
             for param_id, p in enumerate(group["params"]):
@@ -206,7 +207,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         state["exp_avg"],
                         state["exp_avg_sq"],
                         fp16_param_groups[group_id][param_id].data,
-                        offload_grad_ev,
+                        ev_long,
                     )
                 else:
                     self.ds_opt_adam.adam_update(
@@ -222,7 +223,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         p.grad.data,
                         state["exp_avg"],
                         state["exp_avg_sq"],
-                        offload_grad_ev,
+                        ev_long,
                     )
         return loss
 
