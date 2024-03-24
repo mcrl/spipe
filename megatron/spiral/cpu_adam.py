@@ -229,4 +229,3 @@ class SpiralCPUAdam(torch.optim.Optimizer):
 
     def sync(self):
         self.ds_opt_adam.adam_sync()
-

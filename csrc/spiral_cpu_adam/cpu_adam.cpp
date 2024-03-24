@@ -95,11 +95,12 @@ int _spiral_adam_step(int optimizer_id,
     if (_DEBUG_CPU_ADAM)
       spdlog::info("Event is not provided. Skip synchronization");
   } else {
-    if (_DEBUG_CPU_ADAM)
-      spdlog::info("Event is provided. Wait offload event");
     cudaEvent_t ev = (cudaEvent_t)ev_long;
     CHECK_CUDA(cudaEventSynchronize(ev));
   }
+
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: Start step");
 
   auto params_c = params.contiguous();
   auto grads_c = grads.contiguous();
@@ -122,8 +123,14 @@ int _spiral_adam_step(int optimizer_id,
               params_c.numel(), nullptr,
               (params.options().dtype() == at::kHalf));
 
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: End step");
+
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
   opt->SynchronizeStreams();
+
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: Sync stream");
 #endif
 
   return 0;
@@ -151,11 +158,12 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
     if (_DEBUG_CPU_ADAM)
       spdlog::info("Event is not provided. Skip synchronization");
   } else {
-    if (_DEBUG_CPU_ADAM)
-      spdlog::info("Event is provided. Wait offload event");
     cudaEvent_t ev = (cudaEvent_t)ev_long;
     CHECK_CUDA(cudaEventSynchronize(ev));
   }
+
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: Start step");
 
   auto params_c = params.contiguous();
   auto device_params_c = device_params.contiguous();
@@ -178,7 +186,12 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
               params_c.numel(), device_params_ptr,
               (params.options().dtype() == at::kHalf));
 
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: End step");
+
   opt->SynchronizeStreams();
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: Sync stream");
 #else
   assert(false);
 #endif
@@ -230,10 +243,13 @@ int spiral_adam_step_plus_copy(int optimizer_id,
 
 void spiral_adam_synchronize()
 {
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: Synchronize");
+
   for (auto& f : futures) {
     if (f.get() != 0) {
       // Non-zero future value indicates an error
-      assert(f.get() == 0);
+      throw std::runtime_error("Error produced during Adam step is detected");
     }
   }
   futures.clear();

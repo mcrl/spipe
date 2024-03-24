@@ -146,6 +146,12 @@ class SpiralCUDAManager:
         ), f"Stream {stream_name} is not initialized"
         return self.__stream_dict.get(stream_name)
 
+    def __repr__(self) -> str:
+        _str = ""
+        for stream_name, (stream, event_hdl_deque) in self.__stream_dict.items():
+            _str += f"{stream_name}({len(event_hdl_deque)}) "
+        return _str
+
     def __del__(self):
         for stream_name, (stream, event_hdl_deque) in self.__stream_dict.items():
             if len(event_hdl_deque) > 0:

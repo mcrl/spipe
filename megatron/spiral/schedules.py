@@ -30,7 +30,7 @@ _PYTHON_VERSION = sys.version_info
 Shape = Union[List[int], torch.Size]
 
 # Constants
-_DEBUG_SCHEDULE = False
+_DEBUG_SCHEDULE = True
 
 class CkptSendRecvType(Enum):
     SEND = "send"
@@ -802,13 +802,9 @@ def forward_backward_pipelining_with_spiral_remap(
         if not forward_only:
             comm_input_ckpt(next(ckpt_send_recv_schedule))
 
-    # join spiral stage optimizer
     if optimize_after_bwd_stage:
-        for bwd_stage_optimizer in optimizer:
-            assert hasattr(getattr(bwd_stage_optimizer, "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
-            bwd_stage_optimizer.optimizer.sync()
-        # flush offload event queries
         for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+            # flush offload event queries
             if (
                 get_thunder_cuda_manager().wait_event(
                     offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}")
@@ -816,9 +812,13 @@ def forward_backward_pipelining_with_spiral_remap(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-        # free grads
-        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+            # free grads
             model[-bwd_stage_id - 1].spiral_free_grad()
+            # join optimizer
+            assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
+            optimizer[bwd_stage_id].optimizer.sync()
+            if _DEBUG_SCHEDULE:
+                spiral_print(f"Optimizer synced for stage {bwd_stage_id}")
 
     if (
         get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))
@@ -1353,13 +1353,9 @@ def forward_backward_pipelining_with_spiral(
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
 
-    # join spiral stage optimizer
     if optimize_after_bwd_stage:
-        for bwd_stage_optimizer in optimizer:
-            assert hasattr(getattr(bwd_stage_optimizer, "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
-            bwd_stage_optimizer.optimizer.sync()
-        # flush offload event queries
         for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+            # flush offload event queries
             if (
                 get_thunder_cuda_manager().wait_event(
                     offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}")
@@ -1367,9 +1363,13 @@ def forward_backward_pipelining_with_spiral(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-        # free grads
-        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
-            model[-bwd_stage_id - 1].spiral_free_grad()
+            # free grads
+            model[bwd_stage_id].spiral_free_grad()
+            # join optimizer
+            assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
+            optimizer[bwd_stage_id].optimizer.sync()
+            if _DEBUG_SCHEDULE:
+                spiral_print(f"Optimizer synced for stage {bwd_stage_id}")
 
     if (
         get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"free:b0"))
