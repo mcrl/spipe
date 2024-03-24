@@ -5,15 +5,17 @@ from torch.utils.cpp_extension import CppExtension, CUDAExtension, BuildExtensio
 from glob import glob
 
 srcpath = pathlib.Path(__file__).parent.absolute()
+csrc = os.path.abspath(__file__ + '/../../')
 
 setup(
     name='spiral_helper',
     ext_modules=[
         CUDAExtension(
             name='spiral_helper',
-            sources = sorted(glob('spiral_helper/*.cpp')),
+            sources = sorted(glob(os.path.join(srcpath, '*.cpp'))),
             include_dirs=[
-                srcpath / 'external/spdlog/include',
+                os.path.join(csrc, 'external/spdlog/include'),
+                os.path.join(csrc, 'common'),
                 os.path.join(os.environ['MPI_BUILD_DIR'], 'include'),
                 os.path.join(os.environ['CUDA_BUILD_DIR'], 'include'),
             ],

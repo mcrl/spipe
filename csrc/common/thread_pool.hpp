@@ -1,14 +1,14 @@
-#include <thread>
-#include <vector>
-#include <mutex>
-#include <condition_variable>
-#include <queue>
-#include <functional>
 #include <atomic>
-#include <stdexcept>
+#include <condition_variable>
+#include <functional>
 #include <future>
-#include <utility>
+#include <mutex>
+#include <queue>
+#include <stdexcept>
 #include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 using namespace std;
 
@@ -21,6 +21,7 @@ public:
   future<typename result_of<F(Args...)>::type> submit(F&& f, Args&&... args);
 
   void execute();
+
 private:
   const size_t _max_threads;
   vector<thread> _threads;
@@ -33,14 +34,17 @@ private:
   bool _exit;
 };
 
-ThreadPool::ThreadPool(size_t max_threads) : _max_threads(max_threads), _n_ready(0), _exit(false) {
+ThreadPool::ThreadPool(size_t max_threads)
+  : _max_threads(max_threads), _n_ready(0), _exit(false)
+{
   _threads.reserve(max_threads);
   for (size_t i = 0; i < max_threads; i++) {
     _threads.emplace_back(thread(bind(&ThreadPool::execute, this)));
   }
 }
 
-ThreadPool::~ThreadPool() {
+ThreadPool::~ThreadPool()
+{
   {
     unique_lock<mutex> lck(_jqm);
     _exit = true;
@@ -51,12 +55,16 @@ ThreadPool::~ThreadPool() {
 }
 
 template <typename F, typename... Args>
-future<typename result_of<F(Args...)>::type> ThreadPool::submit(F&& f, Args&&... args) {
+future<typename result_of<F(Args...)>::type> ThreadPool::submit(F&& f,
+                                                                Args&&... args)
+{
   if (_exit)
     throw runtime_error("Not allowed to submit after exit call");
-  while (_n_ready != _max_threads) {}
+  while (_n_ready != _max_threads) {
+  }
   using return_type = typename result_of<F(Args...)>::type;
-  auto job = make_shared<packaged_task<return_type(void)>>(bind(forward<F>(f), forward<Args>(args)...));
+  auto job = make_shared<packaged_task<return_type(void)>>(
+      bind(forward<F>(f), forward<Args>(args)...));
   future<return_type> ret = job->get_future();
   {
     lock_guard<mutex> lck(_jqm);
@@ -67,14 +75,16 @@ future<typename result_of<F(Args...)>::type> ThreadPool::submit(F&& f, Args&&...
   return ret;
 }
 
-void ThreadPool::execute() {
+void ThreadPool::execute()
+{
   _n_ready.fetch_add(1, std::memory_order_acquire);
   function<void(void)> job;
   while (true) {
     {
       unique_lock<mutex> lck(_jqm);
       while (_jq.empty()) {
-        if (_exit) return;
+        if (_exit)
+          return;
         _jq_has_job.wait(lck);
       }
       // below guarantees not _exit and _jq has at least a job
