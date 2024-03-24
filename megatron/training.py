@@ -3,6 +3,7 @@
 """Pretrain utilities."""
 
 from datetime import datetime
+from collections import deque
 import math
 import sys
 import time
@@ -51,6 +52,7 @@ from megatron.spiral import (
 )
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
+from megatron.spiral.optimizer import SpiralStageOptimizer
 from megatron.spiral.utils import is_spiral_param
 from megatron.spiral.debug import (
     spiral_print,
@@ -827,9 +829,7 @@ def train_step(forward_step_func, data_iterator,
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
         timers('optimizer').stop()
     else:
-        # TODO (SpiralPipe) these values should be propagated from the retval of step()
-        update_successful = True
-        grad_norm = num_zeros_in_grad = 0
+        update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
 
     # TODO (SpiralPipe) Need to remove when async option was enabled
     torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
@@ -847,7 +847,7 @@ def train_step(forward_step_func, data_iterator,
     # Update learning rate.
     if update_successful:
         if args.spiral_stage_optimizer:
-            for spiral_stage_opt_param_scheduler in getattr(optimizer, "optimizer_param_scheduler_list"):
+            for spiral_stage_opt_param_scheduler in getattr(opt_param_scheduler, "optimizer_param_scheduler_list"):
                 increment = get_num_microbatches() * \
                     args.micro_batch_size * \
                     args.data_parallel_size

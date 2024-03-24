@@ -4,6 +4,7 @@ import nvtx
 import sys
 from typing import Callable, Iterator, List, Optional, Union, Tuple
 from enum import Enum
+from collections import deque
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -29,7 +30,7 @@ _PYTHON_VERSION = sys.version_info
 Shape = Union[List[int], torch.Size]
 
 # Constants
-_DEBUG_SCHEDULE = True
+_DEBUG_SCHEDULE = False
 
 class CkptSendRecvType(Enum):
     SEND = "send"
@@ -253,7 +254,9 @@ def forward_backward_pipelining_with_spiral_remap(
 
     optimize_after_bwd_stage = False
     if get_args().spiral_stage_optimizer:
-        assert "spiral_stage_optimizer" in kwargs, "spiral_stage_optimizer not found in kwargs"
+        assert "spiral_stage_optimizer" in kwargs
+        assert "spiral_grad_scaler" in kwargs
+        assert "spiral_stage_optimizer_step_returns" in kwargs and isinstance(kwargs["spiral_stage_optimizer_step_returns"], deque)
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
@@ -774,9 +777,16 @@ def forward_backward_pipelining_with_spiral_remap(
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
                 # optimizer step
                 inner_step_kwargs = {}
-                inner_step_kwargs["spiral_offload_grad_ev"] = get_thunder_cuda_manager().get_event(offload_grad_curr)
+                inner_step_kwargs["spiral_offload_grad_ev"] = (
+                    get_thunder_cuda_manager().get_event(offload_grad_curr)
+                )
                 # TODO (SpiralPipe) timers is None. Fix it
-                update_successful, grad_norm, num_zeros_in_grad = optimizer[bwd_stage_id].step(get_args(), get_timers(), **inner_step_kwargs) # TODO (SpiralPipe) propagate these values to train_step
+                update_successful, grad_norm, num_zeros_in_grad = optimizer[
+                    bwd_stage_id
+                ].step(get_args(), get_timers(), **inner_step_kwargs)
+                kwargs["spiral_stage_optimizer_step_returns"].appendleft(
+                    (update_successful, grad_norm, num_zeros_in_grad)
+                )
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -908,11 +918,12 @@ def forward_backward_pipelining_with_spiral(
 
     optimize_after_bwd_stage = False
     if get_args().spiral_stage_optimizer:
-        assert "spiral_stage_optimizer" in kwargs, "spiral_stage_optimizer not found in kwargs"
+        assert "spiral_stage_optimizer" in kwargs
+        assert "spiral_grad_scaler" in kwargs
+        assert "spiral_stage_optimizer_step_returns" in kwargs and isinstance(kwargs["spiral_stage_optimizer_step_returns"], deque)
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
-        optimizer_threads_status = []
 
     def _cleanup():
         # cleanup checkpointed input tensors and output tensors
@@ -1326,7 +1337,12 @@ def forward_backward_pipelining_with_spiral(
                 inner_step_kwargs = {}
                 inner_step_kwargs["spiral_offload_grad_ev"] = get_thunder_cuda_manager().get_event(offload_grad_curr)
                 # TODO (SpiralPipe) timers is None. Fix it
-                update_successful, grad_norm, num_zeros_in_grad = optimizer[bwd_stage_id].step(get_args(), get_timers(), **inner_step_kwargs) # TODO (SpiralPipe) propagate these values to train_step
+                update_successful, grad_norm, num_zeros_in_grad = optimizer[
+                    bwd_stage_id
+                ].step(get_args(), get_timers(), **inner_step_kwargs)
+                kwargs["spiral_stage_optimizer_step_returns"].appendleft(
+                    (update_successful, grad_norm, num_zeros_in_grad)
+                )
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd

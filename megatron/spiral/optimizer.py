@@ -17,6 +17,40 @@ class SpiralStageOptimizer:
             self.optimizer.load_state_dict(optimizer_dict)
             self.optimizer_list.append(self.optimizer)
 
+    def gather_model_params(self, args, timers):
+        """
+        For the case of a non-distributed-optimizer, there is nothing to
+        do here.
+        """
+        pass
+
+    @staticmethod
+    def process_step_returns(step_rets: list):
+        """Static method to reduce the return values of individual optimizer steps."""
+        update_successful_values, grad_norm_values, num_zeros_in_grad_values = zip(
+            *step_rets
+        )
+
+        # Calculate r_update_successful
+        r_update_successful = all(update_successful_values)
+
+        # Calculate r_grad_norm
+        # TODO (SpiralPipe) This is a temporary solution by simply averaging the grad_norms
+        valid_grad_norm_values = filter(lambda x: x is not None, grad_norm_values)
+        r_grad_norm = (
+            sum(valid_grad_norm_values) / len(grad_norm_values)
+            if valid_grad_norm_values
+            else None
+        )
+
+        # Calculate r_num_zeros_in_grad
+        valid_num_zeros_in_grad_values = filter(
+            lambda x: x is not None, num_zeros_in_grad_values
+        )
+        r_num_zeros_in_grad = sum(valid_num_zeros_in_grad_values)
+
+        return r_update_successful, r_grad_norm, r_num_zeros_in_grad
+
     def __getitem__(self, idx):
         return self.optimizer_list[idx]
 
