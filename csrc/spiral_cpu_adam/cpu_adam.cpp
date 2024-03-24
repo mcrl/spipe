@@ -21,14 +21,20 @@
 #include <cuda_runtime.h>
 #include <future>
 #include <spdlog/spdlog.h>
+#include <thread>
 #include <unistd.h>
 
 #define _DEBUG_CPU_ADAM true
+#define _USE_THREAD_POOL false
 
 static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
 
+#if _USE_THREAD_POOL
 static ThreadPool pool(64); // TODO (SpiralPipe) make num threads configurable
 static vector<future<int>> futures; // Storage for futures returned by threads
+#else
+static vector<std::thread> threads;
+#endif
 
 int spiral_create_adam_optimizer(int optimizer_id,
                                  float alpha,
@@ -95,8 +101,12 @@ int _spiral_adam_step(int optimizer_id,
     if (_DEBUG_CPU_ADAM)
       spdlog::info("Event is not provided. Skip synchronization");
   } else {
+    if (_DEBUG_CPU_ADAM)
+      spdlog::info("Spiral CPU Adam: event={} wait", ev_long);
     cudaEvent_t ev = (cudaEvent_t)ev_long;
     CHECK_CUDA(cudaEventSynchronize(ev));
+    if (_DEBUG_CPU_ADAM)
+      spdlog::info("Spiral CPU Adam: event={} wait done!", ev_long);
   }
 
   if (_DEBUG_CPU_ADAM)
@@ -158,8 +168,12 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
     if (_DEBUG_CPU_ADAM)
       spdlog::info("Event is not provided. Skip synchronization");
   } else {
+    if (_DEBUG_CPU_ADAM)
+      spdlog::info("Spiral CPU Adam: event={} wait", ev_long);
     cudaEvent_t ev = (cudaEvent_t)ev_long;
     CHECK_CUDA(cudaEventSynchronize(ev));
+    if (_DEBUG_CPU_ADAM)
+      spdlog::info("Spiral CPU Adam: event={} wait done!", ev_long);
   }
 
   if (_DEBUG_CPU_ADAM)
@@ -212,10 +226,17 @@ int spiral_adam_step(int optimizer_id,
                      torch::Tensor& exp_avg_sq,
                      long ev_long)
 {
+#if _USE_THREAD_POOL
   futures.emplace_back(pool.submit(_spiral_adam_step, optimizer_id, step, lr,
                                    beta1, beta2, epsilon, weight_decay,
                                    bias_correction, params, grads, exp_avg,
                                    exp_avg_sq, ev_long));
+#else
+  threads.emplace_back(_spiral_adam_step, optimizer_id, step, lr, beta1, beta2,
+                       epsilon, weight_decay, bias_correction, std::ref(params),
+                       std::ref(grads), std::ref(exp_avg), std::ref(exp_avg_sq),
+                       ev_long);
+#endif
   return 0;
 }
 
@@ -234,10 +255,17 @@ int spiral_adam_step_plus_copy(int optimizer_id,
                                torch::Tensor& device_params,
                                long ev_long)
 {
+#if _USE_THREAD_POOL
   futures.emplace_back(
       pool.submit(_spiral_adam_step_plus_copy, optimizer_id, step, lr, beta1,
                   beta2, epsilon, weight_decay, bias_correction, params, grads,
                   exp_avg, exp_avg_sq, device_params, ev_long));
+#else
+  threads.emplace_back(_spiral_adam_step_plus_copy, optimizer_id, step, lr,
+                       beta1, beta2, epsilon, weight_decay, bias_correction,
+                       std::ref(params), std::ref(grads), std::ref(exp_avg),
+                       std::ref(exp_avg_sq), std::ref(device_params), ev_long);
+#endif
   return 0;
 }
 
@@ -246,6 +274,7 @@ void spiral_adam_synchronize()
   if (_DEBUG_CPU_ADAM)
     spdlog::info("Spiral CPU Adam: Synchronize");
 
+#if _USE_THREAD_POOL
   for (auto& f : futures) {
     if (f.get() != 0) {
       // Non-zero future value indicates an error
@@ -253,6 +282,15 @@ void spiral_adam_synchronize()
     }
   }
   futures.clear();
+#else
+  for (auto& t : threads) {
+    t.join();
+  }
+  threads.clear();
+#endif
+
+  if (_DEBUG_CPU_ADAM)
+    spdlog::info("Spiral CPU Adam: Synchronize done!");
 };
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
