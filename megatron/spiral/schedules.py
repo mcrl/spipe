@@ -772,14 +772,13 @@ def forward_backward_pipelining_with_spiral_remap(
                     tag=f"offload_grad:b{bwd_stage_id}"
                 )
                 # although currently unused, for backward compatibility
-                if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
+                offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
+                if offload_grad_ev_long == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
                 # optimizer step
                 inner_step_kwargs = {}
-                inner_step_kwargs["spiral_offload_grad_ev"] = (
-                    get_thunder_cuda_manager().get_event(offload_grad_curr)
-                )
+                inner_step_kwargs["spiral_offload_grad_ev_long"] = offload_grad_ev_long
                 # TODO (SpiralPipe) timers is None. Fix it
                 update_successful, grad_norm, num_zeros_in_grad = optimizer[
                     bwd_stage_id
@@ -1336,12 +1335,13 @@ def forward_backward_pipelining_with_spiral(
                     tag=f"offload_grad:b{bwd_stage_id}"
                 )
                 # although currently unused, for backward compatibility
-                if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
+                offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
+                if offload_grad_ev_long == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
                 # optimizer step
                 inner_step_kwargs = {}
-                inner_step_kwargs["spiral_offload_grad_ev"] = get_thunder_cuda_manager().get_event(offload_grad_curr)
+                inner_step_kwargs["spiral_offload_grad_ev_long"] = offload_grad_ev_long
                 # TODO (SpiralPipe) timers is None. Fix it
                 update_successful, grad_norm, num_zeros_in_grad = optimizer[
                     bwd_stage_id

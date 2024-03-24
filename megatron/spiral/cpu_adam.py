@@ -8,6 +8,8 @@ import spiral_cpu_adam
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
 
+    _DEBUG_SPIRAL_CPU_ADAM = True
+
     def __init__(
         self,
         model_params,
@@ -155,8 +157,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             fp16_param_groups = [[fp16_param_groups]]
 
         # get spiral kwargs
-        offload_grad_ev = kwargs.get("spiral_offload_grad_ev", None)
-        ev_long = getattr(offload_grad_ev, "cuda_event", -1)
+        ev_long = kwargs.get("spiral_offload_grad_ev_long", -1)
 
         for group_id, group in enumerate(self.param_groups):
             for param_id, p in enumerate(group["params"]):

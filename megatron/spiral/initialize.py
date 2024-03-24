@@ -98,6 +98,7 @@ class SpiralCUDAManager:
         )
 
     def record_event(self, query: SpiralCUDAEventQuery_t) -> int:
+        """Record event and return cuda_event identifier (pylong)"""
         _target_stream, _target_event_hdl_deque = self._get_stream_event_hdl_deque(query.record_stream_name)
         for eventhdl in self.__unrecorded_event_hdl_deque:
             if getattr(eventhdl.event, "spiral_tag") == query.tag:
@@ -105,7 +106,7 @@ class SpiralCUDAManager:
                 eventhdl.record()
                 self.__unrecorded_event_hdl_deque.remove(eventhdl)
                 _target_event_hdl_deque.append(eventhdl)
-                return 0
+                return eventhdl.event.cuda_event
         return -1
 
     def wait_event(self, query: SpiralCUDAEventQuery_t, sync=False) -> int:
