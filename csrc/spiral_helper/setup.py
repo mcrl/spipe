@@ -23,8 +23,9 @@ setup(
                 os.path.join(os.environ['MPI_BUILD_DIR'], 'lib'),
                 os.path.join(os.environ['CUDA_BUILD_DIR'], 'lib64'),
             ],
-            libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart'], # linker. -lmpi
-            extra_compile_args=['-g', '-fvisibility=hidden']),
+            libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart', 'nvToolsExt'],
+            extra_compile_args=['-g', '-fvisibility=hidden']
+        )
     ],
     cmdclass={
         'build_ext': BuildExtension

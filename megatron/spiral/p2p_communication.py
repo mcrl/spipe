@@ -9,6 +9,7 @@ from megatron.core import mpu
 # Types
 Shape = Union[List[int], torch.Size]
 
+MINIMIZE_INTERNODE_COMM = False # TODO (SpiralPipe) further optimizer internode comm.
 
 def _batched_p2p_ops(
     *,
@@ -172,17 +173,20 @@ def recv_input_tensor(
         timers("recv_input_tensor", log_level=2).start()
 
     recv_rank = None
-    if mpu.get_spiral_forward_virtual_rank() == 0:
-        recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
+    if MINIMIZE_INTERNODE_COMM:
+        if mpu.get_spiral_forward_virtual_rank() == 0:
+            recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
+        else:
+            local_world_size = mpu.get_spiral_intra_size()
+            local_rank = mpu.get_spiral_intra_rank()
+            recv_rank = (
+                mpu.get_pipeline_model_parallel_rank()
+                // local_world_size
+                * local_world_size
+                + (local_rank - 1) % local_world_size
+            )
     else:
-        local_world_size = mpu.get_spiral_intra_size()
-        local_rank = mpu.get_spiral_intra_rank()
-        recv_rank = (
-            mpu.get_pipeline_model_parallel_rank()
-            // local_world_size
-            * local_world_size
-            + (local_rank - 1) % local_world_size
-        )
+        recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
 
     [input_tensor], reqs = _communicate(
         tensor_sends=None,
@@ -212,20 +216,23 @@ def send_output_tensor(
         timers("send_output_tensor", log_level=2).start()
 
     send_rank = None
-    if (
-        mpu.get_spiral_forward_virtual_rank()
-        == mpu.get_spiral_forward_virtual_size() - 1
-    ):
-        send_rank = mpu.get_pipeline_model_parallel_next_rank()
+    if MINIMIZE_INTERNODE_COMM:
+        if (
+            mpu.get_spiral_forward_virtual_rank()
+            == mpu.get_spiral_forward_virtual_size() - 1
+        ):
+            send_rank = mpu.get_pipeline_model_parallel_next_rank()
+        else:
+            local_world_size = mpu.get_spiral_intra_size()
+            local_rank = mpu.get_spiral_intra_rank()
+            send_rank = (
+                mpu.get_pipeline_model_parallel_rank()
+                // local_world_size
+                * local_world_size
+                + (local_rank + 1) % local_world_size
+            )
     else:
-        local_world_size = mpu.get_spiral_intra_size()
-        local_rank = mpu.get_spiral_intra_rank()
-        send_rank = (
-            mpu.get_pipeline_model_parallel_rank()
-            // local_world_size
-            * local_world_size
-            + (local_rank + 1) % local_world_size
-        )
+        send_rank = mpu.get_pipeline_model_parallel_next_rank()
 
     _, reqs = _communicate(
         tensor_sends=[output_tensor],
@@ -256,33 +263,41 @@ def recv_output_tensor_grad(
         timers("recv_output_tensor_grad", log_level=2).start()
 
     recv_rank = None
-    if (
-        mpu.get_spiral_backward_virtual_rank()
-        == mpu.get_spiral_backward_virtual_size() - 1
-    ):
+    if MINIMIZE_INTERNODE_COMM:
+        if (
+            mpu.get_spiral_backward_virtual_rank()
+            == mpu.get_spiral_backward_virtual_size() - 1
+        ):
+            if mpu.is_spiral_remap():
+                recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
+            elif mpu.is_spiral():
+                recv_rank = mpu.get_pipeline_model_parallel_next_rank()
+            else:
+                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
+        else:
+            local_world_size = mpu.get_spiral_intra_size()
+            local_rank = mpu.get_spiral_intra_rank()
+            if mpu.is_spiral_remap():
+                recv_rank = (
+                    mpu.get_pipeline_model_parallel_rank()
+                    // local_world_size
+                    * local_world_size
+                    + (local_rank - 1) % local_world_size
+                )
+            elif mpu.is_spiral():
+                recv_rank = (
+                    mpu.get_pipeline_model_parallel_rank()
+                    // local_world_size
+                    * local_world_size
+                    + (local_rank + 1) % local_world_size
+                )
+            else:
+                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
+    else:
         if mpu.is_spiral_remap():
             recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
         elif mpu.is_spiral():
             recv_rank = mpu.get_pipeline_model_parallel_next_rank()
-        else:
-            raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-    else:
-        local_world_size = mpu.get_spiral_intra_size()
-        local_rank = mpu.get_spiral_intra_rank()
-        if mpu.is_spiral_remap():
-            recv_rank = (
-                mpu.get_pipeline_model_parallel_rank()
-                // local_world_size
-                * local_world_size
-                + (local_rank - 1) % local_world_size
-            )
-        elif mpu.is_spiral():
-            recv_rank = (
-                mpu.get_pipeline_model_parallel_rank()
-                // local_world_size
-                * local_world_size
-                + (local_rank + 1) % local_world_size
-            )
         else:
             raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
 
@@ -314,30 +329,38 @@ def send_input_tensor_grad(
         timers("send_input_tensor_grad", log_level=2).start()
 
     send_rank = None
-    if mpu.get_spiral_backward_virtual_rank() == 0:
+    if MINIMIZE_INTERNODE_COMM:
+        if mpu.get_spiral_backward_virtual_rank() == 0:
+            if mpu.is_spiral_remap():
+                send_rank = mpu.get_pipeline_model_parallel_next_rank()
+            elif mpu.is_spiral():
+                send_rank = mpu.get_pipeline_model_parallel_prev_rank()
+            else:
+                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
+        else:
+            local_world_size = mpu.get_spiral_intra_size()
+            local_rank = mpu.get_spiral_intra_rank()
+            if mpu.is_spiral_remap():
+                send_rank = (
+                    mpu.get_pipeline_model_parallel_rank()
+                    // local_world_size
+                    * local_world_size
+                    + (local_rank + 1) % local_world_size
+                )
+            elif mpu.is_spiral():
+                send_rank = (
+                    mpu.get_pipeline_model_parallel_rank()
+                    // local_world_size
+                    * local_world_size
+                    + (local_rank - 1) % local_world_size
+                )
+            else:
+                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
+    else:
         if mpu.is_spiral_remap():
             send_rank = mpu.get_pipeline_model_parallel_next_rank()
         elif mpu.is_spiral():
             send_rank = mpu.get_pipeline_model_parallel_prev_rank()
-        else:
-            raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-    else:
-        local_world_size = mpu.get_spiral_intra_size()
-        local_rank = mpu.get_spiral_intra_rank()
-        if mpu.is_spiral_remap():
-            send_rank = (
-                mpu.get_pipeline_model_parallel_rank()
-                // local_world_size
-                * local_world_size
-                + (local_rank + 1) % local_world_size
-            )
-        elif mpu.is_spiral():
-            send_rank = (
-                mpu.get_pipeline_model_parallel_rank()
-                // local_world_size
-                * local_world_size
-                + (local_rank - 1) % local_world_size
-            )
         else:
             raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
 

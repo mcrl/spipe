@@ -406,7 +406,8 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             0,
             dtype=param.dtype,
             device=self.remote_device,
-            # NOTE (SpiralPipe) pin_memory arg should not be passed
+            pin_memory=True,
+            # NOTE (SpiralPipe) In sprial_remap, SpiralCPUAllocator allocates to pin_memory automatically
         )
 
         def _free_data(param: Parameter) -> None:
@@ -430,8 +431,8 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     assert sbs.get_spiral_forward_stage_build_phase() is not None, \
                         "Offloading to empty spiral tensor should be executed only once during SpiralPipe w/o remapping forward stage build phase"
                 param.spiral_tensor = param.data.to(
-                    device=self.remote_device, non_blocking=non_blocking
-                ) # NOTE (SpiralPipe) pin_memory() should not be called
+                    device=self.remote_device, non_blocking=non_blocking,
+                ).pin_memory() # NOTE (SpiralPipe) In sprial_remap, SpiralCPUAllocator allocates to pin_memory automatically
             else:
                 assert (
                     param.spiral_tensor.shape == param.data.shape
@@ -446,14 +447,30 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             assert param.spiral_tensor is not None, "Fetch tensor is None"
 
             if param.numel() == 0:
-                param.data = param.spiral_tensor.to(
-                    device=self.local_device, non_blocking=non_blocking
-                ).view(param.spiral_shape)
+                if not get_args().spiral_remap or get_thunder_group().IsParamDataLocal(param.spiral_id):
+                    param.data = param.spiral_tensor.to(
+                        device=self.local_device, non_blocking=non_blocking
+                    ).view(param.spiral_shape)
+                else:
+                    param.data = torch.empty(param.spiral_shape, device=self.local_device)
+                    get_thunder_group().FetchRemoteParam(
+                        param.spiral_id,
+                        non_blocking,
+                        param.data.data_ptr()
+                    )
             else:
                 assert (
                     param.spiral_tensor.shape == param.data.shape
-                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
-                param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
+                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"  
+                if not get_args().spiral_remap or get_thunder_group().IsParamDataLocal(param.spiral_id):  
+                    param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
+                else:
+                    param.data = torch.empty(param.spiral_shape, device=self.local_device)
+                    get_thunder_group().FetchRemoteParam(
+                        param.spiral_id,
+                        non_blocking,
+                        param.data.data_ptr()
+                    )
             if not non_blocking:
                 # NOTE: for non-blocking fetch, spiral_status should be changed after waiting in the caller
                 param.spiral_status = SpiralParamStatus.ACTIVE
@@ -608,6 +625,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             for param in module.parameters(recurse=True):
                 if is_spiral_param(param):
                     param.spiral_id = sbs.get_add_spiral_next_param_number_to_build()
+
 
 @contextmanager
 def patch_extra_repr():
