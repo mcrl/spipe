@@ -461,8 +461,8 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             else:
                 assert (
                     param.spiral_tensor.shape == param.data.shape
-                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"  
-                if not get_args().spiral_remap or get_thunder_group().IsParamDataLocal(param.spiral_id):  
+                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
+                if not get_args().spiral_remap or get_thunder_group().IsParamDataLocal(param.spiral_id):
                     param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
                 else:
                     param.data = torch.empty(param.spiral_shape, device=self.local_device)
@@ -520,6 +520,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     param.spiral_tensor.grad = param.grad.to(
                         self.remote_device, non_blocking=non_blocking
                     )
+
         def _free_grad(param: Parameter) -> None:
             """Free grad of a parameter."""
             # Determine whether the params have main-grad field
