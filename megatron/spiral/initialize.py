@@ -65,6 +65,10 @@ class SpiralCUDAManager:
                 torch.cuda.Stream(torch.cuda.current_device(), priority=0),
                 deque(),
             ),
+            "free": (
+                torch.cuda.Stream(torch.cuda.current_device(), priority=0),
+                deque(),
+            ),
         }
 
         self.__unrecorded_event_hdl_deque = deque()
