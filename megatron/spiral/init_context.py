@@ -491,6 +491,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     hasattr(param.spiral_tensor, "grad")
                     and getattr(param.spiral_tensor, "grad") is not None
                 ):
+                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=False`
                     # NOTE (SpiralPipe) Only check for numel, since main_grad shape "may" differ on GPU and CPU depending on optimizer
                     assert (
                         param.main_grad.numel() == param.spiral_tensor.grad.numel()
@@ -499,8 +500,10 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                         param.main_grad, non_blocking=non_blocking
                     )
                 else:
-                    param.spiral_tensor.grad = param.main_grad.to(
-                        self.remote_device, non_blocking=non_blocking
+                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=True`
+                    param.spiral_tensor.grad = torch.empty(param.main_grad.shape, device=self.remote_device, dtype=param.main_grad.dtype, pin_memory=True)
+                    param.spiral_tensor.grad.copy_(
+                        param.main_grad, non_blocking=non_blocking
                     )
             else:
                 assert hasattr(param, "grad") and getattr(param, "grad") is not None
@@ -509,6 +512,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     hasattr(param.spiral_tensor, "grad")
                     and getattr(param.spiral_tensor, "grad") is not None
                 ):
+                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=False`
                     # NOTE (SpiralPipe) Only check for numel, since grad shape "may" differ on GPU and CPU depending on optimizer
                     assert (
                         param.grad.numel() == param.spiral_tensor.grad.numel()
@@ -517,8 +521,10 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                         param.grad, non_blocking=non_blocking
                     )
                 else:
-                    param.spiral_tensor.grad = param.grad.to(
-                        self.remote_device, non_blocking=non_blocking
+                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=True`
+                    param.spiral_tensor.grad = torch.empty(param.grad.shape, device=self.remote_device, dtype=param.grad.dtype, pin_memory=True)
+                    param.spiral_tensor.grad.copy_(
+                        param.grad, non_blocking=non_blocking
                     )
 
         def _free_grad(param: Parameter) -> None:
