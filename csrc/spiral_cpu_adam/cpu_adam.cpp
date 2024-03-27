@@ -25,7 +25,7 @@
 #include <unistd.h>
 
 #define _DEBUG_CPU_ADAM true
-#define _USE_THREAD_POOL false
+#define _USE_THREAD_POOL true
 
 static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
 
