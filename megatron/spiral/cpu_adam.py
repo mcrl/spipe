@@ -4,11 +4,11 @@ from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
 import spiral_cpu_adam
 
+from megatron.spiral.debug import spiral_print
+
 
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
-
-    _DEBUG_SPIRAL_CPU_ADAM = True
 
     def __init__(
         self,
@@ -98,9 +98,11 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         SpiralCPUAdam.optimizer_id = SpiralCPUAdam.optimizer_id + 1
         self.adam_w_mode = adamw_mode
         self.fp32_optimizer_states = fp32_optimizer_states
+        self.nparams = sum(len(pg["params"]) for pg in self.param_groups)
         self.ds_opt_adam = spiral_cpu_adam
         self.ds_opt_adam.create_adam(
             self.opt_id,
+            self.nparams,
             lr,
             betas[0],
             betas[1],
@@ -163,6 +165,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             for param_id, p in enumerate(group["params"]):
 
                 if p.grad is None:
+                    spiral_print(f"[Warning] Optimizer {self.opt_id} skipped opt group {group_id} param {param_id} step due to None grad")
                     continue
 
                 assert p.device == device, (
@@ -192,6 +195,11 @@ class SpiralCPUAdam(torch.optim.Optimizer):
 
                 state["step"] += 1
                 beta1, beta2 = group["betas"]
+
+################### JUNYEOL DELETE!!! ###################
+                if True:
+                    spiral_print(f"opt::step p.data_ptr={hex(p.data_ptr())} p.grad.data={hex(p.grad.data_ptr())}")
+################### JUNYEOL DELETE!!! ###################
 
                 if fp16_param_groups is not None:
                     self.ds_opt_adam.adam_update_copy(
@@ -229,4 +237,4 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         return loss
 
     def sync(self):
-        self.ds_opt_adam.adam_sync()
+        self.ds_opt_adam.adam_sync(self.opt_id)
