@@ -177,10 +177,18 @@ def print_backward_tensors(tensor):
 
 
 def spiral_print(message):
+    _DEBUG_PID = True
+
     if torch.distributed.is_initialized():
-        message = f"[Spiral] " + f"[{torch.distributed.get_rank()}] " + message
+        prefix = f"[Spiral] " + f"[{torch.distributed.get_rank()}] "
+        if _DEBUG_PID:
+            prefix += f"[pid={os.getpid()}] "
+        message = prefix + message
     else:
-        message = f"[Spiral] " + message
+        prefix = f"[Spiral] "
+        if _DEBUG_PID:
+            prefix += f"[pid={os.getpid()}] "
+        message = prefix + message
     print(message)
 
     if torch.distributed.is_initialized():
