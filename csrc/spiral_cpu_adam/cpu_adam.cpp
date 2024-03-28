@@ -118,61 +118,44 @@ int _spiral_adam_step(int optimizer_id,
                       torch::Tensor& exp_avg_sq,
                       long ev_long)
 {
-  // if (ev_long == 0) {
-  //   throw std::runtime_error("Event is not recorded");
-  // } else if (ev_long == -1) {
-  //   if (_DEBUG_CPU_ADAM)
-  //     spdlog::info("[pid={}] [opt={}] Event is not provided. Skip
-  //     synchronization", (long)getpid(), optimizer_id);
-  // } else {
-  //   if (_DEBUG_CPU_ADAM)
-  //     spdlog::info("[pid={}] [opt={}] _spiral_adam_step::wait event={}",
-  //     (long)getpid(), optimizer_id, ev_long);
-  //   cudaEvent_t ev = (cudaEvent_t)ev_long;
-  //   CHECK_CUDA(cudaEventSynchronize(ev));
-  // }
+  auto ts_opt =
+      std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
 
-  //   if (_DEBUG_CPU_ADAM)
-  //     spdlog::info("[pid={}] [opt={}] _spiral_adam_step::start",
-  //     (long)getpid(), optimizer_id);
+  if (ev_long == 0) {
+    throw std::runtime_error("Event is not recorded");
+  } else if (ev_long == -1) {
+    if (ts_opt->should_log)
+      printf("[pid=%ld] [tid=%ld] [opt=%d] Event is not provided. Skip wait event", (long)getpid(), (long)gettid(), optimizer_id);
+  } else {
+    if (ts_opt->should_log)
+      printf("[pid=%ld] [tid=%ld] [opt=%d] Wait event", (long)getpid(), (long)gettid(), optimizer_id);
 
-  //   auto params_c = params.contiguous();
-  //   auto grads_c = grads.contiguous();
-  //   auto exp_avg_c = exp_avg.contiguous();
-  //   auto exp_avg_sq_c = exp_avg_sq.contiguous();
+    cudaEvent_t ev = (cudaEvent_t)ev_long;
+    CHECK_CUDA(cudaEventSynchronize(ev));
+  }
 
-  //   // assert(params.options().dtype() == grads.options().dtype());
+  auto params_c = params.contiguous();
+  auto grads_c = grads.contiguous();
+  auto exp_avg_c = exp_avg.contiguous();
+  auto exp_avg_sq_c = exp_avg_sq.contiguous();
 
-  //   float* params_ptr = (float*)params_c.data_ptr();
-  //   float* grads_ptr = (float*)grads_c.data_ptr();
-  //   float* exp_avg_ptr = (float*)exp_avg_c.data_ptr();
-  //   float* exp_avg_sq_ptr = (float*)exp_avg_sq_c.data_ptr();
+  // assert(params.options().dtype() == grads.options().dtype());
 
-  //   if (_DEBUG_CPU_ADAM)
-  //     spdlog::info("[pid={}] [opt={}] _spiral_adam_step: params.data_ptr={}
-  //     grads.data_ptr={}", (long)getpid(), optimizer_id, params.data_ptr(),
-  //     grads.data_ptr());
+  float* params_ptr = (float*)params_c.data_ptr();
+  float* grads_ptr = (float*)grads_c.data_ptr();
+  float* exp_avg_ptr = (float*)exp_avg_c.data_ptr();
+  float* exp_avg_sq_ptr = (float*)exp_avg_sq_c.data_ptr();
 
-  //   std::shared_ptr<Adam_Optimizer> opt =
-  //       std::static_pointer_cast<Adam_Optimizer>(s_optimizers[optimizer_id]);
-  //   opt->IncrementStep(step, beta1, beta2);
-  //   opt->update_state(lr, epsilon, weight_decay, bias_correction);
+  ts_opt->opt.IncrementStep(step, beta1, beta2);
+  ts_opt->opt.update_state(lr, epsilon, weight_decay, bias_correction);
 
-  //   opt->Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
-  //               params_c.numel(), nullptr,
-  //               (params.options().dtype() == at::kHalf));
+  ts_opt->opt.Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
+              params_c.numel(), nullptr,
+              (params.options().dtype() == at::kHalf));
 
-  //   if (_DEBUG_CPU_ADAM)
-  //     spdlog::info("[pid={}] [opt={}] _spiral_adam_step::end",
-  //     (long)getpid(), optimizer_id);
-
-  // #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
-  //   opt->SynchronizeStreams();
-
-  //   if (_DEBUG_CPU_ADAM)
-  //     spdlog::info("[pid={}] [opt={}] _spiral_adam_step::sync_stream",
-  //     (long)getpid(), optimizer_id);
-  // #endif
+#if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
+    ts_opt->opt.SynchronizeStreams();
+#endif
 
   return 0;
 }
