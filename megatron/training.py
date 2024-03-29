@@ -555,6 +555,12 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         if mpu.is_spiral_remap():
             get_thunder_group().UnsetSpiralCPUAllocator()
 
+        # Log entire model
+        with patch_extra_repr():
+            for stage_models in model:
+                for phase_id, phase_model in enumerate(stage_models.module_list):
+                    spiral_print(str(phase_model))
+
     else:
         pre_process = mpu.is_pipeline_first_stage()
         post_process = mpu.is_pipeline_last_stage()

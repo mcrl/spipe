@@ -90,6 +90,17 @@ def debug_param2id_shape_status(param):
     return f"id={param.spiral_id} gpu_shape={param.data.shape} cpu_shape={param.spiral_tensor.shape} status={param.spiral_status}"
 
 
+def debug_param2id_numel_dataptr(param):
+    msg = f"id={param.spiral_id} numel={param.numel()} spiral_tensor.numel={param.spiral_tensor.numel()}"
+    if hasattr(param, "grad") and param.grad is not None:
+        msg += f" grad.numel={param.grad.numel()} grad.data_ptr={hex(param.grad.data_ptr())}"
+    if hasattr(param, "main_grad") and param.main_grad is not None:
+        msg += f" main_grad.numel={param.main_grad.numel()} main_grad.data_ptr={hex(param.main_grad.data_ptr())}"
+    if hasattr(param.spiral_tensor, "grad") and param.spiral_tensor.grad is not None:
+        msg += f" spiral_tensor.grad.numel={param.spiral_tensor.grad.numel()} spiral_tensor.grad.data_ptr={hex(param.spiral_tensor.grad.data_ptr())}"
+    return msg
+
+
 def printflock(*msgs):
     """
 
