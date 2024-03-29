@@ -165,7 +165,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             for param_id, p in enumerate(group["params"]):
 
                 if p.grad is None:
-                    spiral_print(f"[Warning] Optimizer {self.opt_id} skipped opt group {group_id} param {param_id} step due to None grad")
+                    print(f"[Warning] Optimizer#{self.opt_id} skipped grp#{group_id} param#{param_id} step due to grad={p.grad}")
                     continue
 
                 assert p.device == device, (

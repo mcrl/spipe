@@ -21,7 +21,6 @@
 #include <cuda_runtime.h>
 #include <future>
 #include <mutex>
-#include <spdlog/spdlog.h>
 #include <thread>
 #include <unistd.h>
 
@@ -125,10 +124,12 @@ int _spiral_adam_step(int optimizer_id,
     throw std::runtime_error("Event is not recorded");
   } else if (ev_long == -1) {
     if (ts_opt->should_log)
-      printf("[pid=%ld] [tid=%ld] [opt=%d] Event is not provided. Skip wait event", (long)getpid(), (long)gettid(), optimizer_id);
+      printf("(pid:%ld,tid:%ld) Skip null event\n", (long)getpid(),
+             (long)gettid());
   } else {
     if (ts_opt->should_log)
-      printf("[pid=%ld] [tid=%ld] [opt=%d] Wait event", (long)getpid(), (long)gettid(), optimizer_id);
+      printf("(pid:%ld,tid:%ld) Wait event:%ld\n", (long)getpid(),
+             (long)gettid(), ev_long);
 
     cudaEvent_t ev = (cudaEvent_t)ev_long;
     CHECK_CUDA(cudaEventSynchronize(ev));
@@ -148,83 +149,75 @@ int _spiral_adam_step(int optimizer_id,
 
   ts_opt->opt.IncrementStep(step, beta1, beta2);
   ts_opt->opt.update_state(lr, epsilon, weight_decay, bias_correction);
-
   ts_opt->opt.Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
-              params_c.numel(), nullptr,
-              (params.options().dtype() == at::kHalf));
+                     params_c.numel(), nullptr,
+                     (params.options().dtype() == at::kHalf));
 
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
-    ts_opt->opt.SynchronizeStreams();
+  ts_opt->opt.SynchronizeStreams();
 #endif
-
   return 0;
 }
 
-// int _spiral_adam_step_plus_copy(int optimizer_id,
-//                                 size_t step,
-//                                 float lr,
-//                                 float beta1,
-//                                 float beta2,
-//                                 float epsilon,
-//                                 float weight_decay,
-//                                 bool bias_correction,
-//                                 torch::Tensor& params,
-//                                 torch::Tensor& grads,
-//                                 torch::Tensor& exp_avg,
-//                                 torch::Tensor& exp_avg_sq,
-//                                 torch::Tensor& device_params,
-//                                 long ev_long)
-// {
-// #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
-//   if (ev_long == 0) {
-//     throw std::runtime_error("Event is not recorded");
-//   } else if (ev_long == -1) {
-//     if (_DEBUG_CPU_ADAM)
-//       spdlog::info("Event is not provided. Skip synchronization");
-//   } else {
-//     if (_DEBUG_CPU_ADAM)
-//       spdlog::info("Spiral CPU Adam: event={} wait", ev_long);
-//     cudaEvent_t ev = (cudaEvent_t)ev_long;
-//     CHECK_CUDA(cudaEventSynchronize(ev));
-//     if (_DEBUG_CPU_ADAM)
-//       spdlog::info("Spiral CPU Adam: event={} wait done!", ev_long);
-//   }
+int _spiral_adam_step_plus_copy(int optimizer_id,
+                                size_t step,
+                                float lr,
+                                float beta1,
+                                float beta2,
+                                float epsilon,
+                                float weight_decay,
+                                bool bias_correction,
+                                torch::Tensor& params,
+                                torch::Tensor& grads,
+                                torch::Tensor& exp_avg,
+                                torch::Tensor& exp_avg_sq,
+                                torch::Tensor& device_params,
+                                long ev_long)
+{
+#if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
+  auto ts_opt =
+      std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
 
-//   if (_DEBUG_CPU_ADAM)
-//     spdlog::info("Spiral CPU Adam: Start step");
+  if (ev_long == 0) {
+    throw std::runtime_error("Event is not recorded");
+  } else if (ev_long == -1) {
+    if (ts_opt->should_log)
+      printf("(pid:%ld,tid:%ld) Skip null event\n", (long)getpid(),
+             (long)gettid());
+  } else {
+    if (ts_opt->should_log)
+      printf("(pid:%ld,tid:%ld) Wait event:%ld\n", (long)getpid(),
+             (long)gettid(), ev_long);
 
-//   auto params_c = params.contiguous();
-//   auto device_params_c = device_params.contiguous();
-//   auto exp_avg_c = exp_avg.contiguous();
-//   auto exp_avg_sq_c = exp_avg_sq.contiguous();
-//   auto grads_c = grads.contiguous();
+    cudaEvent_t ev = (cudaEvent_t)ev_long;
+    CHECK_CUDA(cudaEventSynchronize(ev));
+  }
 
-//   float* params_ptr = (float*)params_c.data_ptr();
-//   float* grads_ptr = (float*)grads_c.data_ptr();
-//   ds_half_precision_t* device_params_ptr =
-//       (ds_half_precision_t*)device_params_c.data_ptr();
-//   float* exp_avg_ptr = (float*)exp_avg_c.data_ptr();
-//   float* exp_avg_sq_ptr = (float*)exp_avg_sq_c.data_ptr();
+  auto params_c = params.contiguous();
+  auto device_params_c = device_params.contiguous();
+  auto exp_avg_c = exp_avg.contiguous();
+  auto exp_avg_sq_c = exp_avg_sq.contiguous();
+  auto grads_c = grads.contiguous();
 
-//   std::shared_ptr<Adam_Optimizer> opt =
-//       std::static_pointer_cast<Adam_Optimizer>(s_optimizers[optimizer_id]);
-//   opt->IncrementStep(step, beta1, beta2);
-//   opt->update_state(lr, epsilon, weight_decay, bias_correction);
-//   opt->Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
-//               params_c.numel(), device_params_ptr,
-//               (params.options().dtype() == at::kHalf));
+  float* params_ptr = (float*)params_c.data_ptr();
+  float* grads_ptr = (float*)grads_c.data_ptr();
+  ds_half_precision_t* device_params_ptr =
+      (ds_half_precision_t*)device_params_c.data_ptr();
+  float* exp_avg_ptr = (float*)exp_avg_c.data_ptr();
+  float* exp_avg_sq_ptr = (float*)exp_avg_sq_c.data_ptr();
 
-//   if (_DEBUG_CPU_ADAM)
-//     spdlog::info("Spiral CPU Adam: End step");
+  ts_opt->opt.IncrementStep(step, beta1, beta2);
+  ts_opt->opt.update_state(lr, epsilon, weight_decay, bias_correction);
+  ts_opt->opt.Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
+                     params_c.numel(), device_params_ptr,
+                     (params.options().dtype() == at::kHalf));
 
-//   opt->SynchronizeStreams();
-//   if (_DEBUG_CPU_ADAM)
-//     spdlog::info("Spiral CPU Adam: Sync stream");
-// #else
-//   assert(false);
-// #endif
-//   return 0;
-// }
+  ts_opt->opt.SynchronizeStreams();
+#else
+  assert(false);
+#endif
+  return 0;
+}
 
 int spiral_adam_step(int optimizer_id,
                      size_t step,
@@ -246,7 +239,7 @@ int spiral_adam_step(int optimizer_id,
   std::lock_guard<std::mutex> lck(ts_opt->m);
 
   if (ts_opt->should_log) {
-    printf("[%ld] ThreadSafeOptimizer #%d param #%d step called with "
+    printf("(pid:%ld) ThreadSafeOptimizer #%d param #%d step called with "
            "param.ptr=%p, grad.ptr=%p\n",
            (long)getpid(), optimizer_id, ts_opt->nparams_submitted,
            params.data_ptr(), grads.data_ptr());
@@ -261,32 +254,41 @@ int spiral_adam_step(int optimizer_id,
   return 0;
 }
 
-// int spiral_adam_step_plus_copy(int optimizer_id,
-//                                size_t step,
-//                                float lr,
-//                                float beta1,
-//                                float beta2,
-//                                float epsilon,
-//                                float weight_decay,
-//                                bool bias_correction,
-//                                torch::Tensor& params,
-//                                torch::Tensor& grads,
-//                                torch::Tensor& exp_avg,
-//                                torch::Tensor& exp_avg_sq,
-//                                torch::Tensor& device_params,
-//                                long ev_long)
-// {
+int spiral_adam_step_plus_copy(int optimizer_id,
+                               size_t step,
+                               float lr,
+                               float beta1,
+                               float beta2,
+                               float epsilon,
+                               float weight_decay,
+                               bool bias_correction,
+                               torch::Tensor& params,
+                               torch::Tensor& grads,
+                               torch::Tensor& exp_avg,
+                               torch::Tensor& exp_avg_sq,
+                               torch::Tensor& device_params,
+                               long ev_long)
+{
+  auto ts_opt =
+      std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
 
-//   if (_DEBUG_CPU_ADAM)
-//     spdlog::info("spiral_adam_step_plus_copy: grad sz {}", grads.numel());
+  std::lock_guard<std::mutex> lck(ts_opt->m);
 
-//   s_thread_pools[optimizer_id]->futures.emplace_back(
-//       s_thread_pools[optimizer_id]->pool.submit(_spiral_adam_step_plus_copy,
-//       optimizer_id, step, lr, beta1,
-//                   beta2, epsilon, weight_decay, bias_correction, params,
-//                   grads, exp_avg, exp_avg_sq, device_params, ev_long));
-//   return 0;
-// }
+  if (ts_opt->should_log) {
+    printf("(pid:%ld) ThreadSafeOptimizer #%d param #%d step called with "
+           "param.ptr=%p, grad.ptr=%p\n",
+           (long)getpid(), optimizer_id, ts_opt->nparams_submitted,
+           params.data_ptr(), grads.data_ptr());
+  }
+
+  ts_opt->futures.emplace_back(ts_opt->pool.submit(
+      _spiral_adam_step_plus_copy, optimizer_id, step, lr, beta1, beta2,
+      epsilon, weight_decay, bias_correction, params, grads, exp_avg,
+      exp_avg_sq, device_params, ev_long));
+  ts_opt->nparams_submitted++;
+
+  return 0;
+}
 
 void spiral_adam_synchronize(int optimizer_id)
 {
@@ -295,6 +297,12 @@ void spiral_adam_synchronize(int optimizer_id)
 
   while (true) {
     std::unique_lock<std::mutex> lck(ts_opt->m);
+    if (ts_opt->should_log) {
+      printf("(pid:%ld) ThreadSafeOptimizer #%d sync param update "
+             "(submitted:%d/total:%d)\n",
+             (long)getpid(), optimizer_id, ts_opt->nparams_submitted,
+             ts_opt->nparams);
+    }
     if (ts_opt->nparams_submitted == ts_opt->nparams) {
       assert(ts_opt->futures.size() == ts_opt->nparams);
       break;
@@ -313,16 +321,16 @@ void spiral_adam_synchronize(int optimizer_id)
   ts_opt->nparams_submitted = 0;
 
   if (ts_opt->should_log) {
-    printf("[%ld] ThreadSafeOptimizer #%d is synchronized.\n", (long)getpid(),
-           optimizer_id);
+    printf("(pid:%ld) ThreadSafeOptimizer #%d post-sync param update\n",
+           (long)getpid(), optimizer_id);
   }
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
   m.def("adam_update", &spiral_adam_step, "SpiralPipe CPU Adam update (C++) ");
-  // m.def(" adam_update_copy ", &spiral_adam_step_plus_copy,
-  //       "SpiralPipe CPU Adam update and param copy (C++)");
+  m.def("adam_update_copy", &spiral_adam_step_plus_copy,
+        "SpiralPipe CPU Adam update and param copy (C++)");
   m.def("create_adam", &spiral_create_adam_optimizer,
         "SpiralPipe CPU Adam (C++)");
   m.def("destroy_adam", &spiral_destroy_adam_optimizer,

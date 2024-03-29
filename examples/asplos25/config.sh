@@ -4,14 +4,11 @@
 
 ## conda
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate Megatron-cuda11.7
-
-## lib
-LD_LIBRARY_PATH=$HOME/anaconda3/envs/Megatron-cuda11.7/lib/:$LD_LIBRARY_PATH
+conda activate spiral
 
 # MPI
 MPIRUN=$(which mpirun)
-MPI_OPTIONS="-mca btl ^openib -mca pml ucx -x LD_LIBRARY_PATH"
+MPI_OPTIONS="-mca btl ^openib -mca pml ucx"
 GPUS_PER_NODE=4
 NP=$(( $GPUS_PER_NODE * $SLURM_JOB_NUM_NODES ))
 UNWRAPPED_NODELIST=$(scontrol show hostnames $SLURM_NODELIST) # b3 b4
@@ -19,6 +16,7 @@ HOSTS=$(for node in $UNWRAPPED_NODELIST; do echo -n "$node:$GPUS_PER_NODE,"; don
 
 # Source code
 MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
+FUSED_KERNEL_LOCK=${MEGATRON_PATH}/megatron/fused_kernels/build/lock
 
 # nsys
 NSYS_ENABLE=NO
@@ -46,7 +44,7 @@ EVAL_ITER=0
 # config for spiral training
 SPIRAL_FWD=1
 SPIRAL_BWD=3
-SPIRAL_STAGED_OPTIMIZER=NO
+SPIRAL_STAGED_OPTIMIZER=YES
 SPIRAL_DEBUG_BACKEND=NO
 
 # config for interleaving
