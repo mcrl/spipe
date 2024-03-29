@@ -53,6 +53,10 @@ DATA_ARGS="
     --split 949,50,1
 "
 
+if [ -f "${FUSED_KERNEL_LOCK}" ]; then
+    rm ${FUSED_KERNEL_LOCK}
+fi
+
 EXEC_CMD="python ${MEGATRON_PATH}/pretrain_gpt.py ${EXTRA_ARGS} ${DISTRIBUTED_ARGS} ${GPT_ARGS} ${DATA_ARGS}"
 
 if [ ${NSYS_ENABLE} == "YES" ]; then

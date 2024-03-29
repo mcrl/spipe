@@ -8,8 +8,6 @@ import spiral_cpu_adam
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
 
-    _DEBUG_SPIRAL_CPU_ADAM = True
-
     def __init__(
         self,
         model_params,
@@ -98,9 +96,11 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         SpiralCPUAdam.optimizer_id = SpiralCPUAdam.optimizer_id + 1
         self.adam_w_mode = adamw_mode
         self.fp32_optimizer_states = fp32_optimizer_states
+        self.nparams = sum(len(pg["params"]) for pg in self.param_groups)
         self.ds_opt_adam = spiral_cpu_adam
         self.ds_opt_adam.create_adam(
             self.opt_id,
+            self.nparams,
             lr,
             betas[0],
             betas[1],
@@ -163,6 +163,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             for param_id, p in enumerate(group["params"]):
 
                 if p.grad is None:
+                    print(f"[Warning] Optimizer#{self.opt_id} skipped grp#{group_id} param#{param_id} step due to grad={p.grad}")
                     continue
 
                 assert p.device == device, (
@@ -229,4 +230,4 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         return loss
 
     def sync(self):
-        self.ds_opt_adam.adam_sync()
+        self.ds_opt_adam.adam_sync(self.opt_id)
