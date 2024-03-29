@@ -309,16 +309,18 @@ void spiral_adam_synchronize(int optimizer_id)
     }
   }
 
-  std::lock_guard<std::mutex> lck(ts_opt->m);
-
   for (auto& f : ts_opt->futures) {
     if (f.get() != 0) {
       // Non-zero future value indicates an error
       throw std::runtime_error("Error produced during Adam step is detected");
     }
   }
-  ts_opt->futures.clear();
-  ts_opt->nparams_submitted = 0;
+
+  {
+    std::lock_guard<std::mutex> lck(ts_opt->m);
+    ts_opt->futures.clear();
+    ts_opt->nparams_submitted = 0;
+  }
 
   if (ts_opt->should_log) {
     printf("(pid:%ld) ThreadSafeOptimizer #%d post-sync param update\n",
