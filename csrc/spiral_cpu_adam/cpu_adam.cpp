@@ -315,6 +315,8 @@ void spiral_adam_synchronize(int optimizer_id)
       throw std::runtime_error("Error produced during Adam step is detected");
     }
   }
+  
+  ts_opt->pool.flush();
 
   {
     std::lock_guard<std::mutex> lck(ts_opt->m);
