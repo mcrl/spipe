@@ -24,7 +24,8 @@
 #include <thread>
 #include <unistd.h>
 
-const int THREAD_POOL_SIZE = 4; // Configurable
+const int THREAD_POOL_SIZE = 4; // TODO (SpiralPipe): Configure this value
+                                // (~nparams seems to be good choice)
 
 struct ThreadSafeOptimizer {
   Adam_Optimizer opt;
@@ -315,7 +316,7 @@ void spiral_adam_synchronize(int optimizer_id)
       throw std::runtime_error("Error produced during Adam step is detected");
     }
   }
-  
+
   ts_opt->pool.flush();
 
   {

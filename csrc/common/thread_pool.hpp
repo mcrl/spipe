@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#define _DEBUG_THREAD_POOL true
+#define _DEBUG_THREAD_POOL false
 
 using namespace std;
 
@@ -45,7 +45,8 @@ private:
 };
 
 ThreadPool::ThreadPool(size_t max_threads)
-  : _max_threads(max_threads), _n_ready(0), _n_idle(max_threads), _jq_size(0), _jq_done_size(0), _exit(false)
+  : _max_threads(max_threads), _n_ready(0), _n_idle(max_threads), _jq_size(0),
+    _jq_done_size(0), _exit(false)
 {
   if (_DEBUG_THREAD_POOL)
     printf("(pid:%ld) ThreadPool::ThreadPool()", (long)getpid());
@@ -99,20 +100,24 @@ void ThreadPool::execute()
   _n_ready++;
   while (true) {
     if (_DEBUG_THREAD_POOL)
-      printf("(pid:%ld,tid:%ld) trying to acquire jqm\n", (long)getpid(), (long)gettid());
+      printf("(pid:%ld,tid:%ld) trying to acquire jqm\n", (long)getpid(),
+             (long)gettid());
     unique_lock<mutex> lck(_jqm);
     if (_DEBUG_THREAD_POOL)
-      printf("(pid:%ld,tid:%ld) acquired jqm\n", (long)getpid(), (long)gettid());
+      printf("(pid:%ld,tid:%ld) acquired jqm\n", (long)getpid(),
+             (long)gettid());
 
     while (_jq_size.load() == 0) {
       if (_exit)
         return;
-      printf("(pid:%ld,tid:%ld) release jqm & sleep\n", (long)getpid(), (long)gettid());
+      printf("(pid:%ld,tid:%ld) release jqm & sleep\n", (long)getpid(),
+             (long)gettid());
       _jq_has_job.wait(lck);
     }
 
     if (_DEBUG_THREAD_POOL)
-      printf("(pid:%ld,tid:%ld) awake & acquired jqm\n", (long)getpid(), (long)gettid());
+      printf("(pid:%ld,tid:%ld) awake & acquired jqm\n", (long)getpid(),
+             (long)gettid());
     // below guarantees not _exit and _jq has at least a job
     function<void(void)> job = move(_jq.front());
     if (_DEBUG_THREAD_POOL)
@@ -150,11 +155,13 @@ void ThreadPool::execute()
   }
 }
 
-void ThreadPool::flush() {
+void ThreadPool::flush()
+{
   unique_lock<mutex> lck_done(_jqdm);
 
   if (_DEBUG_THREAD_POOL) {
-    printf("(pid:%ld) ThreadPool::flush (done:%ld)\n", (long)getpid(), _jq_done_size.load());
+    printf("(pid:%ld) ThreadPool::flush (done:%ld)\n", (long)getpid(),
+           _jq_done_size.load());
   }
   queue<function<void(void)>>().swap(_jq_done);
   _jq_done_size = 0;

@@ -4,8 +4,6 @@ from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
 import spiral_cpu_adam
 
-from megatron.spiral.debug import spiral_print
-
 
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
@@ -195,11 +193,6 @@ class SpiralCPUAdam(torch.optim.Optimizer):
 
                 state["step"] += 1
                 beta1, beta2 = group["betas"]
-
-################### JUNYEOL DELETE!!! ###################
-                if True:
-                    spiral_print(f"opt::step p.data_ptr={hex(p.data_ptr())} p.grad.data={hex(p.grad.data_ptr())}")
-################### JUNYEOL DELETE!!! ###################
 
                 if fp16_param_groups is not None:
                     self.ds_opt_adam.adam_update_copy(
