@@ -31,7 +31,7 @@ MERGE_FILE=/home/n0/yujin/tmp/tokenizer/megatron/gpt2-merges.txt
 # Model spec
 LAYER=24
 HIDDEN=1024
-HEAD=32
+HEAD=16
 SEQ=1024
 POS=1024
 
