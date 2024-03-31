@@ -25,10 +25,10 @@ GPT_ARGS="
     --num-layers $LAYER \
     --hidden-size $HIDDEN \
     --num-attention-heads $HEAD \
-    --seq-length 1024 \
-    --max-position-embeddings 1024 \
+    --seq-length $SEQ \
+    --max-position-embeddings $POS \
     --micro-batch-size $MBS \
-    --global-batch-size $(( $MBS * $NP )) \
+    --global-batch-size $GBS \
     --lr 0.00015 \
     --train-iters $TRAIN_ITER \
     --log-interval $LOG_ITER \
