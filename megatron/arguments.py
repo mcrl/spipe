@@ -1086,6 +1086,9 @@ def _add_distributed_args(parser):
                        help='Enable SpiralPipe activation recomputation')
     group.add_argument('--spiral-stage-optimizer', action='store_true',
                         help='Enable SpiralPipe optimizer to operate independently per stage')
+    group.add_argument('--spiral-stage-optimizer-pool-size', type=int, default=0,
+                        help='Thread pool size per spiral stage optimizer when --spiral-stage-optimizer is enabled'
+                        'Default value (0) enables dynamic thread pool sizing')
     group.add_argument('--spiral-debug-backend', action='store_true',
                        help='Enable SpiralPipe backend logging')
 

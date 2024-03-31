@@ -235,7 +235,7 @@ Comm::Comm(std::vector<int> ranks,
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
-      spdlog::info("Shared memory created fd = {} sz = {}", fd_, sb.st_size);
+      spdlog::info("Shared memory created name = {} fd = {} sz = {}", shared_memory_name_, fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
 
@@ -248,7 +248,7 @@ Comm::Comm(std::vector<int> ranks,
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
-      spdlog::info("Shared memory opened fd = {} sz = {}", fd_, sb.st_size);
+      spdlog::info("Shared memory opened name = {} fd = {} sz = {}", shared_memory_name_, fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
   shared_ptr_ = mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE,
