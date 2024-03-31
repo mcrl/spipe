@@ -34,6 +34,7 @@ POS=1024
 
 # Micro Batch size
 MBS=1
+GBS=$(( $MBS * $NP ))
 
 # iteration
 TRAIN_ITER=100
@@ -52,7 +53,7 @@ INTERLEAVE_VIRTUAL_SIZE=2
 # Print configuration
 echo -e "===========Script Configuration==========="
 echo -e "JOB_NAME=${SLURM_JOB_NAME}\nHOSTS=${HOSTS}\nNSYS_ENABLE=${NSYS_ENABLE}"
-echo -e "LAYER=${LAYER}\nHIDDEN=${HIDDEN}\nHEAD=${HEAD}\nMBS=${MBS}"
+echo -e "LAYER=${LAYER}\nHIDDEN=${HIDDEN}\nHEAD=${HEAD}\nMBS=${MBS}\nGBS=${GBS}"
 echo -e "TRAIN_ITER=${TRAIN_ITER}\nLOG_ITER=${LOG_ITER}\nEVAL_ITER=${EVAL_ITER}"
 echo -e "SPIRAL_FWD=${SPIRAL_FWD}\nSPIRAL_BWD=${SPIRAL_BWD}"
 echo -e "SPIRAL_STAGE_OPTIMIZER=${SPIRAL_STAGE_OPTIMIZER}\nSPIRAL_DEBUG_BACKEND=${SPIRAL_DEBUG_BACKEND}"

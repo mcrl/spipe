@@ -11,8 +11,21 @@ SPIRAL_BACKEND = None
 
 
 class SpiralBackend:
-    def __init__(self, ranks, init_shmem):
-        self.thunder_group = spiral_helper.Comm(sorted(ranks), init_shmem)
+    def __init__(
+        self,
+        ranks,
+        init_shmem,
+        shared_memory_name,
+        shared_memory_buffer_size,
+        shared_memory_header_size,
+    ):
+        self.thunder_group = spiral_helper.Comm(
+            sorted(ranks),
+            init_shmem,
+            shared_memory_name,
+            shared_memory_buffer_size,
+            shared_memory_header_size,
+        )
         self.thunder_cuda_manager = SpiralCUDAManager()
         global SPIRAL_BACKEND
         SPIRAL_BACKEND = self
@@ -72,7 +85,9 @@ class SpiralCUDAManager:
         }
 
         self.__unrecorded_event_hdl_deque = deque()
-        self.__completed_event_hdl_deque = deque() # sorted new ~ old for efficient query
+        self.__completed_event_hdl_deque = (
+            deque()
+        )  # sorted new ~ old for efficient query
 
     def Stream(self, stream_name: str):
         assert (
@@ -103,7 +118,9 @@ class SpiralCUDAManager:
 
     def record_event(self, query: SpiralCUDAEventQuery_t) -> int:
         """Record event and return cuda_event identifier (pylong)"""
-        _target_stream, _target_event_hdl_deque = self._get_stream_event_hdl_deque(query.record_stream_name)
+        _target_stream, _target_event_hdl_deque = self._get_stream_event_hdl_deque(
+            query.record_stream_name
+        )
         for eventhdl in self.__unrecorded_event_hdl_deque:
             if getattr(eventhdl.event, "spiral_tag") == query.tag:
                 assert eventhdl.record_stream == _target_stream
@@ -114,7 +131,9 @@ class SpiralCUDAManager:
         return -1
 
     def wait_event(self, query: SpiralCUDAEventQuery_t, sync=False) -> int:
-        _target_event_hdl_deque = self._get_stream_event_hdl_deque(query.record_stream_name)[1]
+        _target_event_hdl_deque = self._get_stream_event_hdl_deque(
+            query.record_stream_name
+        )[1]
         for eventhdl in _target_event_hdl_deque:
             if getattr(eventhdl.event, "spiral_tag") == query.tag:
                 if sync:
@@ -135,7 +154,9 @@ class SpiralCUDAManager:
         return -1
 
     def get_event(self, query: SpiralCUDAEventQuery_t) -> Optional[torch.cuda.Event]:
-        _target_event_hdl_deque = self._get_stream_event_hdl_deque(query.record_stream_name)[1]
+        _target_event_hdl_deque = self._get_stream_event_hdl_deque(
+            query.record_stream_name
+        )[1]
         for eventhdl in _target_event_hdl_deque:
             if getattr(eventhdl.event, "spiral_tag") == query.tag:
                 return eventhdl.event
@@ -160,9 +181,13 @@ class SpiralCUDAManager:
     def __del__(self):
         for stream_name, (stream, event_hdl_deque) in self.__stream_dict.items():
             if len(event_hdl_deque) > 0:
-                print(f"WARNING: {len(event_hdl_deque)} unwaited events on {stream_name} stream")
+                print(
+                    f"WARNING: {len(event_hdl_deque)} unwaited events on {stream_name} stream"
+                )
         if len(self.__unrecorded_event_hdl_deque) > 0:
-            print(f"WARNING: {len(self.__unrecorded_event_hdl_deque)} unrecorded events")
+            print(
+                f"WARNING: {len(self.__unrecorded_event_hdl_deque)} unrecorded events"
+            )
 
 
 class SpiralCUDAEventHandle:
