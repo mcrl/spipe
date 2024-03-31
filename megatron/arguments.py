@@ -1076,10 +1076,19 @@ def _add_distributed_args(parser):
                        'If turned on, --spiral-forward-virtual-size and --spiral-backward-virtual-size must be set to equal. '
                        'If turned off, the pipeline will resemble that of Mobius (ASPLOS 2023) '
                        'https://dl.acm.org/doi/abs/10.1145/3575693.3575703')
+    group.add_argument('--spiral-shared-memory-name', type=str, default='/spiral',
+                       help='Shared memory name to use when --spiral-remap')
+    group.add_argument('--spiral-shared-memory-buffer-size', type=int, default=0,
+                       help='Shared memory buffer size (bytes) to use when --spiral-remap')
+    group.add_argument('--spiral-shared-memory-header-size', type=int, default=0,
+                       help='Shared memory header size (bytes) to use when --spiral-remap')
     group.add_argument('--spiral-recompute-activations', action='store_true',
                        help='Enable SpiralPipe activation recomputation')
     group.add_argument('--spiral-stage-optimizer', action='store_true',
                         help='Enable SpiralPipe optimizer to operate independently per stage')
+    group.add_argument('--spiral-stage-optimizer-pool-size', type=int, default=0,
+                        help='Thread pool size per spiral stage optimizer when --spiral-stage-optimizer is enabled'
+                        'Default value (0) enables dynamic thread pool sizing')
     group.add_argument('--spiral-debug-backend', action='store_true',
                        help='Enable SpiralPipe backend logging')
 

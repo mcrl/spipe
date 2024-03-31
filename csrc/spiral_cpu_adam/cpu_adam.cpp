@@ -24,9 +24,6 @@
 #include <thread>
 #include <unistd.h>
 
-const int THREAD_POOL_SIZE = 4; // TODO (SpiralPipe): Configure this value
-                                // (~nparams seems to be good choice)
-
 struct ThreadSafeOptimizer {
   Adam_Optimizer opt;
   ThreadPool pool;
@@ -37,8 +34,8 @@ struct ThreadSafeOptimizer {
   const bool should_log;
   std::mutex m;
 
-  ThreadSafeOptimizer(Adam_Optimizer&& opt, int nparams, bool should_log)
-    : opt(opt), pool(THREAD_POOL_SIZE), nparams(nparams), nparams_submitted(0),
+  ThreadSafeOptimizer(Adam_Optimizer&& opt, const int nparams, const int pool_size, const bool should_log)
+    : opt(opt), pool(pool_size), nparams(nparams), nparams_submitted(0),
       should_log(should_log)
   {}
 };
@@ -47,6 +44,7 @@ static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
 
 int spiral_create_adam_optimizer(int optimizer_id,
                                  int nparams,
+                                 int pool_size,
                                  float alpha,
                                  float betta1,
                                  float betta2,
@@ -58,12 +56,17 @@ int spiral_create_adam_optimizer(int optimizer_id,
   auto opt =
       Adam_Optimizer(alpha, betta1, betta2, eps, weight_decay, adamw_mode);
 
+  if (pool_size == 0 || pool_size > nparams)
+    pool_size = nparams;
+  else if (pool_size < 0)
+    throw std::runtime_error("Invalid thread pool size");
+
   s_optimizers[optimizer_id] = std::make_shared<ThreadSafeOptimizer>(
-      std::move(opt), nparams, should_log);
+      std::move(opt), nparams, pool_size, should_log);
 
   if (should_log) {
-    printf("[%ld] ThreadSafeOptimizer #%d is created with %d params.\n",
-           (long)getpid(), optimizer_id, nparams);
+    printf("[%ld] ThreadSafeOptimizer #%d is created with %d threads for %d params.\n",
+           (long)getpid(), optimizer_id, pool_size, nparams);
   }
 
   if (should_log) {
@@ -77,7 +80,7 @@ int spiral_create_adam_optimizer(int optimizer_id,
     avx_type = "scalar";
 #endif
 #endif
-    printf("Adam Optimizer is created with %s arithmetic capability.\n",
+    printf("Adam Optimizer is created with %s arithmetic capability.\n"
            "Config: alpha=%f, betas=(%f, %f), weight_decay=%f, adam_w=%d\n",
            avx_type.c_str(), alpha, betta1, betta2, weight_decay,
            (int)adamw_mode);

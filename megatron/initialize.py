@@ -381,7 +381,13 @@ def _spiral_backend_init():
         ranks = frozenset(torch.distributed.get_process_group_ranks(torch_group))
         init_shmem = args.spiral_remap
         spiral_helper.LazyConfigure(args.spiral_debug_backend)
-        SpiralBackend(ranks, init_shmem)
+        SpiralBackend(
+            ranks,
+            init_shmem,
+            args.spiral_shared_memory_name,
+            args.spiral_shared_memory_buffer_size,
+            args.spiral_shared_memory_header_size,
+        )
         _set_comm_info()
 
 

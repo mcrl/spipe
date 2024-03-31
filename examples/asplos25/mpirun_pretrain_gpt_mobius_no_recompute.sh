@@ -25,6 +25,9 @@ EXTRA_ARGS="
 
 if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-stage-optimizer"
+    if [ -n ${SPIRAL_STAGE_OPTIMIZER_POOL_SIZE} ]; then
+        EXTRA_ARGS+=" --spiral-stage-optimizer-pool-size ${SPIRAL_STAGE_OPTIMIZER_POOL_SIZE}"
+    fi
 fi
 
 if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then

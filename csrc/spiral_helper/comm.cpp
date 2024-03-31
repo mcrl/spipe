@@ -20,18 +20,14 @@
 #include <unistd.h>
 #include <vector>
 
-const char *sharedMemoryName = "/thunder"; // set differently
-
-const size_t kCpuBufferSize = (1L << 37);       // 256GB, per host
-const size_t kCpuBufferHeaderSize = (1L << 30); // 1GB, per host
-
-std::vector<std::string> GetHostnames(MPI_Comm comm) {
+std::vector<std::string> GetHostnames(MPI_Comm comm)
+{
   int size;
   CHECK_MPI(MPI_Comm_size(comm, &size));
 
-  char *all_hostnames = (char *)malloc(MPI_MAX_PROCESSOR_NAME * size);
-  int *all_hostnamelens = (int *)malloc(sizeof(int) * size);
-  char *hostname = (char *)malloc(MPI_MAX_PROCESSOR_NAME);
+  char* all_hostnames = (char*)malloc(MPI_MAX_PROCESSOR_NAME * size);
+  int* all_hostnamelens = (int*)malloc(sizeof(int) * size);
+  char* hostname = (char*)malloc(MPI_MAX_PROCESSOR_NAME);
 
   int hostnamelen;
   CHECK_MPI(MPI_Get_processor_name(hostname, &hostnamelen));
@@ -54,7 +50,8 @@ std::vector<std::string> GetHostnames(MPI_Comm comm) {
   return hostnames;
 }
 
-int GetLocalRank(MPI_Comm comm) {
+int GetLocalRank(MPI_Comm comm)
+{
   std::vector<std::string> hostnames = GetHostnames(comm);
 
   int rank;
@@ -70,7 +67,8 @@ int GetLocalRank(MPI_Comm comm) {
   return local_rank;
 }
 
-int GetHostId(MPI_Comm comm) {
+int GetHostId(MPI_Comm comm)
+{
   std::vector<std::string> hostnames = GetHostnames(comm);
 
   int rank;
@@ -90,31 +88,38 @@ int GetHostId(MPI_Comm comm) {
 
 class Comm {
 public:
-  Comm(std::vector<int> ranks, const bool init_shmem);
-  Comm(const Comm &) = delete;            // copy ctor
-  Comm(Comm &&) = delete;                 // move ctor
-  Comm &operator=(const Comm &) = delete; // copy assign
-  Comm &operator=(Comm &&) = delete;      // move assign
+  Comm(std::vector<int> ranks,
+       const bool init_shmem,
+       const char* shared_memory_name,
+       const size_t kCpuBufferSize,
+       const size_t kCpuBufferHeaderSize);
+  Comm(const Comm&) = delete;            // copy ctor
+  Comm(Comm&&) = delete;                 // move ctor
+  Comm& operator=(const Comm&) = delete; // copy assign
+  Comm& operator=(Comm&&) = delete;      // move assign
   virtual ~Comm();
 
   void SetSpiralCPUAllocator();
   void UnsetSpiralCPUAllocator();
 
-  void RemapParamData(torch::Tensor &tensor, const unsigned int param_id,
+  void RemapParamData(torch::Tensor& tensor,
+                      const unsigned int param_id,
                       const c10::IntArrayRef sizes,
                       const c10::IntArrayRef strides,
                       const int64_t storage_offset);
-  void SetParamDataInfo(const unsigned int param_id, const uintptr_t dataptr,
+  void SetParamDataInfo(const unsigned int param_id,
+                        const uintptr_t dataptr,
                         const size_t size_bytes);
   int GetParamDataRank(const unsigned int param_id) const;
   bool IsParamDataLocal(const unsigned int param_id) const;
   void SyncParamDataInfo();
-  void FetchRemoteParam(const unsigned int param_id, bool non_blocking,
+  void FetchRemoteParam(const unsigned int param_id,
+                        bool non_blocking,
                         const uintptr_t dataptr);
 
   const py::dict GetCommInfo() const;
   template <typename T>
-  py::array_t<T> &AllGather(py::array_t<T> &fwd_arr) const;
+  py::array_t<T>& AllGather(py::array_t<T>& fwd_arr) const;
 
   inline uintptr_t GetBase(const int mpi_rank) const;
 
@@ -142,12 +147,14 @@ private:
   CommInfo comm_info_;
 
   int fd_;
-  void *shared_ptr_ = nullptr;
-  void *data_ptr_ = nullptr;
-  uintptr_t *shared_ptrs_; // shared_ptr_ virtual address of each mpi rank
+  void* shared_ptr_ = nullptr;
+  void* data_ptr_ = nullptr;
+  uintptr_t* shared_ptrs_; // shared_ptr_ virtual address of each mpi rank
+  const char* shared_memory_name_;
   size_t shared_memory_size_ = 0; // size > 0 indicates shmem initialized
-  std::vector<void *> additional_pinned_ptrs_; // additional pinned pointers,
-                                               // else than allocator buffer
+  size_t shared_memory_header_size_ = 0;
+  std::vector<void*> additional_pinned_ptrs_; // additional pinned pointers,
+                                              // else than allocator buffer
 
   struct ParamDataInfo {
     int mpi_rank_;      // mpi rank of initializer of param data
@@ -156,16 +163,21 @@ private:
     uintptr_t dataptr_; // param data virtual address of mpi_rank_
     size_t size_bytes_; // size of param data
   };
-  ParamDataInfo *param_mapping_tbl_ = nullptr;
+  ParamDataInfo* param_mapping_tbl_ = nullptr;
   MPI_Win window_; // MPI Window for get
 
-  c10::SpiralCPUAllocator *allocator_ = nullptr;
-  at::Allocator *prev_allocator_ptr_ = nullptr;
+  c10::SpiralCPUAllocator* allocator_ = nullptr;
+  at::Allocator* prev_allocator_ptr_ = nullptr;
 };
 
 bool Comm::debug = false;
 
-Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
+Comm::Comm(std::vector<int> ranks,
+           const bool init_shmem,
+           const char* shared_memory_name,
+           const size_t kCpuBufferSize,
+           const size_t kCpuBufferHeaderSize)
+{
   if (Comm::debug)
     spdlog::info("Creating SpiralPipe Comm");
 
@@ -200,18 +212,20 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
     return;
 
   // Configure shared memory
+  shared_memory_name_ = shared_memory_name;
   shared_memory_size_ = kCpuBufferHeaderSize + kCpuBufferSize;
+  shared_memory_header_size_ = kCpuBufferHeaderSize;
 
   // Open shared memory
   if (comm_info_.is_host_leader_) {
     // O_EXCL to ensure a fresh shared memory creation on every exection.
     // Error indicates that shared memory from previous execition has not been
     // cleaned up properly.
-    fd_ = shm_open(sharedMemoryName, O_CREAT | O_EXCL | O_RDWR,
+    fd_ = shm_open(shared_memory_name_, O_CREAT | O_EXCL | O_RDWR,
                    S_IRUSR | S_IWUSR);
     if (fd_ == -1) {
-      CHECK_ERRNO(shm_unlink(sharedMemoryName));
-      fd_ = shm_open(sharedMemoryName, O_CREAT | O_EXCL | O_RDWR,
+      CHECK_ERRNO(shm_unlink(shared_memory_name_));
+      fd_ = shm_open(shared_memory_name_, O_CREAT | O_EXCL | O_RDWR,
                      S_IRUSR | S_IWUSR);
     }
     assert(fd_ != -1);
@@ -221,20 +235,20 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
-      spdlog::info("Shared memory created fd = {} sz = {}", fd_, sb.st_size);
+      spdlog::info("Shared memory created name = {} fd = {} sz = {}", shared_memory_name_, fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
 
   CHECK_MPI(MPI_Barrier(intra_comm_));
   if (!comm_info_.is_host_leader_) {
-    fd_ = shm_open(sharedMemoryName, O_RDWR, 0);
+    fd_ = shm_open(shared_memory_name_, O_RDWR, 0);
     assert(fd_ != -1);
 
     // test
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
-      spdlog::info("Shared memory opened fd = {} sz = {}", fd_, sb.st_size);
+      spdlog::info("Shared memory opened name = {} fd = {} sz = {}", shared_memory_name_, fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
   shared_ptr_ = mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE,
@@ -243,10 +257,10 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   close(fd_);
 
   // Collect shared_ptrs_
-  shared_ptrs_ = (uintptr_t *)malloc(sizeof(uintptr_t) * comm_info_.mpi_size_);
+  shared_ptrs_ = (uintptr_t*)malloc(sizeof(uintptr_t) * comm_info_.mpi_size_);
   shared_ptrs_[comm_info_.mpi_rank_] = (uintptr_t)shared_ptr_;
 
-  data_ptr_ = (((char *)shared_ptr_) + kCpuBufferHeaderSize);
+  data_ptr_ = (((char*)shared_ptr_) + kCpuBufferHeaderSize);
 
 #if __WORDSIZE == 64
   CHECK_MPI(MPI_Allgather(&shared_ptrs_[comm_info_.mpi_rank_], 1,
@@ -265,7 +279,7 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
   }
 
   // Initialize param mapping tbl
-  param_mapping_tbl_ = (ParamDataInfo *)shared_ptr_;
+  param_mapping_tbl_ = (ParamDataInfo*)shared_ptr_;
   if (comm_info_.intra_rank_ == 0) {
     memset(param_mapping_tbl_, 0, kCpuBufferHeaderSize);
   }
@@ -284,20 +298,21 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem) {
                            MPI_COMM_WORLD, &window_));
 
   {
-    void *base;
-    MPI_Aint *size;
-    int *disp;
+    void* base;
+    MPI_Aint* size;
+    int* disp;
     int flag;
-    CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_BASE, (void *)&base, &flag));
-    CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_SIZE, (void *)&size, &flag));
+    CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_BASE, (void*)&base, &flag));
+    CHECK_MPI(MPI_Win_get_attr(window_, MPI_WIN_SIZE, (void*)&size, &flag));
     CHECK_MPI(
-        MPI_Win_get_attr(window_, MPI_WIN_DISP_UNIT, (void *)&disp, &flag));
+        MPI_Win_get_attr(window_, MPI_WIN_DISP_UNIT, (void*)&disp, &flag));
   }
 
   CHECK_MPI(MPI_Barrier(mpi_comm_));
 }
 
-Comm::~Comm() {
+Comm::~Comm()
+{
   if (Comm::debug)
     spdlog::info("Destroying SpiralPipe Comm");
 
@@ -332,12 +347,13 @@ Comm::~Comm() {
   if (shared_ptr_ != nullptr) {
     CHECK_ERRNO(munmap(shared_ptr_, shared_memory_size_));
     if (comm_info_.is_host_leader_) {
-      CHECK_ERRNO(shm_unlink(sharedMemoryName));
+      CHECK_ERRNO(shm_unlink(shared_memory_name_));
     }
   }
 }
 
-void Comm::SetSpiralCPUAllocator() {
+void Comm::SetSpiralCPUAllocator()
+{
   assert(allocator_ != nullptr); // allocator_ must be initialized before
                                  // calling SetSpiralCPUAllocator()
   TORCH_CHECK(prev_allocator_ptr_ == nullptr,
@@ -352,7 +368,8 @@ void Comm::SetSpiralCPUAllocator() {
   at::SetAllocator(at::DeviceType::CPU, allocator_, /*priority*/ 100);
 }
 
-void Comm::UnsetSpiralCPUAllocator() {
+void Comm::UnsetSpiralCPUAllocator()
+{
   assert(allocator_ != nullptr); // allocator_ must be initialized before
                                  // calling UnsetSpiralCPUAllocator()
   TORCH_CHECK(prev_allocator_ptr_ != nullptr,
@@ -367,17 +384,19 @@ void Comm::UnsetSpiralCPUAllocator() {
   prev_allocator_ptr_ = nullptr;
 }
 
-void Comm::RemapParamData(torch::Tensor &tensor, const unsigned int param_id,
+void Comm::RemapParamData(torch::Tensor& tensor,
+                          const unsigned int param_id,
                           const c10::IntArrayRef sizes,
                           const c10::IntArrayRef strides,
-                          const int64_t storage_offset) {
+                          const int64_t storage_offset)
+{
   uintptr_t addr = param_mapping_tbl_[param_id].dataptr_;
   std::ptrdiff_t offset =
       addr - GetBase(param_mapping_tbl_[param_id].mpi_rank_);
-  void *srcptr = (void *)(GetBase(comm_info_.mpi_rank_) + offset);
+  void* srcptr = (void*)(GetBase(comm_info_.mpi_rank_) + offset);
   c10::DataPtr srcdataptr = {
-      srcptr, srcptr, nullptr,
-      at::Device(at::DeviceType::CPU)}; // disallow delete
+    srcptr, srcptr, nullptr, at::Device(at::DeviceType::CPU)
+  }; // disallow delete
 
   // pin srcptr if not already pinned
   cudaPointerAttributes attributes;
@@ -397,7 +416,7 @@ void Comm::RemapParamData(torch::Tensor &tensor, const unsigned int param_id,
   }
 
   // change tensor metadata
-  c10::TensorImpl *tensor_impl = tensor.unsafeGetTensorImpl();
+  c10::TensorImpl* tensor_impl = tensor.unsafeGetTensorImpl();
   tensor_impl->set_sizes_and_strides(sizes, strides);
   tensor_impl->set_storage_offset(storage_offset);
 
@@ -407,7 +426,9 @@ void Comm::RemapParamData(torch::Tensor &tensor, const unsigned int param_id,
 }
 
 void Comm::SetParamDataInfo(const unsigned int param_id,
-                            const uintptr_t dataptr, const size_t size_bytes) {
+                            const uintptr_t dataptr,
+                            const size_t size_bytes)
+{
   param_mapping_tbl_[param_id].mpi_rank_ = comm_info_.mpi_rank_;
   param_mapping_tbl_[param_id].inter_rank_ = comm_info_.inter_rank_;
   param_mapping_tbl_[param_id].intra_rank_ = comm_info_.intra_rank_;
@@ -421,20 +442,23 @@ void Comm::SetParamDataInfo(const unsigned int param_id,
   }
 }
 
-int Comm::GetParamDataRank(const unsigned int param_id) const {
+int Comm::GetParamDataRank(const unsigned int param_id) const
+{
   return param_mapping_tbl_[param_id].mpi_rank_;
 }
 
-bool Comm::IsParamDataLocal(const unsigned int param_id) const {
+bool Comm::IsParamDataLocal(const unsigned int param_id) const
+{
   return param_mapping_tbl_[param_id].inter_rank_ == comm_info_.inter_rank_;
 }
 
-void Comm::SyncParamDataInfo() {
+void Comm::SyncParamDataInfo()
+{
   MPI_Barrier(MPI_COMM_WORLD);
 
   if (comm_info_.intra_rank_ == 0) {
     CHECK_MPI(MPI_Allreduce(MPI_IN_PLACE, param_mapping_tbl_,
-                            kCpuBufferHeaderSize, MPI_BYTE, MPI_SUM,
+                            shared_memory_header_size_, MPI_BYTE, MPI_SUM,
                             inter_comm_));
   }
 
@@ -451,8 +475,9 @@ struct FetchRemoteArgs {
   MPI_Win window;
 };
 
-nvtxRangeId_t nvtx_range_start(const char *message) {
-  nvtxEventAttributes_t eventAttrib = {0};
+nvtxRangeId_t nvtx_range_start(const char* message)
+{
+  nvtxEventAttributes_t eventAttrib = { 0 };
   eventAttrib.version = NVTX_VERSION;
   eventAttrib.size = NVTX_EVENT_ATTRIB_STRUCT_SIZE;
   eventAttrib.colorType = NVTX_COLOR_ARGB;
@@ -465,7 +490,8 @@ nvtxRangeId_t nvtx_range_start(const char *message) {
 
 void nvtx_range_stop(nvtxRangeId_t nvtx_id) { nvtxRangeEnd(nvtx_id); }
 
-void CUDART_CB _FetchRemoteParam(FetchRemoteArgs *args) {
+void CUDART_CB _FetchRemoteParam(FetchRemoteArgs* args)
+{
 
   unsigned int param_id = args->param_id;
   uintptr_t dataptr = args->dataptr;
@@ -475,12 +501,12 @@ void CUDART_CB _FetchRemoteParam(FetchRemoteArgs *args) {
   MPI_Aint disp = args->disp;
   MPI_Win window = args->window;
 
-  char nvtx_name[64] = {0};
-  sprintf((char *)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
-  nvtxRangeId_t id = nvtx_range_start((char *)nvtx_name);
+  char nvtx_name[64] = { 0 };
+  sprintf((char*)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
+  nvtxRangeId_t id = nvtx_range_start((char*)nvtx_name);
 
   CHECK_MPI(MPI_Win_lock(MPI_LOCK_SHARED, target_rank, 0, window));
-  CHECK_MPI(MPI_Get((void *)dataptr, size, MPI_BYTE, target_rank, disp, size,
+  CHECK_MPI(MPI_Get((void*)dataptr, size, MPI_BYTE, target_rank, disp, size,
                     MPI_BYTE, window));
   CHECK_MPI(MPI_Win_unlock(target_rank, window));
 
@@ -488,18 +514,20 @@ void CUDART_CB _FetchRemoteParam(FetchRemoteArgs *args) {
   nvtx_range_stop(id);
 }
 
-void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
-                            const uintptr_t dataptr) {
+void Comm::FetchRemoteParam(const unsigned int param_id,
+                            bool non_blocking,
+                            const uintptr_t dataptr)
+{
   int rank = comm_info_.mpi_rank_;
   int target_rank = param_mapping_tbl_[param_id].mpi_rank_;
   int size = param_mapping_tbl_[param_id].size_bytes_;
   assert(size_bytes_ <= INT_MAX);
 
   MPI_Aint disp = param_mapping_tbl_[param_id].dataptr_ - GetBase(target_rank);
-  assert((disp + size) < kCpuBufferSize);
+  assert((disp + size) < shared_memory_size_ - shared_memory_header_size_);
 
-  FetchRemoteArgs *args = (FetchRemoteArgs*)malloc(sizeof(FetchRemoteArgs));
-  assert (args != nullptr);
+  FetchRemoteArgs* args = (FetchRemoteArgs*)malloc(sizeof(FetchRemoteArgs));
+  assert(args != nullptr);
   args->param_id = param_id;
   args->dataptr = dataptr;
   args->rank = rank;
@@ -514,7 +542,8 @@ void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
     CHECK_CUDA(cudaStreamSynchronize(stream));
 }
 
-const py::dict Comm::GetCommInfo() const {
+const py::dict Comm::GetCommInfo() const
+{
   py::dict info;
   info["mpi_rank"] = comm_info_.mpi_rank_;
   info["inter_rank"] = comm_info_.inter_rank_;
@@ -526,10 +555,10 @@ const py::dict Comm::GetCommInfo() const {
   return info;
 }
 
-template <typename T>
-py::array_t<T> &Comm::AllGather(py::array_t<T> &arr) const {
+template <typename T> py::array_t<T>& Comm::AllGather(py::array_t<T>& arr) const
+{
   py::buffer_info buf = arr.request();
-  auto *ptr = (T *)arr.mutable_data();
+  auto* ptr = (T*)arr.mutable_data();
   py::ssize_t ag_numel = std::reduce(buf.shape.begin() + 1, buf.shape.end(), 1,
                                      std::multiplies<>());
   py::ssize_t ag_offset = comm_info_.mpi_rank_ * ag_numel;
@@ -540,18 +569,21 @@ py::array_t<T> &Comm::AllGather(py::array_t<T> &arr) const {
 
 // Virtual address of allocator memory. Corrsponds to `base_` in
 // SpiralCPUAllocator
-inline uintptr_t Comm::GetBase(const int mpi_rank) const {
+inline uintptr_t Comm::GetBase(const int mpi_rank) const
+{
   assert(shared_ptr_ != nullptr);
-  return shared_ptrs_[mpi_rank] + kCpuBufferHeaderSize;
+  return shared_ptrs_[mpi_rank] + shared_memory_header_size_;
 }
 
 void LazyConfigure(bool debug) { Comm::debug = debug; }
 
-PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {
+PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
+{
   m.def("LazyConfigure", &LazyConfigure,
         "SpiralPipeBackend LazyConfigure (C++)");
   py::class_<Comm>(m, "Comm")
-      .def(py::init<std::vector<int>, const bool>())
+      .def(py::init<std::vector<int>, const bool, const char*, const size_t,
+                    const size_t>())
       .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
       .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
       .def("RemapParamData", &Comm::RemapParamData)
