@@ -4,10 +4,8 @@ import warnings
 
 from apex.optimizers import FusedAdam as Adam
 from apex.optimizers import FusedSGD as SGD
-from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 from megatron import get_args
-from megatron.core import mpu
 from megatron.spiral.init_context import SpiralParamStatus
 from megatron.spiral.utils import is_spiral_param
 
@@ -96,8 +94,12 @@ def get_megatron_optimizer(model,
 
     # Determine whether the params have main-grad field.
     params_have_main_grad = False
-    if args.DDP_impl == 'local':
-        params_have_main_grad = True
+    if args.spiral:
+        # NOTE (SpiralPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training. For SpiralPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field. Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary.
+        params_have_main_grad = False
+    else:
+        if args.DDP_impl == 'local':
+            params_have_main_grad = True
 
     if (
         args.spiral
@@ -106,36 +108,29 @@ def get_megatron_optimizer(model,
     ):
         if not hasattr(model, "_spiral_optimizer_entered"):
             # NOTE (SpiralPipe) top level model[], recursively collect optimizer for each **BWD** stage. FWD stages are skipped, even though they will naturally be skipped due to logic in get_param_groups, in order to prevent optimizer with empty param group.
-            optimizer_list = []
+            bwd_stage_optimizers = []
             for bwd_stage_id in range(args.spiral_backward_virtual_size):
                 # NOTE (SpiralPipe) SpiralStageOptimizer requires optimizer list to be sorted in **ascending** order of bwd stage id. SpiralPipe w/o remapping has stage models that have both fwd/bwd id and hence in opposite bwd stage order w.r.t SpiralPipe w/ remapping.
                 if args.spiral_remap:
                     _idx_bwd_stage_id = -bwd_stage_id - 1
                 else:
                     _idx_bwd_stage_id = bwd_stage_id
+                # Attach a flag to second level modules (i.e., stage model) to stop recursive call
                 setattr(model[_idx_bwd_stage_id], "_spiral_optimizer_entered", True)
-                optimizer_list.append(
-                    get_megatron_optimizer(
-                        model[_idx_bwd_stage_id],
-                        no_weight_decay_cond,
-                        scale_lr_cond,
-                        lr_mult,
-                    )
+                # Insert optimizer for each bwd stage
+                opt_ty = get_megatron_optimizer(
+                    model[_idx_bwd_stage_id],
+                    no_weight_decay_cond,
+                    scale_lr_cond,
+                    lr_mult,
                 )
-            return SpiralStageOptimizer(
-                optimizer_list,
-                args.clip_grad,
-                args.log_num_zeros_in_grad,
-                params_have_main_grad,
-                args.use_contiguous_buffers_in_local_ddp,
-                model,
-            )
+                assert isinstance(opt_ty, FP32Optimizer), "SpiralStageOptimizer currently only supports SpiralCPUAdam wrapped into FP32Optimizer"
+                bwd_stage_optimizers.append(opt_ty)
+            return SpiralStageOptimizer(bwd_stage_optimizers)
         else:
             # NOTE (SpiralPipe) second level model of DDP class
             # Wrap itself in order to work as an iterable of size 1
-
-            # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here (with L149)
-            # delattr(model, "_spiral_optimizer_entered")
+            # This is necessary for backward compatibility with MegatronOptimizer, as well as get_param_groups
             model = [model]
 
     # Base optimizer.
@@ -146,17 +141,27 @@ def get_megatron_optimizer(model,
 
     if args.spiral:
         assert args.optimizer == 'adam', 'SpiralPipe only support Adam'
-        optimizer = DeepSpeedCPUAdam(param_groups,
-                                     lr=args.lr,
-                                     weight_decay=args.weight_decay,
-                                     betas=(args.adam_beta1, args.adam_beta2),
-                                     eps=args.adam_eps)
-        # TODO (SpiralPipe) SpiralStageOptimizer should be refactored inheritance in order to allow cleaner logic here
+
+        # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
+        if args.spiral_stage_optimizer:
+            from megatron.spiral.cpu_adam import SpiralCPUAdam
+            inner_opt_ty = SpiralCPUAdam
+        else:
+            from deepspeed.ops.adam import DeepSpeedCPUAdam
+            inner_opt_ty = DeepSpeedCPUAdam
+
+        optimizer = inner_opt_ty(
+            param_groups,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            betas=(args.adam_beta1, args.adam_beta2),
+            eps=args.adam_eps,
+        )
+
         if args.spiral_stage_optimizer:
             _unwrapped_model = model[0]
             assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
             delattr(_unwrapped_model, "_spiral_optimizer_entered")
-            return optimizer
     else:
         if args.optimizer == 'adam':
             optimizer = Adam(param_groups,

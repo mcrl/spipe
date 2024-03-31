@@ -1,54 +1,78 @@
-from concurrent.futures import ThreadPoolExecutor
+class SpiralStageOptimizer:
 
-from megatron.optimizer import FP32Optimizer
+    def __init__(self, optimizers, *args, **kwargs):
+        self.optimizer_list = optimizers  # do not change attr name
 
+    # Required for checkpointing
+    def state_dict(self):
+        state_dict = {"optimizer_list": []}
+        for optimizer in self.optimizer_list:
+            state_dict["optimizer_list"].append(optimizer.state_dict())
+        return state_dict
 
-class SpiralStageOptimizer(FP32Optimizer):
+    # Required for checkpointing
+    def load_state_dict(self, state_dict):
+        self.optimizer_list = []
+        for optimizer_dict in state_dict["optimizer_list"]:
+            self.optimizer.load_state_dict(optimizer_dict)
+            self.optimizer_list.append(self.optimizer)
 
-    def __init__(
-        self,
-        optimizer_list,
-        clip_grad,
-        log_num_zeros_in_grad,
-        params_have_main_grad,
-        use_contiguous_buffers_in_local_ddp,
-        models,
-    ):
-        super(SpiralStageOptimizer, self).__init__(
-            optimizer_list[0],
-            clip_grad,
-            log_num_zeros_in_grad,
-            params_have_main_grad,
-            use_contiguous_buffers_in_local_ddp,
-            models,
-        )
+    def gather_model_params(self, args, timers):
+        """
+        For the case of a non-distributed-optimizer, there is nothing to
+        do here.
+        """
+        pass
 
-        self.optimizer_list = optimizer_list
-        self.optimizer_thread_pool = ThreadPoolExecutor(max_workers=len(optimizer_list))
-
-    def set_bwd_stage(self, stage_id):
-        assert stage_id < len(self.optimizer_list)
-        self.optimizer = self.optimizer_list[stage_id]
-
-    def step(self, args, timers):
-        return super().step(args, timers)
-
-    def get_total_param_groups(self):
+    # Promote param_groups so it can be retrieved or set via
+    # "optimizer_instance.param_groups"
+    # (for example, to adjust the learning rate)
+    def _get_param_groups(self):
         param_groups = []
         for optimizer in self.optimizer_list:
             param_groups.extend(optimizer.param_groups)
         return param_groups
 
-    def state_dict(self):
-        state_dict = {
-            'optimizer_list': []
-        }
-        for optimizer in self.optimizer_list:
-            state_dict['optimizer_list'].append(optimizer.state_dict())
-        return state_dict
+    param_groups = property(_get_param_groups)
 
-    def load_state_dict(self, state_dict):
-        self.optimizer_list = []
-        for optimizer_dict in state_dict['optimizer_list']:
-            self.optimizer.load_state_dict(optimizer_dict)
-            self.optimizer_list.append(self.optimizer)
+    def get_loss_scale(self, opt_ty_idx=0):
+        return self.optimizer_list[opt_ty_idx].get_loss_scale()
+
+    @staticmethod
+    def process_step_returns(step_rets: list):
+        """Static method to reduce the return values of individual optimizer steps."""
+        update_successful_values, grad_norm_values, num_zeros_in_grad_values = zip(
+            *step_rets
+        )
+
+        # Calculate r_update_successful
+        r_update_successful = all(update_successful_values)
+
+        # Calculate r_grad_norm
+        # TODO (SpiralPipe) This is a temporary solution by simply averaging the grad_norms
+        valid_grad_norm_values = filter(lambda x: x is not None, grad_norm_values)
+        r_grad_norm = (
+            sum(valid_grad_norm_values) / len(grad_norm_values)
+            if valid_grad_norm_values
+            else None
+        )
+
+        # Calculate r_num_zeros_in_grad
+        valid_num_zeros_in_grad_values = filter(
+            lambda x: x is not None, num_zeros_in_grad_values
+        )
+        r_num_zeros_in_grad = sum(valid_num_zeros_in_grad_values)
+
+        return r_update_successful, r_grad_norm, r_num_zeros_in_grad
+
+    def __getitem__(self, idx):
+        return self.optimizer_list[idx]
+
+
+class SpiralStageOptimizerParamScheduler:
+
+    def __init__(self, optimizer_param_schedulers, *args, **kwargs):
+        self.optimizer_param_scheduler_list = optimizer_param_schedulers
+
+    def __getitem__(self, idx):
+        return self.optimizer_param_scheduler_list[idx]

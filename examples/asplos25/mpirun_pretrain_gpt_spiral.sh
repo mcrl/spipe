@@ -25,7 +25,7 @@ EXTRA_ARGS="
     --megatron-mpi
 "
 
-if [ ${SPIRAL_STAGED_OPTIMIZER} == "YES" ]; then
+if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-stage-optimizer"
 fi
 

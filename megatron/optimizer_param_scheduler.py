@@ -123,11 +123,7 @@ class OptimizerParamScheduler(object):
         new_lr = self.get_lr()
         new_wd = self.get_wd()
 
-        if isinstance(self.optimizer, SpiralStageOptimizer):
-            param_groups = self.optimizer.get_total_param_groups()
-        else:
-            param_groups = self.optimizer.param_groups
-
+        param_groups = self.optimizer.param_groups
         for group in param_groups:
             group['lr'] = new_lr * group.get('lr_mult', 1.0)
             group['weight_decay'] = new_wd * group.get('wd_mult', 1.0)

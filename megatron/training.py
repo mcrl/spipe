@@ -3,6 +3,7 @@
 """Pretrain utilities."""
 
 from datetime import datetime
+from collections import deque
 import math
 import sys
 import time
@@ -51,6 +52,7 @@ from megatron.spiral import (
 )
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
+from megatron.spiral.optimizer import SpiralStageOptimizer
 from megatron.spiral.utils import is_spiral_param
 from megatron.spiral.debug import (
     spiral_print,
@@ -59,6 +61,10 @@ from megatron.spiral.debug import (
     debug_param2name_id,
 )
 from megatron.spiral.init_context import patch_extra_repr
+from megatron.spiral.optimizer import (
+    SpiralStageOptimizer,
+    SpiralStageOptimizerParamScheduler
+)
 
 from megatron.model.vision.knn_monitor import compute_feature_bank
 
@@ -549,6 +555,12 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         if mpu.is_spiral_remap():
             get_thunder_group().UnsetSpiralCPUAllocator()
 
+        # Log entire model
+        with patch_extra_repr():
+            for stage_models in model:
+                for phase_id, phase_model in enumerate(stage_models.module_list):
+                    spiral_print(str(phase_model))
+
     else:
         pre_process = mpu.is_pipeline_first_stage()
         post_process = mpu.is_pipeline_last_stage()
@@ -655,6 +667,25 @@ def get_optimizer_param_scheduler(optimizer):
     """Build the learning rate scheduler."""
     args = get_args()
 
+    if (
+        args.spiral
+        and args.spiral_stage_optimizer
+        and args.spiral_backward_virtual_size > 1
+    ):
+        if not hasattr(optimizer, "_spiral_optimizer_param_scheduler_entered"):
+            assert isinstance(optimizer, SpiralStageOptimizer), "top level spiral stage optimizer should be SpiralStageOptimizer"
+            optimizer_param_schedulers = []
+            for opt_ty in getattr(optimizer, "optimizer_list"):
+                setattr(opt_ty, "_spiral_optimizer_param_scheduler_entered", True)
+                opt_param_scheduler = get_optimizer_param_scheduler(opt_ty)
+                assert isinstance(opt_param_scheduler, OptimizerParamScheduler)
+                optimizer_param_schedulers.append(opt_param_scheduler)
+            return SpiralStageOptimizerParamScheduler(optimizer_param_schedulers)
+
+    if args.spiral_stage_optimizer:
+        assert hasattr(optimizer, "_spiral_optimizer_param_scheduler_entered")
+        delattr(optimizer, "_spiral_optimizer_param_scheduler_entered")
+
     # Iteration-based training.
     if args.train_iters:
         if args.lr_decay_iters is None:
@@ -749,7 +780,11 @@ def train_step(forward_step_func, data_iterator,
     if args.DDP_impl == 'local' and args.use_contiguous_buffers_in_local_ddp:
         for partition in model:
             partition.zero_grad_buffer()
-    optimizer.zero_grad()
+    if args.spiral_stage_optimizer:
+        for opt_ty in getattr(optimizer, "optimizer_list"):
+            opt_ty.zero_grad()
+    else:
+        optimizer.zero_grad()
 
     # Forward pass.
     timers('forward-backward', log_level=1).start(
@@ -760,6 +795,8 @@ def train_step(forward_step_func, data_iterator,
     kwargs = {}
     if args.spiral_stage_optimizer:
         kwargs["spiral_stage_optimizer"] = optimizer
+        kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
+        kwargs["spiral_stage_optimizer_step_returns"] = deque() # placeholder to store step() return values
 
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,
@@ -768,7 +805,7 @@ def train_step(forward_step_func, data_iterator,
         num_microbatches=get_num_microbatches(),
         dtype=args.params_dtype,
         tensor_shape=(args.seq_length, args.micro_batch_size, args.hidden_size),
-        grad_scaler=optimizer.scale_loss,
+        grad_scaler=getattr(optimizer, "scale_loss", None),
         sequence_parallel=args.sequence_parallel,
         overlap_p2p_comm=args.overlap_p2p_comm,
         batch_p2p_comm=not args.overlap_p2p_comm,
@@ -782,7 +819,13 @@ def train_step(forward_step_func, data_iterator,
         torch.cuda.empty_cache()
 
     # Reduce gradients.
-    optimizer.reduce_model_grads(args, timers)
+    if not args.spiral_stage_optimizer:
+        optimizer.reduce_model_grads(args, timers)
+        # blocking offload gradients, if not yet offloaded
+        if args.spiral:
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=False)
+                model[-bwd_stage_id - 1].spiral_free_grad()
 
     # Vision gradients.
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
@@ -796,8 +839,7 @@ def train_step(forward_step_func, data_iterator,
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
         timers('optimizer').stop()
     else:
-        update_successful = True
-        grad_norm = num_zeros_in_grad = 0
+        update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
 
     # TODO (SpiralPipe) Need to remove when async option was enabled
     torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
@@ -814,11 +856,19 @@ def train_step(forward_step_func, data_iterator,
 
     # Update learning rate.
     if update_successful:
-        increment = get_num_microbatches() * \
+        if args.spiral_stage_optimizer:
+            for spiral_stage_opt_param_scheduler in getattr(opt_param_scheduler, "optimizer_param_scheduler_list"):
+                increment = get_num_microbatches() * \
                     args.micro_batch_size * \
                     args.data_parallel_size
-        opt_param_scheduler.step(increment=increment)
-        skipped_iter = 0
+                spiral_stage_opt_param_scheduler.step(increment=increment)
+            skipped_iter = 0
+        else:
+            increment = get_num_microbatches() * \
+                        args.micro_batch_size * \
+                        args.data_parallel_size
+            opt_param_scheduler.step(increment=increment)
+            skipped_iter = 0
     else:
         skipped_iter = 1
 

@@ -390,6 +390,12 @@ def validate_args(args, defaults={}):
         if args.hidden_dropout > 0.0:
             raise RuntimeError(
                 "SpiralPipe does not support hidden_dropout > 0.0, since it yields different recomputation results from original fwd results")
+        if args.use_contiguous_buffers_in_local_ddp:
+            raise RuntimeError(
+                "SpiralPipe does not support use_contiguous_buffers_in_local_ddp, just to avoid assertion in MegatronOptimizer.__init__. "
+                "This is not a limitation of SpiralPipe, but as Megatron optimizer currently does not consider offloaded optimizer. "
+                "Specifically, it does not consider where param on GPU has `main_grad` (due to local DDP) but param on offloaded device only has `grad`. "
+                "Additionally, this also makes DDP module to allocate contiguous buffer for `grad` tensor, which incurs extra memory overhead.")
         if args.spiral_forward_virtual_size is None:
             raise RuntimeError(
                 "SpiralPipe requires setting forward virtual size")
@@ -413,17 +419,20 @@ def validate_args(args, defaults={}):
                 raise RuntimeError(
                     "SpiralPipe with remapping requires spiral_recompute_activations")
             if args.rank == 0:
-                print("Warning: SpiralPipe with remapping will run with full uniform (recompute num layers=1) recomputation \
-                      regardless of --activation-recomputation, --recompute-granularity, --recompute-method, and --recompute-num-layers")
+                print(
+                    "Warning: SpiralPipe with remapping will run with full uniform (recompute num layers=1) recomputation "
+                    "regardless of --activation-recomputation, --recompute-granularity, --recompute-method, and --recompute-num-layers"
+                )
         if not args.spiral_remap:
             if args.spiral_forward_virtual_size != args.spiral_backward_virtual_size:
                 raise RuntimeError(
                     "SpiralPipe w/o remapping requires forward and backward virtual size to be the same")
             if args.spiral_recompute_activations:
                 if args.rank == 0:
-                    print("Warning: SpiralPipe without remapping will run with full uniform (recompute num layers=1) recomputation \
-                          regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers")
-
+                    print(
+                        "Warning: SpiralPipe without remapping will run with full uniform (recompute num layers=1) recomputation "
+                        "regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers"
+                    )
 
     # Print arguments.
     _print_args("arguments", args)

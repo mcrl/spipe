@@ -4,7 +4,7 @@
 
 ## conda
 source ~/anaconda3/etc/profile.d/conda.sh
-conda activate Megatron-cuda11.7
+conda activate spiral
 
 # MPI
 MPIRUN=$(which mpirun)
@@ -15,7 +15,8 @@ UNWRAPPED_NODELIST=$(scontrol show hostnames $SLURM_NODELIST) # b3 b4
 HOSTS=$(for node in $UNWRAPPED_NODELIST; do echo -n "$node:$GPUS_PER_NODE,"; done | sed 's/,$//') # b3:2,b4:2
 
 # Source code
-MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
+export MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
+FUSED_KERNEL_LOCK=${MEGATRON_PATH}/megatron/fused_kernels/build/lock
 
 # nsys
 NSYS_ENABLE=NO
@@ -43,7 +44,7 @@ EVAL_ITER=0
 # config for spiral training
 SPIRAL_FWD=1
 SPIRAL_BWD=3
-SPIRAL_STAGED_OPTIMIZER=NO
+SPIRAL_STAGE_OPTIMIZER=YES
 SPIRAL_DEBUG_BACKEND=NO
 
 # config for interleaving
@@ -55,6 +56,6 @@ echo -e "JOB_NAME=${SLURM_JOB_NAME}\nHOSTS=${HOSTS}\nNSYS_ENABLE=${NSYS_ENABLE}"
 echo -e "LAYER=${LAYER}\nHIDDEN=${HIDDEN}\nHEAD=${HEAD}\nMBS=${MBS}"
 echo -e "TRAIN_ITER=${TRAIN_ITER}\nLOG_ITER=${LOG_ITER}\nEVAL_ITER=${EVAL_ITER}"
 echo -e "SPIRAL_FWD=${SPIRAL_FWD}\nSPIRAL_BWD=${SPIRAL_BWD}"
-echo -e "SPIRAL_STAGED_OPTIMIZER=${SPIRAL_STAGED_OPTIMIZER}\nSPIRAL_DEBUG_BACKEND=${SPIRAL_DEBUG_BACKEND}"
+echo -e "SPIRAL_STAGE_OPTIMIZER=${SPIRAL_STAGE_OPTIMIZER}\nSPIRAL_DEBUG_BACKEND=${SPIRAL_DEBUG_BACKEND}"
 echo -e "INTERLEAVE_VIRTUAL_SIZE=${INTERLEAVE_VIRTUAL_SIZE}"
 echo "==========================================="

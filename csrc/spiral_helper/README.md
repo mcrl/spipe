@@ -1,4 +1,4 @@
-# SpiralPipe C source
+# Spiral helper
 
 ## Setup
 ```
