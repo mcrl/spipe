@@ -77,10 +77,8 @@ int spiral_create_adam_optimizer(int optimizer_id,
     avx_type = "scalar";
 #endif
 #endif
-    printf("Adam Optimizer is created with %s arithmetic "
-           "capability.\n",
-           "Config: alpha=%f, betas=(%f, %f), weight_decay=%f, "
-           "adam_w=%d\n",
+    printf("Adam Optimizer is created with %s arithmetic capability.\n",
+           "Config: alpha=%f, betas=(%f, %f), weight_decay=%f, adam_w=%d\n",
            avx_type.c_str(), alpha, betta1, betta2, weight_decay,
            (int)adamw_mode);
   }

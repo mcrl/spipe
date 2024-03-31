@@ -2,8 +2,8 @@ import torch
 from cpuinfo import get_cpu_info
 from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
-import spiral_cpu_adam
 
+from .op_builder.cpu_adam import SpiralCPUAdamBuilder
 
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
@@ -97,7 +97,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         self.adam_w_mode = adamw_mode
         self.fp32_optimizer_states = fp32_optimizer_states
         self.nparams = sum(len(pg["params"]) for pg in self.param_groups)
-        self.ds_opt_adam = spiral_cpu_adam
+        self.ds_opt_adam = SpiralCPUAdamBuilder().load()
         self.ds_opt_adam.create_adam(
             self.opt_id,
             self.nparams,

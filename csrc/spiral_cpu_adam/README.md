@@ -1,6 +1,3 @@
 # Spiral CPU adam
 
-## Installation
-```
-CUDA_BUILD_DIR=/path/to/cuda/build pip install .
-```
+This package is compiled through jit load during runtime.

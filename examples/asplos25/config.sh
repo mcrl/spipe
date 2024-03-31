@@ -15,7 +15,7 @@ UNWRAPPED_NODELIST=$(scontrol show hostnames $SLURM_NODELIST) # b3 b4
 HOSTS=$(for node in $UNWRAPPED_NODELIST; do echo -n "$node:$GPUS_PER_NODE,"; done | sed 's/,$//') # b3:2,b4:2
 
 # Source code
-MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
+export MEGATRON_PATH=$HOME/asplos2025/Megatron-LM-mcrl
 FUSED_KERNEL_LOCK=${MEGATRON_PATH}/megatron/fused_kernels/build/lock
 
 # nsys
