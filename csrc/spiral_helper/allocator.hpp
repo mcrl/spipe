@@ -17,6 +17,7 @@ public:
   DataPtr allocate(size_t nbytes) const override;
   void free(void* const ptr);
   at::DeleterFnPtr raw_deleter() const override;
+  void* malloc(size_t nbytes);
 
   static constexpr bool debug = false; // TODO (SpiralPipe) remove when release
 
@@ -54,7 +55,6 @@ private:
   void lazy_init(uintptr_t base, size_t offset, size_t size, size_t align);
   virtual ~SpiralCPUAllocator() override;
 
-  void* malloc(size_t nbytes);
   void PrintSummary_(std::string prefix="");
   void MergeLR(Block *center);
 
