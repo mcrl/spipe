@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <fcntl.h>
+#include <list>
 #include <memory>
 #include <mpi.h>
 #include <nvToolsExt.h>
@@ -22,6 +23,78 @@
 #include <vector>
 
 constexpr size_t kStageSize = (1ul << 25);
+constexpr size_t kRemoteAllocatorNumEntries = 512;
+
+class RemoteArgAllocator;
+struct FetchRemoteArgs {
+  unsigned int param_id;
+  bool staged_copy;
+  uintptr_t dataptr;
+  int rank;
+  int target_rank;
+  int size;
+  MPI_Aint disp;
+  MPI_Win window;
+  c10::SpiralCPUAllocator *allocator;
+  cudaEvent_t event;
+  RemoteArgAllocator *_remote_allocator;
+};
+
+class RemoteArgAllocator {
+public:
+  size_t num_entries_;
+  std::mutex mutex_;
+  std::vector<FetchRemoteArgs *> args_;
+  std::list<FetchRemoteArgs *> freelist_;
+  std::set<FetchRemoteArgs *> allocset_;
+
+  RemoteArgAllocator(size_t num_entries);
+  ~RemoteArgAllocator();
+  FetchRemoteArgs *allocate();
+  void free(FetchRemoteArgs *args);
+};
+
+RemoteArgAllocator::RemoteArgAllocator(size_t num_entries)
+    : num_entries_(num_entries) {
+  args_.resize(num_entries);
+  for (size_t i = 0; i < num_entries_; ++i) {
+    args_[i] = (FetchRemoteArgs *)malloc(sizeof(FetchRemoteArgs));
+    assert(args_[i] != nullptr);
+    CHECK_CUDA(cudaEventCreate(&args_[i]->event));
+    args_[i]->_remote_allocator = this;
+  }
+
+  for (size_t i = 0; i < num_entries_; ++i) {
+    freelist_.push_back(args_[i]);
+  }
+}
+
+RemoteArgAllocator::~RemoteArgAllocator() {
+  for (size_t i = 0; i < num_entries_; ++i) {
+    CHECK_CUDA(cudaEventDestroy(args_[i]->event));
+    free(args_[i]);
+  }
+}
+
+FetchRemoteArgs *RemoteArgAllocator::allocate() {
+  std::lock_guard<std::mutex> lock(mutex_);
+  assert(freelist_.size() > 0);
+  FetchRemoteArgs *args = freelist_.front();
+  freelist_.pop_front();
+  allocset_.insert(args);
+  return args;
+}
+
+void RemoteArgAllocator::free(FetchRemoteArgs *args) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = allocset_.find(args);
+  if (it != allocset_.end()) {
+    allocset_.erase(it);
+    freelist_.push_back(*it);
+    return;
+  }
+  assert(false && "Cannot be here");
+}
 
 std::vector<std::string> GetHostnames(MPI_Comm comm) {
   int size;
@@ -165,6 +238,7 @@ private:
   c10::SpiralCPUAllocator *allocator_ = nullptr;
   at::Allocator *prev_allocator_ptr_ = nullptr;
 
+  RemoteArgAllocator *remote_allocator_ = nullptr;
   cudaStream_t remote_stream_ = nullptr;
 };
 
@@ -308,6 +382,8 @@ Comm::Comm(std::vector<int> ranks, const bool init_shmem,
 
   CHECK_MPI(MPI_Barrier(mpi_comm_));
 
+  remote_allocator_ = new RemoteArgAllocator(kRemoteAllocatorNumEntries);
+  assert(remote_allocator_ != nullptr);
   CHECK_CUDA(cudaStreamCreate(&remote_stream_));
 }
 
@@ -315,6 +391,7 @@ Comm::~Comm() {
   if (Comm::debug)
     spdlog::info("Destroying SpiralPipe Comm");
 
+  delete remote_allocator_;
   CHECK_CUDA(cudaStreamDestroy(remote_stream_));
   // We guarantee all process joins at this point,
   // and no more access to shared objects are requested.
@@ -456,18 +533,6 @@ void Comm::SyncParamDataInfo() {
   MPI_Barrier(MPI_COMM_WORLD);
 }
 
-struct FetchRemoteArgs {
-  unsigned int param_id;
-  uintptr_t dataptr;
-  int rank;
-  int target_rank;
-  int size;
-  MPI_Aint disp;
-  MPI_Win window;
-  c10::SpiralCPUAllocator *allocator;
-  cudaEvent_t event;
-};
-
 nvtxRangeId_t nvtx_range_start(const char *message) {
   nvtxEventAttributes_t eventAttrib = {0};
   eventAttrib.version = NVTX_VERSION;
@@ -501,14 +566,16 @@ void CUDART_CB FetchRemoteParam_impl(FetchRemoteArgs *args) {
                     MPI_BYTE, window));
   CHECK_MPI(MPI_Win_unlock(target_rank, window));
 
-  // free(args);
+  if (!args->staged_copy)
+    free(args);
   nvtx_range_stop(id);
 }
 
 void CUDART_CB FreePinnedMemory_impl(FetchRemoteArgs *args) {
   args->allocator->free((void *)args->dataptr);
-  //CHECK_CUDA(cudaEventDestroy(args->event));
-  free(args);
+  args->_remote_allocator->free(args);
+  // CHECK_CUDA(cudaEventDestroy(args->event));
+  // free(args);
 }
 
 void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
@@ -526,15 +593,17 @@ void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
 
   if (staged_copy_) {
     for (size_t disp = 0; disp < size; disp += kStageSize) {
+
       size_t io_size = (disp + kStageSize > size) ? (size - disp) : kStageSize;
       uintptr_t staged_ptr;
       staged_ptr = (uintptr_t)allocator_->malloc(kStageSize);
 
-      FetchRemoteArgs *args =
-          (FetchRemoteArgs *)malloc(sizeof(FetchRemoteArgs));
+      // FetchRemoteArgs *args = (FetchRemoteArgs *)malloc(sizeof(FetchRemoteArgs));
+      FetchRemoteArgs *args = remote_allocator_->allocate();
       assert(args != nullptr);
 
       args->param_id = param_id;
+      args->staged_copy = staged_copy_;
       args->dataptr = staged_ptr;
       args->rank = rank;
       args->target_rank = target_rank;
@@ -543,7 +612,7 @@ void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
       args->window = window_;
       args->allocator = allocator_;
 
-      CHECK_CUDA(cudaEventCreate(&args->event));
+      //CHECK_CUDA(cudaEventCreate(&args->event));
 
       CHECK_CUDA(cudaLaunchHostFunc(remote_stream_,
                                     (cudaHostFn_t)FetchRemoteParam_impl, args));
@@ -556,9 +625,11 @@ void Comm::FetchRemoteParam(const unsigned int param_id, bool non_blocking,
                                     args));
     }
   } else {
-    FetchRemoteArgs *args = (FetchRemoteArgs *)malloc(sizeof(FetchRemoteArgs));
+    // FetchRemoteArgs *args = (FetchRemoteArgs *)malloc(sizeof(FetchRemoteArgs));
+    FetchRemoteArgs *args = remote_allocator_->allocate();
     assert(args != nullptr);
     args->param_id = param_id;
+    args->staged_copy = staged_copy_;
     args->dataptr = dataptr;
     args->rank = rank;
     args->target_rank = target_rank;
