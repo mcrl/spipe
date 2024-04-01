@@ -23,7 +23,7 @@
 #include <vector>
 
 constexpr size_t kStageSize = (1ul << 25);
-constexpr size_t kRemoteAllocatorNumEntries = 512;
+constexpr size_t kRemoteAllocatorNumEntries = 16384;
 
 class RemoteArgAllocator;
 struct FetchRemoteArgs {
