@@ -1,5 +1,6 @@
 #include "allocator.hpp"
 #include "util.hpp"
+#include "gdr.hpp"
 #include <c10/cuda/CUDAStream.h>
 #include <cassert>
 #include <cstddef>
@@ -297,6 +298,9 @@ Comm::Comm(std::vector<int> ranks,
   CHECK_MPI(MPI_Comm_rank(mpi_comm_, &comm_info_.mpi_rank_));
   comm_info_.is_host_leader_ = comm_info_.intra_rank_ == 0;
 
+  // Set CUDA device
+  CHECK_CUDA(cudaSetDevice(device));
+
   if (!init_shmem)
     return;
 
@@ -406,10 +410,7 @@ Comm::Comm(std::vector<int> ranks,
   assert(remote_allocator_ != nullptr);
   CHECK_CUDA(cudaStreamCreate(&remote_stream_));
   {
-    cudaDeviceProp prop;
-    CHECK_CUDA(cudaGetDeviceProperties(&prop, device));
-    remote_fetch_use_cpu_bounce_buffer_ =
-        prop.directManagedMemAccessFromHost == 0;
+    remote_fetch_use_cpu_bounce_buffer_ = check_gdr_support(device);
     if (Comm::debug)
       spdlog::info("Use CPU bounce buffer for remote param fetch = {}",
                    remote_fetch_use_cpu_bounce_buffer_);
@@ -599,7 +600,7 @@ void CUDART_CB FetchRemoteParam_impl(FetchRemoteArgs* args)
   MPI_Win window = args->window;
 
   char nvtx_name[64] = { 0 };
-  sprintf((char*)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
+  sprintf((char*)nvtx_name, "FetchRemoteParam %u (%ld)", param_id, size);
   nvtxRangeId_t id = nvtx_range_start((char*)nvtx_name);
 
   CHECK_MPI(MPI_Win_lock(MPI_LOCK_SHARED, target_rank, 0, window));
@@ -626,8 +627,8 @@ void Comm::FetchRemoteParam(const unsigned int param_id,
 {
   int rank = comm_info_.mpi_rank_;
   int target_rank = param_mapping_tbl_[param_id].mpi_rank_;
-  int size = param_mapping_tbl_[param_id].size_bytes_;
-  assert(size_bytes_ <= INT_MAX);
+  size_t size = param_mapping_tbl_[param_id].size_bytes_;
+  assert(size_bytes_ <= ULONG_MAX);
 
   MPI_Aint base_disp =
       param_mapping_tbl_[param_id].dataptr_ - GetBase(target_rank);
