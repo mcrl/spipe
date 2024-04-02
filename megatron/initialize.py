@@ -383,6 +383,7 @@ def _spiral_backend_init():
         spiral_helper.LazyConfigure(args.spiral_debug_backend)
         SpiralBackend(
             ranks,
+            torch.cuda.current_device(),
             init_shmem,
             args.spiral_shared_memory_name,
             args.spiral_shared_memory_buffer_size,

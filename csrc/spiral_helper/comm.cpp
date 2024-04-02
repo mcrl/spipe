@@ -32,7 +32,7 @@ struct FetchRemoteArgs {
   uintptr_t dataptr;
   int rank;
   int target_rank;
-  int size;
+  size_t size;
   MPI_Aint disp;
   MPI_Win window;
   c10::SpiralCPUAllocator* allocator;
@@ -169,6 +169,7 @@ int GetHostId(MPI_Comm comm)
 class Comm {
 public:
   Comm(std::vector<int> ranks,
+       const int device,
        const bool init_shmem,
        const char* shared_memory_name,
        const size_t kCpuBufferSize,
@@ -206,7 +207,6 @@ public:
   static bool debug;
 
 private:
-  bool staged_copy_ = true;
   int mpi_initialized_;
 
   MPI_Comm mpi_comm_;   // Communicator for participating ranks; not necessarily
@@ -252,11 +252,16 @@ private:
 
   RemoteArgAllocator* remote_allocator_ = nullptr;
   cudaStream_t remote_stream_ = nullptr;
+  bool remote_fetch_use_cpu_bounce_buffer_; // use CPU bounce buffer for remote
+                                            // param fetch
+  bool staged_copy_ = true; // use staged copy if use CPU bounce buffer for
+                            // remote param fetch
 };
 
 bool Comm::debug = false;
 
 Comm::Comm(std::vector<int> ranks,
+           const int device,
            const bool init_shmem,
            const char* shared_memory_name,
            const size_t kCpuBufferSize,
@@ -366,10 +371,10 @@ Comm::Comm(std::vector<int> ranks,
 
   // Initialize param mapping tbl
   param_mapping_tbl_ = (ParamDataInfo*)shared_ptr_;
-  assert(kCpuBufferHeaderSize % comm_info_.intra_size_ == 0);
-  size_t size_per_rank = (kCpuBufferHeaderSize / comm_info_.intra_size_);
-  size_t offset = comm_info_.intra_rank_ * size_per_rank;
-  memset((void*)(((char*)param_mapping_tbl_) + offset), 0, size_per_rank);
+  assert(kCpuBufferHeaderSize % comm_info_.mpi_size_ == 0);
+  if (comm_info_.intra_rank_ == 0) {
+    memset(param_mapping_tbl_, 0, kCpuBufferHeaderSize);
+  }
 
   // Initialize allocator
   assert(allocator_ ==
@@ -400,6 +405,15 @@ Comm::Comm(std::vector<int> ranks,
   remote_allocator_ = new RemoteArgAllocator(kRemoteAllocatorNumEntries);
   assert(remote_allocator_ != nullptr);
   CHECK_CUDA(cudaStreamCreate(&remote_stream_));
+  {
+    cudaDeviceProp prop;
+    CHECK_CUDA(cudaGetDeviceProperties(&prop, device));
+    remote_fetch_use_cpu_bounce_buffer_ =
+        prop.directManagedMemAccessFromHost == 0;
+    if (Comm::debug)
+      spdlog::info("Use CPU bounce buffer for remote param fetch = {}",
+                   remote_fetch_use_cpu_bounce_buffer_);
+  }
 }
 
 Comm::~Comm()
@@ -409,6 +423,7 @@ Comm::~Comm()
 
   delete remote_allocator_;
   CHECK_CUDA(cudaStreamDestroy(remote_stream_));
+
   // We guarantee all process joins at this point,
   // and no more access to shared objects are requested.
   MPI_Barrier(intra_comm_);
@@ -578,9 +593,8 @@ void CUDART_CB FetchRemoteParam_impl(FetchRemoteArgs* args)
 
   unsigned int param_id = args->param_id;
   uintptr_t dataptr = args->dataptr;
-  int rank = args->rank;
   int target_rank = args->target_rank;
-  int size = args->size;
+  size_t size = args->size;
   MPI_Aint disp = args->disp;
   MPI_Win window = args->window;
 
@@ -621,7 +635,12 @@ void Comm::FetchRemoteParam(const unsigned int param_id,
 
   cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
 
-  if (staged_copy_) {
+  if (remote_fetch_use_cpu_bounce_buffer_) {
+
+    if (!staged_copy_)
+      throw std::runtime_error("Disabling staged copy when using CPU bounce "
+                               "buffer is not supported yet.");
+
     for (size_t disp = 0; disp < size; disp += kStageSize) {
 
       size_t io_size = (disp + kStageSize > size) ? (size - disp) : kStageSize;
@@ -661,7 +680,7 @@ void Comm::FetchRemoteParam(const unsigned int param_id,
     FetchRemoteArgs* args = remote_allocator_->allocate();
     assert(args != nullptr);
     args->param_id = param_id;
-    args->staged_copy = staged_copy_;
+    args->staged_copy = false;
     args->dataptr = dataptr;
     args->rank = rank;
     args->target_rank = target_rank;
@@ -716,8 +735,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
   m.def("LazyConfigure", &LazyConfigure,
         "SpiralPipeBackend LazyConfigure (C++)");
   py::class_<Comm>(m, "Comm")
-      .def(py::init<std::vector<int>, const bool, const char*, const size_t,
-                    const size_t>())
+      .def(py::init<std::vector<int>, const int, const bool, const char*,
+                    const size_t, const size_t>())
       .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
       .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
       .def("RemapParamData", &Comm::RemapParamData)
