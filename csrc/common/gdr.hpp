@@ -30,5 +30,6 @@ bool check_gdr_support(int device_id)
     printf("GPUDirect RDMA support check for CUDA version < 11.3 is currently "
            "not supported.\n");
   if (_DEBUG_GDR)
-    printf("GPUDirect RDMA support: 0\n") return false
+    printf("GPUDirect RDMA support: 0\n");
+  return false;
 }
