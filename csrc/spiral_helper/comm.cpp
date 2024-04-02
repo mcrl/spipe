@@ -1,10 +1,12 @@
 #include "allocator.hpp"
 #include "util.hpp"
+#include "gdr.hpp"
 #include <c10/cuda/CUDAStream.h>
 #include <cassert>
 #include <cstddef>
 #include <cuda_runtime.h>
 #include <fcntl.h>
+#include <list>
 #include <memory>
 #include <mpi.h>
 #include <nvToolsExt.h>
@@ -12,14 +14,92 @@
 #include <semaphore.h>
 #include <set>
 #include <spdlog/spdlog.h>
-#include <string>
 #include <string.h>
+#include <string>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 #include <vector>
+
+constexpr size_t kStageSize = (1ul << 25);
+constexpr size_t kRemoteAllocatorNumEntries = 16384;
+
+class RemoteArgAllocator;
+struct FetchRemoteArgs {
+  unsigned int param_id;
+  bool staged_copy;
+  uintptr_t dataptr;
+  int rank;
+  int target_rank;
+  size_t size;
+  MPI_Aint disp;
+  MPI_Win window;
+  c10::SpiralCPUAllocator* allocator;
+  cudaEvent_t event;
+  RemoteArgAllocator* _remote_allocator;
+};
+
+class RemoteArgAllocator {
+public:
+  size_t num_entries_;
+  std::mutex mutex_;
+  std::vector<FetchRemoteArgs*> args_;
+  std::list<FetchRemoteArgs*> freelist_;
+  std::set<FetchRemoteArgs*> allocset_;
+
+  RemoteArgAllocator(size_t num_entries);
+  ~RemoteArgAllocator();
+  FetchRemoteArgs* allocate();
+  void free(FetchRemoteArgs* args);
+};
+
+RemoteArgAllocator::RemoteArgAllocator(size_t num_entries)
+  : num_entries_(num_entries)
+{
+  args_.resize(num_entries);
+  for (size_t i = 0; i < num_entries_; ++i) {
+    args_[i] = (FetchRemoteArgs*)malloc(sizeof(FetchRemoteArgs));
+    assert(args_[i] != nullptr);
+    CHECK_CUDA(cudaEventCreate(&args_[i]->event));
+    args_[i]->_remote_allocator = this;
+  }
+
+  for (size_t i = 0; i < num_entries_; ++i) {
+    freelist_.push_back(args_[i]);
+  }
+}
+
+RemoteArgAllocator::~RemoteArgAllocator()
+{
+  for (size_t i = 0; i < num_entries_; ++i) {
+    CHECK_CUDA(cudaEventDestroy(args_[i]->event));
+    free(args_[i]);
+  }
+}
+
+FetchRemoteArgs* RemoteArgAllocator::allocate()
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  assert(freelist_.size() > 0);
+  FetchRemoteArgs* args = freelist_.front();
+  freelist_.pop_front();
+  allocset_.insert(args);
+  return args;
+}
+
+void RemoteArgAllocator::free(FetchRemoteArgs* args)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = allocset_.find(args);
+  if (it != allocset_.end()) {
+    allocset_.erase(it);
+    freelist_.push_back(*it);
+    return;
+  }
+  assert(false && "Cannot be here");
+}
 
 std::vector<std::string> GetHostnames(MPI_Comm comm)
 {
@@ -90,6 +170,7 @@ int GetHostId(MPI_Comm comm)
 class Comm {
 public:
   Comm(std::vector<int> ranks,
+       const int device,
        const bool init_shmem,
        const char* shared_memory_name,
        const size_t kCpuBufferSize,
@@ -169,11 +250,19 @@ private:
 
   c10::SpiralCPUAllocator* allocator_ = nullptr;
   at::Allocator* prev_allocator_ptr_ = nullptr;
+
+  RemoteArgAllocator* remote_allocator_ = nullptr;
+  cudaStream_t remote_stream_ = nullptr;
+  bool remote_fetch_use_cpu_bounce_buffer_; // use CPU bounce buffer for remote
+                                            // param fetch
+  bool staged_copy_ = true; // use staged copy if use CPU bounce buffer for
+                            // remote param fetch
 };
 
 bool Comm::debug = false;
 
 Comm::Comm(std::vector<int> ranks,
+           const int device,
            const bool init_shmem,
            const char* shared_memory_name,
            const size_t kCpuBufferSize,
@@ -209,6 +298,9 @@ Comm::Comm(std::vector<int> ranks,
   CHECK_MPI(MPI_Comm_rank(mpi_comm_, &comm_info_.mpi_rank_));
   comm_info_.is_host_leader_ = comm_info_.intra_rank_ == 0;
 
+  // Set CUDA device
+  CHECK_CUDA(cudaSetDevice(device));
+
   if (!init_shmem)
     return;
 
@@ -236,7 +328,8 @@ Comm::Comm(std::vector<int> ranks,
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
-      spdlog::info("Shared memory created name = {} fd = {} sz = {}", shared_memory_name_, fd_, sb.st_size);
+      spdlog::info("Shared memory created name = {} fd = {} sz = {}",
+                   shared_memory_name_, fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
 
@@ -249,7 +342,8 @@ Comm::Comm(std::vector<int> ranks,
     struct stat sb;
     CHECK_ERRNO(fstat(fd_, &sb));
     if (Comm::debug)
-      spdlog::info("Shared memory opened name = {} fd = {} sz = {}", shared_memory_name_, fd_, sb.st_size);
+      spdlog::info("Shared memory opened name = {} fd = {} sz = {}",
+                   shared_memory_name_, fd_, sb.st_size);
     assert(sb.st_size == shared_memory_size_);
   }
   shared_ptr_ = mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE,
@@ -281,6 +375,7 @@ Comm::Comm(std::vector<int> ranks,
 
   // Initialize param mapping tbl
   param_mapping_tbl_ = (ParamDataInfo*)shared_ptr_;
+  assert(kCpuBufferHeaderSize % comm_info_.mpi_size_ == 0);
   if (comm_info_.intra_rank_ == 0) {
     memset(param_mapping_tbl_, 0, kCpuBufferHeaderSize);
   }
@@ -310,12 +405,28 @@ Comm::Comm(std::vector<int> ranks,
   }
 
   CHECK_MPI(MPI_Barrier(mpi_comm_));
+
+  remote_allocator_ = new RemoteArgAllocator(kRemoteAllocatorNumEntries);
+  assert(remote_allocator_ != nullptr);
+  CHECK_CUDA(cudaStreamCreateWithFlags(&remote_stream_, cudaStreamNonBlocking));
+  {
+    // Use CPU bounce buffer for GPUDirect disabled devices
+    remote_fetch_use_cpu_bounce_buffer_ = (check_gdr_support(device) == 0);
+    if (Comm::debug)
+      spdlog::info("Use CPU bounce buffer for remote param fetch = {}",
+                   remote_fetch_use_cpu_bounce_buffer_);
+  }
 }
 
 Comm::~Comm()
 {
   if (Comm::debug)
     spdlog::info("Destroying SpiralPipe Comm");
+
+  CHECK_CUDA(cudaDeviceSynchronize());
+
+  delete remote_allocator_;
+  CHECK_CUDA(cudaStreamDestroy(remote_stream_));
 
   // We guarantee all process joins at this point,
   // and no more access to shared objects are requested.
@@ -466,16 +577,6 @@ void Comm::SyncParamDataInfo()
   MPI_Barrier(MPI_COMM_WORLD);
 }
 
-struct FetchRemoteArgs {
-  unsigned int param_id;
-  uintptr_t dataptr;
-  int rank;
-  int target_rank;
-  int size;
-  MPI_Aint disp;
-  MPI_Win window;
-};
-
 nvtxRangeId_t nvtx_range_start(const char* message)
 {
   nvtxEventAttributes_t eventAttrib = { 0 };
@@ -491,19 +592,18 @@ nvtxRangeId_t nvtx_range_start(const char* message)
 
 void nvtx_range_stop(nvtxRangeId_t nvtx_id) { nvtxRangeEnd(nvtx_id); }
 
-void CUDART_CB _FetchRemoteParam(FetchRemoteArgs* args)
+void CUDART_CB FetchRemoteParam_impl(FetchRemoteArgs* args)
 {
 
   unsigned int param_id = args->param_id;
   uintptr_t dataptr = args->dataptr;
-  int rank = args->rank;
   int target_rank = args->target_rank;
-  int size = args->size;
+  size_t size = args->size;
   MPI_Aint disp = args->disp;
   MPI_Win window = args->window;
 
   char nvtx_name[64] = { 0 };
-  sprintf((char*)nvtx_name, "FetchRemoteParam %u (%d)", param_id, size);
+  sprintf((char*)nvtx_name, "FetchRemoteParam %u (%ld)", param_id, size);
   nvtxRangeId_t id = nvtx_range_start((char*)nvtx_name);
 
   CHECK_MPI(MPI_Win_lock(MPI_LOCK_SHARED, target_rank, 0, window));
@@ -511,8 +611,17 @@ void CUDART_CB _FetchRemoteParam(FetchRemoteArgs* args)
                     MPI_BYTE, window));
   CHECK_MPI(MPI_Win_unlock(target_rank, window));
 
-  free(args);
+  if (!args->staged_copy)
+    free(args);
   nvtx_range_stop(id);
+}
+
+void CUDART_CB FreePinnedMemory_impl(FetchRemoteArgs* args)
+{
+  args->allocator->free((void*)args->dataptr);
+  args->_remote_allocator->free(args);
+  // CHECK_CUDA(cudaEventDestroy(args->event));
+  // free(args);
 }
 
 void Comm::FetchRemoteParam(const unsigned int param_id,
@@ -521,24 +630,71 @@ void Comm::FetchRemoteParam(const unsigned int param_id,
 {
   int rank = comm_info_.mpi_rank_;
   int target_rank = param_mapping_tbl_[param_id].mpi_rank_;
-  int size = param_mapping_tbl_[param_id].size_bytes_;
-  assert(size_bytes_ <= INT_MAX);
+  size_t size = param_mapping_tbl_[param_id].size_bytes_;
+  assert(size_bytes_ <= ULONG_MAX);
 
-  MPI_Aint disp = param_mapping_tbl_[param_id].dataptr_ - GetBase(target_rank);
-  assert((disp + size) < shared_memory_size_ - shared_memory_header_size_);
-
-  FetchRemoteArgs* args = (FetchRemoteArgs*)malloc(sizeof(FetchRemoteArgs));
-  assert(args != nullptr);
-  args->param_id = param_id;
-  args->dataptr = dataptr;
-  args->rank = rank;
-  args->target_rank = target_rank;
-  args->size = size;
-  args->disp = disp;
-  args->window = window_;
+  MPI_Aint base_disp =
+      param_mapping_tbl_[param_id].dataptr_ - GetBase(target_rank);
+  assert((base_disp + size) < shared_memory_size_ - shared_memory_header_size_);
 
   cudaStream_t stream = c10::cuda::getCurrentCUDAStream().stream();
-  CHECK_CUDA(cudaLaunchHostFunc(stream, (cudaHostFn_t)_FetchRemoteParam, args));
+
+  if (remote_fetch_use_cpu_bounce_buffer_) {
+
+    if (!staged_copy_)
+      throw std::runtime_error("Disabling staged copy when using CPU bounce "
+                               "buffer is not supported yet.");
+
+    for (size_t disp = 0; disp < size; disp += kStageSize) {
+
+      size_t io_size = (disp + kStageSize > size) ? (size - disp) : kStageSize;
+      uintptr_t staged_ptr;
+      staged_ptr = (uintptr_t)allocator_->malloc(kStageSize);
+
+      // FetchRemoteArgs *args = (FetchRemoteArgs
+      // *)malloc(sizeof(FetchRemoteArgs));
+      FetchRemoteArgs* args = remote_allocator_->allocate();
+      assert(args != nullptr);
+
+      args->param_id = param_id;
+      args->staged_copy = staged_copy_;
+      args->dataptr = staged_ptr;
+      args->rank = rank;
+      args->target_rank = target_rank;
+      args->size = io_size;
+      args->disp = base_disp + disp;
+      args->window = window_;
+      args->allocator = allocator_;
+
+      // CHECK_CUDA(cudaEventCreate(&args->event));
+
+      CHECK_CUDA(cudaLaunchHostFunc(remote_stream_,
+                                    (cudaHostFn_t)FetchRemoteParam_impl, args));
+      CHECK_CUDA(cudaEventRecord(args->event, remote_stream_));
+      CHECK_CUDA(cudaStreamWaitEvent(stream, args->event));
+      CHECK_CUDA(cudaMemcpyAsync((void*)((char*)dataptr + disp),
+                                 (void*)staged_ptr, io_size,
+                                 cudaMemcpyHostToDevice, stream));
+      CHECK_CUDA(cudaLaunchHostFunc(stream, (cudaHostFn_t)FreePinnedMemory_impl,
+                                    args));
+    }
+  } else {
+    // FetchRemoteArgs *args = (FetchRemoteArgs
+    // *)malloc(sizeof(FetchRemoteArgs));
+    FetchRemoteArgs* args = remote_allocator_->allocate();
+    assert(args != nullptr);
+    args->param_id = param_id;
+    args->staged_copy = false;
+    args->dataptr = dataptr;
+    args->rank = rank;
+    args->target_rank = target_rank;
+    args->size = size;
+    args->disp = base_disp;
+    args->window = window_;
+    CHECK_CUDA(
+        cudaLaunchHostFunc(stream, (cudaHostFn_t)FetchRemoteParam_impl, args));
+  }
+
   if (!non_blocking)
     CHECK_CUDA(cudaStreamSynchronize(stream));
 }
@@ -583,8 +739,8 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
   m.def("LazyConfigure", &LazyConfigure,
         "SpiralPipeBackend LazyConfigure (C++)");
   py::class_<Comm>(m, "Comm")
-      .def(py::init<std::vector<int>, const bool, const char*, const size_t,
-                    const size_t>())
+      .def(py::init<std::vector<int>, const int, const bool, const char*,
+                    const size_t, const size_t>())
       .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
       .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
       .def("RemapParamData", &Comm::RemapParamData)

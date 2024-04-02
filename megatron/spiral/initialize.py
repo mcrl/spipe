@@ -14,6 +14,7 @@ class SpiralBackend:
     def __init__(
         self,
         ranks,
+        device,
         init_shmem,
         shared_memory_name,
         shared_memory_buffer_size,
@@ -21,6 +22,7 @@ class SpiralBackend:
     ):
         self.thunder_group = spiral_helper.Comm(
             sorted(ranks),
+            device,
             init_shmem,
             shared_memory_name,
             shared_memory_buffer_size,
