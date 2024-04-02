@@ -1,18 +1,19 @@
 #pragma once
 
 #include <cstddef>
+#include <mutex>
 #include <semaphore.h>
 #include <set>
 #include <string>
 #include <torch/extension.h>
-#include <mutex>
 
 namespace c10 {
 
 class SpiralCPUAllocator : public at::Allocator {
 public:
   static SpiralCPUAllocator* instance();
-  static SpiralCPUAllocator* instance(uintptr_t base, size_t offset, size_t size, size_t align);
+  static SpiralCPUAllocator*
+  instance(uintptr_t base, size_t offset, size_t size, size_t align);
 
   DataPtr allocate(size_t nbytes) const override;
   void free(void* const ptr);
@@ -28,15 +29,16 @@ private:
     Block *nxt_, *prv_;
     bool allocated = false;
     Block(size_t offset_, size_t sz, Block* nxt, Block* prv);
-    bool operator== (Block& x);
-    bool operator< (Block& x);
+    bool operator==(Block& x);
+    bool operator<(Block& x);
     std::string tostring();
     void print();
   };
 
   // Block comparators
   struct CompareBlockoffset {
-    bool operator() (Block* a, Block* b) const {
+    bool operator()(Block* a, Block* b) const
+    {
       if (a->offset_ != b->offset_)
         return a->offset_ < b->offset_;
       return (size_t)a->sz_ < (size_t)b->sz_;
@@ -44,7 +46,8 @@ private:
   };
 
   struct CompareBlocksz {
-    bool operator() (Block* a, Block* b) const {
+    bool operator()(Block* a, Block* b) const
+    {
       if (a->sz_ != b->sz_)
         return a->sz_ < b->sz_;
       return a->offset_ < b->offset_;
@@ -55,12 +58,12 @@ private:
   void lazy_init(uintptr_t base, size_t offset, size_t size, size_t align);
   virtual ~SpiralCPUAllocator() override;
 
-  void PrintSummary_(std::string prefix="");
-  void MergeLR(Block *center);
+  void PrintSummary_(std::string prefix = "");
+  void MergeLR(Block* center);
 
   static SpiralCPUAllocator* instance_;
 
-  // base_ is virtual address of host shared memory 
+  // base_ is virtual address of host shared memory
   // base_ + offset_ is virtual address of allocator
   uintptr_t base_;
   size_t offset_;
