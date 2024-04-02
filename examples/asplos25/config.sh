@@ -29,7 +29,7 @@ VOCAB_FILE=/home/n0/yujin/tmp/tokenizer/megatron/gpt2-vocab.json
 MERGE_FILE=/home/n0/yujin/tmp/tokenizer/megatron/gpt2-merges.txt
 
 # Model spec
-LAYER=24
+LAYER=48
 HIDDEN=1024
 HEAD=16
 SEQ=1024
@@ -49,6 +49,9 @@ SPIRAL_FWD=1
 SPIRAL_BWD=3
 SPIRAL_STAGE_OPTIMIZER=YES
 SPIRAL_STAGE_OPTIMIZER_POOL_SIZE=0
+SPIRAL_SHMEM_NAME=/spiral-${USER}
+SPIRAL_SHMEM_BUFFER_SIZE=$(( 64 * 2**30 ))
+SPIRAL_SHMEM_HEADER_SIZE=$(( 1 * 2**30 ))
 SPIRAL_DEBUG_BACKEND=NO
 
 # config for interleaving

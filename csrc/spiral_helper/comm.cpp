@@ -13,6 +13,7 @@
 #include <set>
 #include <spdlog/spdlog.h>
 #include <string>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -150,7 +151,7 @@ private:
   void* shared_ptr_ = nullptr;
   void* data_ptr_ = nullptr;
   uintptr_t* shared_ptrs_; // shared_ptr_ virtual address of each mpi rank
-  const char* shared_memory_name_;
+  char* shared_memory_name_;
   size_t shared_memory_size_ = 0; // size > 0 indicates shmem initialized
   size_t shared_memory_header_size_ = 0;
   std::vector<void*> additional_pinned_ptrs_; // additional pinned pointers,
@@ -212,7 +213,7 @@ Comm::Comm(std::vector<int> ranks,
     return;
 
   // Configure shared memory
-  shared_memory_name_ = shared_memory_name;
+  shared_memory_name_ = strdup(shared_memory_name);
   shared_memory_size_ = kCpuBufferHeaderSize + kCpuBufferSize;
   shared_memory_header_size_ = kCpuBufferHeaderSize;
 
