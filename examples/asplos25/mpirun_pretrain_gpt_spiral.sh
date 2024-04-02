@@ -18,9 +18,9 @@ fi
 EXTRA_ARGS="
     --spiral \
     --spiral-remap \
-    --spiral-shared-memory-name /spiral \
-    --spiral-shared-memory-buffer-size $(( 128 * 2**30 )) \
-    --spiral-shared-memory-header-size $(( 1 * 2**30 )) \
+    --spiral-shared-memory-name $SPIRAL_SHMEM_NAME \
+    --spiral-shared-memory-buffer-size $SPIRAL_SHMEM_BUFFER_SIZE \
+    --spiral-shared-memory-header-size $SPIRAL_SHMEM_HEADER_SIZE \
     --spiral-forward-virtual-size $SPIRAL_FWD \
     --spiral-backward-virtual-size $SPIRAL_BWD \
     --spiral-recompute-activations \
