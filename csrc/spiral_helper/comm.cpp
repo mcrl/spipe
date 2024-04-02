@@ -408,9 +408,10 @@ Comm::Comm(std::vector<int> ranks,
 
   remote_allocator_ = new RemoteArgAllocator(kRemoteAllocatorNumEntries);
   assert(remote_allocator_ != nullptr);
-  CHECK_CUDA(cudaStreamCreate(&remote_stream_));
+  CHECK_CUDA(cudaStreamCreateWithFlags(&remote_stream_, cudaStreamNonBlocking));
   {
-    remote_fetch_use_cpu_bounce_buffer_ = check_gdr_support(device);
+    // Use CPU bounce buffer for GPUDirect disabled devices
+    remote_fetch_use_cpu_bounce_buffer_ = (check_gdr_support(device) == 0);
     if (Comm::debug)
       spdlog::info("Use CPU bounce buffer for remote param fetch = {}",
                    remote_fetch_use_cpu_bounce_buffer_);
@@ -421,6 +422,8 @@ Comm::~Comm()
 {
   if (Comm::debug)
     spdlog::info("Destroying SpiralPipe Comm");
+
+  CHECK_CUDA(cudaDeviceSynchronize());
 
   delete remote_allocator_;
   CHECK_CUDA(cudaStreamDestroy(remote_stream_));

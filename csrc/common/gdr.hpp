@@ -4,8 +4,11 @@
 
 #define _DEBUG_GDR false
 
-bool check_gdr_support(int device_id)
+// Check GPU Direct RDMA support. Return 1 if supported, 0 otherwise.
+int check_gdr_support(int device_id)
 {
+  int gdr_support = 0;
+
   CUdevice dev;
   CHECK_CUDA_DRIVER(cuDeviceGet(&dev, device_id));
 
@@ -16,12 +19,11 @@ bool check_gdr_support(int device_id)
   // Starting from CUDA 11.3, CUDA provides an ability to check GPUDirect RDMA
   // support.
   if (drv_version >= 11030) {
-    int gdr_support = 0;
     CHECK_CUDA_DRIVER(cuDeviceGetAttribute(
         &gdr_support, CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_SUPPORTED, dev));
     if (_DEBUG_GDR)
       printf("GPUDirect RDMA support: %d\n", gdr_support);
-    return !!gdr_support;
+    return gdr_support;
   }
 #endif
   // TODO (SpiralPipe) Check check_gdr_support() in
@@ -31,5 +33,5 @@ bool check_gdr_support(int device_id)
            "not supported.\n");
   if (_DEBUG_GDR)
     printf("GPUDirect RDMA support: 0\n");
-  return false;
+  return gdr_support;
 }
