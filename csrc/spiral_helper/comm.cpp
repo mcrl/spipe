@@ -406,15 +406,17 @@ Comm::Comm(std::vector<int> ranks,
 
   CHECK_MPI(MPI_Barrier(mpi_comm_));
 
-  remote_allocator_ = new RemoteArgAllocator(kRemoteAllocatorNumEntries);
-  assert(remote_allocator_ != nullptr);
-  CHECK_CUDA(cudaStreamCreateWithFlags(&remote_stream_, cudaStreamNonBlocking));
-  {
-    // Use CPU bounce buffer for GPUDirect disabled devices
-    remote_fetch_use_cpu_bounce_buffer_ = (check_gdr_support(device) == 0);
-    if (Comm::debug)
-      spdlog::info("Use CPU bounce buffer for remote param fetch = {}",
-                   remote_fetch_use_cpu_bounce_buffer_);
+  // Use CPU bounce buffer for GPUDirect disabled devices
+  remote_fetch_use_cpu_bounce_buffer_ = (check_gdr_support(device) == 0);
+  if (Comm::debug)
+    spdlog::info("Use CPU bounce buffer for remote param fetch = {}",
+                 remote_fetch_use_cpu_bounce_buffer_);
+
+  if (remote_fetch_use_cpu_bounce_buffer_) {
+    remote_allocator_ = new RemoteArgAllocator(kRemoteAllocatorNumEntries);
+    assert(remote_allocator_ != nullptr);
+    CHECK_CUDA(
+        cudaStreamCreateWithFlags(&remote_stream_, cudaStreamNonBlocking));
   }
 }
 
@@ -425,8 +427,12 @@ Comm::~Comm()
 
   CHECK_CUDA(cudaDeviceSynchronize());
 
-  delete remote_allocator_;
-  CHECK_CUDA(cudaStreamDestroy(remote_stream_));
+  if (remote_allocator_ != nullptr) {
+    delete remote_allocator_;
+  }
+  if (remote_stream_ != nullptr) {
+    CHECK_CUDA(cudaStreamDestroy(remote_stream_));
+  }
 
   // We guarantee all process joins at this point,
   // and no more access to shared objects are requested.
@@ -679,9 +685,7 @@ void Comm::FetchRemoteParam(const unsigned int param_id,
                                     args));
     }
   } else {
-    // FetchRemoteArgs *args = (FetchRemoteArgs
-    // *)malloc(sizeof(FetchRemoteArgs));
-    FetchRemoteArgs* args = remote_allocator_->allocate();
+    FetchRemoteArgs *args = (FetchRemoteArgs *)malloc(sizeof(FetchRemoteArgs));
     assert(args != nullptr);
     args->param_id = param_id;
     args->staged_copy = false;
