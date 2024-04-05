@@ -1,4 +1,4 @@
-#include "cpu_adam.h"
+#include "cpu_adam.hpp"
 #include <cassert>
 #include <iostream>
 #include <memory>
@@ -25,7 +25,7 @@
 #include <unistd.h>
 
 struct ThreadSafeOptimizer {
-  Adam_Optimizer opt;
+  SpiralAdamOptimizer opt;
   ThreadPool pool;
   std::vector<std::future<int>>
       futures;           // Storage for futures returned by threads
@@ -34,7 +34,7 @@ struct ThreadSafeOptimizer {
   const bool should_log;
   std::mutex m;
 
-  ThreadSafeOptimizer(Adam_Optimizer&& opt, const int nparams, const int pool_size, const bool should_log)
+  ThreadSafeOptimizer(SpiralAdamOptimizer&& opt, const int nparams, const int pool_size, const bool should_log)
     : opt(opt), pool(pool_size), nparams(nparams), nparams_submitted(0),
       should_log(should_log)
   {}
@@ -54,7 +54,7 @@ int spiral_create_adam_optimizer(int optimizer_id,
                                  bool should_log)
 {
   auto opt =
-      Adam_Optimizer(alpha, betta1, betta2, eps, weight_decay, adamw_mode);
+      SpiralAdamOptimizer(alpha, betta1, betta2, eps, weight_decay, adamw_mode);
 
   if (pool_size == 0 || pool_size > nparams)
     pool_size = nparams;
