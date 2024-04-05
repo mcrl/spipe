@@ -295,6 +295,10 @@ def initialize_model_parallel(
             embedding_ranks = ranks
             position_embedding_ranks = ranks
 
+            if _SPIRAL and _SPIRAL_REMAP:
+                spiral_embedding_ranks = ranks
+                spiral_position_embedding_ranks = ranks
+
         group = torch.distributed.new_group(embedding_ranks)
         if rank in embedding_ranks:
             _EMBEDDING_GROUP = group

@@ -104,7 +104,6 @@ def get_megatron_optimizer(model,
     if (
         args.spiral
         and args.spiral_stage_optimizer
-        and args.spiral_backward_virtual_size > 1
     ):
         if not hasattr(model, "_spiral_optimizer_entered"):
             # NOTE (SpiralPipe) top level model[], recursively collect optimizer for each **BWD** stage. FWD stages are skipped, even though they will naturally be skipped due to logic in get_param_groups, in order to prevent optimizer with empty param group.
