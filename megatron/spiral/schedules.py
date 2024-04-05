@@ -311,9 +311,9 @@ def forward_backward_pipelining_with_spiral_remap(
                         .detach()
                         .requires_grad_()
                     )
-                    assert (
-                        input_ckpt_.requires_grad
-                    ), "Input ckpt must require grad before feeding to BWD"
+                    # Input ckpt must require grad before feeding to BWD
+                    if not input_ckpt_.requires_grad:
+                        input_ckpt_.requires_grad_()
                     insert_value_to_recvs.append(input_ckpt_)
                 else:
                     if _DEBUG_SCHEDULE:
