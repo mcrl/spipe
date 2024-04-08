@@ -53,6 +53,10 @@ DATA_ARGS="
     --split 949,50,1
 "
 
+LOGGING_ARGS="
+    --log-throughput
+"
+
 if [ -n "$FUSED_KERNEL_LOCK" ] && [ -f "${FUSED_KERNEL_LOCK}" ]; then
     rm ${FUSED_KERNEL_LOCK}
 fi
@@ -64,7 +68,7 @@ if [ -n "${SPIRAL_SHMEM_NAME}" ] && [ -e "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
     fi
 fi
 
-EXEC_CMD="python ${MEGATRON_PATH}/pretrain_gpt.py ${EXTRA_ARGS} ${DISTRIBUTED_ARGS} ${GPT_ARGS} ${DATA_ARGS}"
+EXEC_CMD="python ${MEGATRON_PATH}/pretrain_gpt.py ${EXTRA_ARGS} ${DISTRIBUTED_ARGS} ${GPT_ARGS} ${DATA_ARGS} ${LOGGING_ARGS}"
 
 if [ ${NSYS_ENABLE} == "YES" ]; then
     EXEC_CMD="${NSYS} profile -t cuda,nvtx -o ${NSYS_OUTPUT}_%q{OMPI_COMM_WORLD_RANK} --force-overwrite true ${EXEC_CMD}"
