@@ -813,28 +813,31 @@ def forward_backward_pipelining_with_spiral_remap(
                 raise RuntimeError("record_event failed")
             free_event_queries[free_curr.tag] = free_curr
 
-        # if not spiral stage optimizer, then gradient should be manually reduced and offloaded after `forward_backward_func` at train_step()
-        if optimize_after_bwd_stage:
-            with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
-                if (
-                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
-                # reduce grads
+        # gradient should be offloaded after `forward_backward_func` at train_step()
+        with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
+            if (
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
+                == -1
+            ):
+                raise RuntimeError("wait_event failed")
+            # if not spiral stage optimizer, then gradient should be manually reduced
+            if optimize_after_bwd_stage:
                 optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
-                # offload grads
-                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
-                offload_grad_curr = get_thunder_cuda_manager().Event(
-                    "offload",
-                    "free",
-                    tag=f"offload_grad:b{bwd_stage_id}"
-                )
-                offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
-                if offload_grad_ev_long == -1:
-                    raise RuntimeError("record_event failed")
-                offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
-                # optimizer step
+            else:
+                model[-bwd_stage_id - 1].allreduce_gradients()
+            # offload grads
+            model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
+            offload_grad_curr = get_thunder_cuda_manager().Event(
+                "offload",
+                "free",
+                tag=f"offload_grad:b{bwd_stage_id}"
+            )
+            offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
+            if offload_grad_ev_long == -1:
+                raise RuntimeError("record_event failed")
+            offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
+            # if not spiral stage optimizer, then optimizer will be executed after iteration
+            if optimize_after_bwd_stage:
                 inner_step_kwargs = {}
                 inner_step_kwargs["spiral_offload_grad_ev_long"] = offload_grad_ev_long
                 # TODO (SpiralPipe) timers is None. Fix it
@@ -845,23 +848,23 @@ def forward_backward_pipelining_with_spiral_remap(
                     (update_successful, grad_norm, num_zeros_in_grad)
                 )
 
-            with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
-                if (
-                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"))
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
+        with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
+            if (
+                get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"))
+                == -1
+            ):
+                raise RuntimeError("wait_event failed")
 
-                # free bwd stage grads
-                model[-bwd_stage_id - 1].spiral_free_grad()
-                free_grad_curr = get_thunder_cuda_manager().Event(
-                    "free",
-                    None,
-                    tag=f"free_grad:b{bwd_stage_id}",
-                )
-                if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
-                    raise RuntimeError("record_event failed")
-                free_event_queries[free_grad_curr.tag] = free_grad_curr
+            # free bwd stage grads
+            model[-bwd_stage_id - 1].spiral_free_grad()
+            free_grad_curr = get_thunder_cuda_manager().Event(
+                "free",
+                None,
+                tag=f"free_grad:b{bwd_stage_id}",
+            )
+            if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
+                raise RuntimeError("record_event failed")
+            free_event_queries[free_grad_curr.tag] = free_grad_curr
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -884,18 +887,18 @@ def forward_backward_pipelining_with_spiral_remap(
     ):
         raise RuntimeError("wait_event failed")
 
-    if optimize_after_bwd_stage:
-        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-            # flush free grad event queries
-            if (
-                get_thunder_cuda_manager().wait_event(
-                    free_event_queries.pop(f"free_grad:b{bwd_stage_id}")
-                )
-                == -1
-            ):
-                raise RuntimeError("wait_event failed")
+    for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+        # flush free grad event queries
+        if (
+            get_thunder_cuda_manager().wait_event(
+                free_event_queries.pop(f"free_grad:b{bwd_stage_id}")
+            )
+            == -1
+        ):
+            raise RuntimeError("wait_event failed")
 
-            # join optimizer
+        # join optimizer
+        if optimize_after_bwd_stage:
             assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
             optimizer[bwd_stage_id].optimizer.sync()
             if _DEBUG_SCHEDULE:
@@ -1452,28 +1455,31 @@ def forward_backward_pipelining_with_spiral(
                 raise RuntimeError("record_event failed")
             free_event_queries[free_curr.tag] = free_curr
 
-        # if not spiral stage optimizer, then gradient should be manually reduced and offloaded after `forward_backward_func` at train_step()
-        if optimize_after_bwd_stage:
-            with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
-                if (
-                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
-                # reduce grads
+        # gradient should be offloaded after `forward_backward_func` at train_step()
+        with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
+            if (
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
+                == -1
+            ):
+                raise RuntimeError("wait_event failed")
+            # if not spiral stage optimizer, then gradient should be manually reduced
+            if optimize_after_bwd_stage:
                 optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
-                # offload grads
-                model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
-                offload_grad_curr = get_thunder_cuda_manager().Event(
-                    "offload",
-                    "free",
-                    tag=f"offload_grad:b{bwd_stage_id}"
-                )
-                offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
-                if offload_grad_ev_long == -1:
-                    raise RuntimeError("record_event failed")
-                offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
-                # optimizer step
+            else:
+                model[bwd_stage_id].allreduce_gradients()
+            # offload grads
+            model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
+            offload_grad_curr = get_thunder_cuda_manager().Event(
+                "offload",
+                "free",
+                tag=f"offload_grad:b{bwd_stage_id}"
+            )
+            offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
+            if offload_grad_ev_long == -1:
+                raise RuntimeError("record_event failed")
+            offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
+            # if not spiral stage optimizer, then optimizer will be executed after iteration
+            if optimize_after_bwd_stage:
                 inner_step_kwargs = {}
                 inner_step_kwargs["spiral_offload_grad_ev_long"] = offload_grad_ev_long
                 # TODO (SpiralPipe) timers is None. Fix it
@@ -1484,23 +1490,23 @@ def forward_backward_pipelining_with_spiral(
                     (update_successful, grad_norm, num_zeros_in_grad)
                 )
 
-            with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
-                if (
-                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"))
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
+        with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
+            if (
+                get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"))
+                == -1
+            ):
+                raise RuntimeError("wait_event failed")
 
-                # free bwd stage grads
-                model[bwd_stage_id].spiral_free_grad()
-                free_grad_curr = get_thunder_cuda_manager().Event(
-                    "free",
-                    None,
-                    tag=f"free_grad:b{bwd_stage_id}",
-                )
-                if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
-                    raise RuntimeError("record_event failed")
-                free_event_queries[free_grad_curr.tag] = free_grad_curr
+            # free bwd stage grads
+            model[bwd_stage_id].spiral_free_grad()
+            free_grad_curr = get_thunder_cuda_manager().Event(
+                "free",
+                None,
+                tag=f"free_grad:b{bwd_stage_id}",
+            )
+            if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
+                raise RuntimeError("record_event failed")
+            free_event_queries[free_grad_curr.tag] = free_grad_curr
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -1512,18 +1518,18 @@ def forward_backward_pipelining_with_spiral(
     ):
         raise RuntimeError("wait_event failed")
 
-    if optimize_after_bwd_stage:
-        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-            # flush free grad event queries
-            if (
-                get_thunder_cuda_manager().wait_event(
-                    free_event_queries.pop(f"free_grad:b{bwd_stage_id}")
-                )
-                == -1
-            ):
-                raise RuntimeError("wait_event failed")
+    for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+        # flush free grad event queries
+        if (
+            get_thunder_cuda_manager().wait_event(
+                free_event_queries.pop(f"free_grad:b{bwd_stage_id}")
+            )
+            == -1
+        ):
+            raise RuntimeError("wait_event failed")
 
-            # join optimizer
+        # join optimizer
+        if optimize_after_bwd_stage:
             assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
             optimizer[bwd_stage_id].optimizer.sync()
             if _DEBUG_SCHEDULE:
