@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#define _DEBUG_THREAD_POOL true
+#define _DEBUG_THREAD_POOL false
 
 using namespace std;
 
@@ -161,7 +161,7 @@ void ThreadPool::flush(size_t jcnt)
     unique_lock<mutex> lck_done(_jqdm);
     if (_DEBUG_THREAD_POOL) {
       printf("(pid:%ld) ThreadPool::flush (done:%ld)\n", (long)getpid(),
-            _jq_done_size.load());
+             _jq_done_size.load());
     }
     assert(_jq_done_size.load() <= jcnt);
     if (_jq_done_size.load() == jcnt) {

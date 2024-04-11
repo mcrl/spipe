@@ -27,7 +27,8 @@
 #define _DEBUG_OPTIMIZER false // for debugging Tensor values
 
 struct ThreadSafeOptimizer {
-  SpiralAdamOptimizer opt;
+  std::unordered_map<int, std::shared_ptr<void>>
+      group_s_opts; // Optimizer shared by a parameter group
   ThreadPool pool;
   std::vector<std::future<int>>
       futures;           // Storage for futures returned by threads
@@ -36,18 +37,20 @@ struct ThreadSafeOptimizer {
   const bool should_log;
   std::mutex m;
 
-  ThreadSafeOptimizer(SpiralAdamOptimizer&& opt,
-                      const int nparams,
-                      const int pool_size,
-                      const bool should_log)
-    : opt(opt), pool(pool_size), nparams(nparams), nparams_submitted(0),
-      should_log(should_log)
+  ThreadSafeOptimizer(
+      std::unordered_map<int, std::shared_ptr<void>> group_s_opts,
+      const int nparams,
+      const int pool_size,
+      const bool should_log)
+    : group_s_opts(group_s_opts), pool(pool_size), nparams(nparams),
+      nparams_submitted(0), should_log(should_log)
   {}
 };
 
 static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
 
 int spiral_create_adam_optimizer(int optimizer_id,
+                                 int ngroups,
                                  int nparams,
                                  int pool_size,
                                  float alpha,
@@ -58,8 +61,17 @@ int spiral_create_adam_optimizer(int optimizer_id,
                                  bool adamw_mode,
                                  bool should_log)
 {
-  auto opt =
-      SpiralAdamOptimizer(alpha, betta1, betta2, eps, weight_decay, adamw_mode);
+  /*
+   * Each backward stage has a ThreadSafeOptimizer and a ThreadPool.
+   * - ThreadSafeOptimizer has a SpiralCPUAdamOptimizer for each parameter group
+   * (mainly a weight group and a bias group).
+   * - ThreadPool is shared between all ThreadSafeOptimizers.
+   */
+  std::unordered_map<int, std::shared_ptr<void>> group_s_opts;
+  for (int i = 0; i < ngroups; i++) {
+    group_s_opts[i] = std::make_shared<SpiralAdamOptimizer>(
+        alpha, betta1, betta2, eps, weight_decay, adamw_mode);
+  }
 
   if (pool_size == 0 || pool_size > nparams)
     pool_size = nparams;
@@ -67,12 +79,13 @@ int spiral_create_adam_optimizer(int optimizer_id,
     throw std::runtime_error("Invalid thread pool size");
 
   s_optimizers[optimizer_id] = std::make_shared<ThreadSafeOptimizer>(
-      std::move(opt), nparams, pool_size, should_log);
+      group_s_opts, nparams, pool_size, should_log);
 
   if (should_log) {
     printf("[%ld] ThreadSafeOptimizer #%d is created with %d threads for %d "
+           "groups %d "
            "params.\n",
-           (long)getpid(), optimizer_id, pool_size, nparams);
+           (long)getpid(), optimizer_id, pool_size, ngroups, nparams);
   }
 
   if (should_log) {
@@ -112,6 +125,7 @@ int spiral_destroy_adam_optimizer(int optimizer_id)
 }
 
 int _spiral_adam_step(int optimizer_id,
+                      int group_id,
                       size_t step,
                       float lr,
                       float beta1,
@@ -165,11 +179,17 @@ int _spiral_adam_step(int optimizer_id,
            exp_avg_sq_c.numel());
   }
 
-  ts_opt->opt.IncrementStep(step, beta1, beta2);
-  ts_opt->opt.update_state(lr, epsilon, weight_decay, bias_correction);
-  ts_opt->opt.Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
-                     params_c.numel(), nullptr,
-                     (params.options().dtype() == at::kHalf));
+  auto group_s_opt = std::static_pointer_cast<SpiralAdamOptimizer>(
+      ts_opt->group_s_opts[group_id]);
+
+  // Modifying the states of group_s_opt is safe, since param_group shares the
+  // same state value refer to megatron/spiral/cpu_adam.py step()
+  group_s_opt->IncrementStep(step, beta1, beta2);
+  group_s_opt->update_state(lr, epsilon, weight_decay, bias_correction);
+
+  group_s_opt->Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
+                      params_c.numel(), nullptr,
+                      (params.options().dtype() == at::kHalf));
 
   if (_DEBUG_OPTIMIZER) {
     printf("Updated param=(%p,%f,%zu) with grad=(%p,%f,%zu), "
@@ -182,12 +202,13 @@ int _spiral_adam_step(int optimizer_id,
   }
 
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
-  ts_opt->opt.SynchronizeStreams();
+  group_s_opt->SynchronizeStreams();
 #endif
   return 0;
 }
 
 int _spiral_adam_step_plus_copy(int optimizer_id,
+                                int group_id,
                                 size_t step,
                                 float lr,
                                 float beta1,
@@ -234,13 +255,43 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
   float* exp_avg_ptr = (float*)exp_avg_c.data_ptr();
   float* exp_avg_sq_ptr = (float*)exp_avg_sq_c.data_ptr();
 
-  ts_opt->opt.IncrementStep(step, beta1, beta2);
-  ts_opt->opt.update_state(lr, epsilon, weight_decay, bias_correction);
-  ts_opt->opt.Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
-                     params_c.numel(), device_params_ptr,
-                     (params.options().dtype() == at::kHalf));
+  if (_DEBUG_OPTIMIZER) {
+    printf("Updating param=(%p,%f,%zu) device_parm=(%p,%f,%zu) with "
+           "grad=(%p,%f,%zu), "
+           "momentum=(%p,%f,%zu), variance=(%p,%f,%zu)\n",
+           params_ptr, at::mean(params).item().toFloat(), params_c.numel(),
+           device_params_ptr, at::mean(device_params).item().toFloat(),
+           device_params_c.numel(), grads_ptr, at::mean(grads).item().toFloat(),
+           grads_c.numel(), exp_avg_ptr, at::mean(exp_avg).item().toFloat(),
+           exp_avg_c.numel(), exp_avg_sq_ptr,
+           at::mean(exp_avg_sq).item().toFloat(), exp_avg_sq_c.numel());
+  }
 
-  ts_opt->opt.SynchronizeStreams();
+  auto group_s_opt = std::static_pointer_cast<SpiralAdamOptimizer>(
+      ts_opt->group_s_opts[group_id]);
+
+  // Modifying the states of group_s_opt is safe, since param_group shares the
+  // same state value refer to megatron/spiral/cpu_adam.py step()
+  group_s_opt->IncrementStep(step, beta1, beta2);
+  group_s_opt->update_state(lr, epsilon, weight_decay, bias_correction);
+
+  group_s_opt->Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
+                      params_c.numel(), device_params_ptr,
+                      (params.options().dtype() == at::kHalf));
+
+  if (_DEBUG_OPTIMIZER) {
+    printf("Updated param=(%p,%f,%zu) device_parm=(%p,%f,%zu) with "
+           "grad=(%p,%f,%zu), "
+           "momentum=(%p,%f,%zu), variance=(%p,%f,%zu)\n",
+           params_ptr, at::mean(params).item().toFloat(), params_c.numel(),
+           device_params_ptr, at::mean(device_params).item().toFloat(),
+           device_params_c.numel(), grads_ptr, at::mean(grads).item().toFloat(),
+           grads_c.numel(), exp_avg_ptr, at::mean(exp_avg).item().toFloat(),
+           exp_avg_c.numel(), exp_avg_sq_ptr,
+           at::mean(exp_avg_sq).item().toFloat(), exp_avg_sq_c.numel());
+  }
+
+  group_s_opt->SynchronizeStreams();
 #else
   assert(false);
 #endif
@@ -248,6 +299,7 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
 }
 
 int spiral_adam_step(int optimizer_id,
+                     int group_id,
                      size_t step,
                      float lr,
                      float beta1,
@@ -274,15 +326,16 @@ int spiral_adam_step(int optimizer_id,
   }
 
   ts_opt->futures.emplace_back(
-      ts_opt->pool.submit(_spiral_adam_step, optimizer_id, step, lr, beta1,
-                          beta2, epsilon, weight_decay, bias_correction, params,
-                          grads, exp_avg, exp_avg_sq, ev_long));
+      ts_opt->pool.submit(_spiral_adam_step, optimizer_id, group_id, step, lr,
+                          beta1, beta2, epsilon, weight_decay, bias_correction,
+                          params, grads, exp_avg, exp_avg_sq, ev_long));
   ts_opt->nparams_submitted++;
 
   return 0;
 }
 
 int spiral_adam_step_plus_copy(int optimizer_id,
+                               int group_id,
                                size_t step,
                                float lr,
                                float beta1,
@@ -310,8 +363,8 @@ int spiral_adam_step_plus_copy(int optimizer_id,
   }
 
   ts_opt->futures.emplace_back(ts_opt->pool.submit(
-      _spiral_adam_step_plus_copy, optimizer_id, step, lr, beta1, beta2,
-      epsilon, weight_decay, bias_correction, params, grads, exp_avg,
+      _spiral_adam_step_plus_copy, optimizer_id, group_id, step, lr, beta1,
+      beta2, epsilon, weight_decay, bias_correction, params, grads, exp_avg,
       exp_avg_sq, device_params, ev_long));
   ts_opt->nparams_submitted++;
 
