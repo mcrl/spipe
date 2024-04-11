@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#define _DEBUG_THREAD_POOL false
+#define _DEBUG_THREAD_POOL true
 
 using namespace std;
 
