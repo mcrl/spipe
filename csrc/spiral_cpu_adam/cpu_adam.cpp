@@ -24,6 +24,8 @@
 #include <thread>
 #include <unistd.h>
 
+#define _DEBUG_OPTIMIZER false // for debugging Tensor values
+
 struct ThreadSafeOptimizer {
   SpiralAdamOptimizer opt;
   ThreadPool pool;
@@ -34,7 +36,10 @@ struct ThreadSafeOptimizer {
   const bool should_log;
   std::mutex m;
 
-  ThreadSafeOptimizer(SpiralAdamOptimizer&& opt, const int nparams, const int pool_size, const bool should_log)
+  ThreadSafeOptimizer(SpiralAdamOptimizer&& opt,
+                      const int nparams,
+                      const int pool_size,
+                      const bool should_log)
     : opt(opt), pool(pool_size), nparams(nparams), nparams_submitted(0),
       should_log(should_log)
   {}
@@ -65,7 +70,8 @@ int spiral_create_adam_optimizer(int optimizer_id,
       std::move(opt), nparams, pool_size, should_log);
 
   if (should_log) {
-    printf("[%ld] ThreadSafeOptimizer #%d is created with %d threads for %d params.\n",
+    printf("[%ld] ThreadSafeOptimizer #%d is created with %d threads for %d "
+           "params.\n",
            (long)getpid(), optimizer_id, pool_size, nparams);
   }
 
@@ -149,11 +155,31 @@ int _spiral_adam_step(int optimizer_id,
   float* exp_avg_ptr = (float*)exp_avg_c.data_ptr();
   float* exp_avg_sq_ptr = (float*)exp_avg_sq_c.data_ptr();
 
+  if (_DEBUG_OPTIMIZER) {
+    printf("Updating param=(%p,%f,%zu) with grad=(%p,%f,%zu), "
+           "momentum=(%p,%f,%zu), variance=(%p,%f,%zu)\n",
+           params_ptr, at::mean(params).item().toFloat(), params_c.numel(),
+           grads_ptr, at::mean(grads).item().toFloat(), grads_c.numel(),
+           exp_avg_ptr, at::mean(exp_avg).item().toFloat(), exp_avg_c.numel(),
+           exp_avg_sq_ptr, at::mean(exp_avg_sq).item().toFloat(),
+           exp_avg_sq_c.numel());
+  }
+
   ts_opt->opt.IncrementStep(step, beta1, beta2);
   ts_opt->opt.update_state(lr, epsilon, weight_decay, bias_correction);
   ts_opt->opt.Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
                      params_c.numel(), nullptr,
                      (params.options().dtype() == at::kHalf));
+
+  if (_DEBUG_OPTIMIZER) {
+    printf("Updated param=(%p,%f,%zu) with grad=(%p,%f,%zu), "
+           "momentum=(%p,%f,%zu), variance=(%p,%f,%zu)\n",
+           params_ptr, at::mean(params).item().toFloat(), params_c.numel(),
+           grads_ptr, at::mean(grads).item().toFloat(), grads_c.numel(),
+           exp_avg_ptr, at::mean(exp_avg).item().toFloat(), exp_avg_c.numel(),
+           exp_avg_sq_ptr, at::mean(exp_avg_sq).item().toFloat(),
+           exp_avg_sq_c.numel());
+  }
 
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
   ts_opt->opt.SynchronizeStreams();
@@ -306,24 +332,27 @@ void spiral_adam_synchronize(int optimizer_id)
              ts_opt->nparams);
     }
     if (ts_opt->nparams_submitted == ts_opt->nparams) {
-      assert(ts_opt->futures.size() == ts_opt->nparams);
+      assert(ts_opt->futures.size() ==
+             ts_opt->nparams); // assert all params submitted
       break;
     }
   }
 
+  size_t fcnt = 0;
   for (auto& f : ts_opt->futures) {
     if (f.get() != 0) {
       // Non-zero future value indicates an error
       throw std::runtime_error("Error produced during Adam step is detected");
     }
+    fcnt++;
   }
-
-  ts_opt->pool.flush();
+  assert(fcnt == ts_opt->nparams); // assert all submitted finished
 
   {
     std::lock_guard<std::mutex> lck(ts_opt->m);
     ts_opt->futures.clear();
     ts_opt->nparams_submitted = 0;
+    ts_opt->pool.flush(ts_opt->nparams);
   }
 
   if (ts_opt->should_log) {

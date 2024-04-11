@@ -719,7 +719,7 @@ def forward_backward_pipelining_with_spiral_remap(
                 if i == num_microbatches - 1:
                     # notify free stream to act
                     compute_microbatches_end = get_thunder_cuda_manager().Event(
-                        "compute", "free", tag=f"compute:b{bwd_stage_id}end"
+                        "compute", None, tag=f"compute:b{bwd_stage_id}end"
                     )
                     if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
@@ -744,7 +744,7 @@ def forward_backward_pipelining_with_spiral_remap(
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.get(f"compute:b{bwd_stage_id}end"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
@@ -766,6 +766,11 @@ def forward_backward_pipelining_with_spiral_remap(
         # if not spiral stage optimizer, then gradient should be manually reduced and offloaded after `forward_backward_func` at train_step()
         if optimize_after_bwd_stage:
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
+                if (
+                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
+                    == -1
+                ):
+                    raise RuntimeError("wait_event failed")
                 # reduce grads
                 optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
                 # offload grads
@@ -1302,7 +1307,7 @@ def forward_backward_pipelining_with_spiral(
                 if i == num_microbatches - 1:
                     # notify free stream to act
                     compute_microbatches_end = get_thunder_cuda_manager().Event(
-                        "compute", "free", tag=f"compute:b{bwd_stage_id}end"
+                        "compute", None, tag=f"compute:b{bwd_stage_id}end"
                     )
                     if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
@@ -1327,7 +1332,7 @@ def forward_backward_pipelining_with_spiral(
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.get(f"compute:b{bwd_stage_id}end"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
@@ -1349,6 +1354,11 @@ def forward_backward_pipelining_with_spiral(
         # if not spiral stage optimizer, then gradient should be manually reduced and offloaded after `forward_backward_func` at train_step()
         if optimize_after_bwd_stage:
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
+                if (
+                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}end"))
+                    == -1
+                ):
+                    raise RuntimeError("wait_event failed")
                 # reduce grads
                 optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
                 # offload grads

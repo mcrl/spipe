@@ -11,7 +11,7 @@
 #include <utility>
 #include <vector>
 
-#define _DEBUG_THREAD_POOL false
+#define _DEBUG_THREAD_POOL true
 
 using namespace std;
 
@@ -24,7 +24,7 @@ public:
   future<typename result_of<F(Args...)>::type> submit(F&& f, Args&&... args);
 
   void execute();
-  void flush();
+  void flush(size_t jcnt);
 
 private:
   const size_t _max_threads;
@@ -155,14 +155,19 @@ void ThreadPool::execute()
   }
 }
 
-void ThreadPool::flush()
+void ThreadPool::flush(size_t jcnt)
 {
-  unique_lock<mutex> lck_done(_jqdm);
-
-  if (_DEBUG_THREAD_POOL) {
-    printf("(pid:%ld) ThreadPool::flush (done:%ld)\n", (long)getpid(),
-           _jq_done_size.load());
+  while (true) {
+    unique_lock<mutex> lck_done(_jqdm);
+    if (_DEBUG_THREAD_POOL) {
+      printf("(pid:%ld) ThreadPool::flush (done:%ld)\n", (long)getpid(),
+            _jq_done_size.load());
+    }
+    assert(_jq_done_size.load() <= jcnt);
+    if (_jq_done_size.load() == jcnt) {
+      queue<function<void(void)>>().swap(_jq_done);
+      _jq_done_size = 0;
+      break;
+    }
   }
-  queue<function<void(void)>>().swap(_jq_done);
-  _jq_done_size = 0;
 }
