@@ -50,7 +50,7 @@ class SpiralStageOptimizer:
 
         # Calculate r_grad_norm
         # TODO (SpiralPipe) This is a temporary solution by simply averaging the grad_norms
-        valid_grad_norm_values = filter(lambda x: x is not None, grad_norm_values)
+        valid_grad_norm_values = list(filter(lambda x: x is not None, grad_norm_values))
         r_grad_norm = (
             sum(valid_grad_norm_values) / len(grad_norm_values)
             if valid_grad_norm_values
@@ -58,10 +58,14 @@ class SpiralStageOptimizer:
         )
 
         # Calculate r_num_zeros_in_grad
-        valid_num_zeros_in_grad_values = filter(
-            lambda x: x is not None, num_zeros_in_grad_values
+        valid_num_zeros_in_grad_values = list(
+            filter(lambda x: x is not None, num_zeros_in_grad_values)
         )
-        r_num_zeros_in_grad = sum(valid_num_zeros_in_grad_values)
+        r_num_zeros_in_grad = (
+            sum(valid_num_zeros_in_grad_values)
+            if valid_num_zeros_in_grad_values
+            else None
+        )
 
         return r_update_successful, r_grad_norm, r_num_zeros_in_grad
 

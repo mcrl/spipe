@@ -406,8 +406,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             0,
             dtype=param.dtype,
             device=self.remote_device,
-            pin_memory=True,
-            # NOTE (SpiralPipe) In sprial_remap, SpiralCPUAllocator allocates to pin_memory automatically
+            # NOTE (SpiralPipe) pin_memory arg should not be passed
         )
 
         def _free_data(param: Parameter) -> None:
@@ -427,12 +426,14 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 if get_args().spiral_remap:
                     assert sbs.get_spiral_backward_stage_build_phase() is not None, \
                         "Offloading to empty spiral tensor should be executed only once during SpiralPipe with remapping backward stage build phase"
+                    # NOTE (SpiralPipe) pin_memory arg should not be passed when offloading to shared memory, since it transfers the data to pinned memory region
+                    param.spiral_tensor = torch.empty(param.spiral_shape, device=self.remote_device, dtype=param.dtype)
                 else:
                     assert sbs.get_spiral_forward_stage_build_phase() is not None, \
                         "Offloading to empty spiral tensor should be executed only once during SpiralPipe w/o remapping forward stage build phase"
-                param.spiral_tensor = param.data.to(
-                    device=self.remote_device, non_blocking=non_blocking,
-                ).pin_memory() # NOTE (SpiralPipe) In sprial_remap, SpiralCPUAllocator allocates to pin_memory automatically
+                    # NOTE (SpiralPipe) pin_memory arg can be passed, since it is not offloading to shared memory
+                    param.spiral_tensor = torch.empty(param.spiral_shape, device=self.remote_device, dtype=param.dtype, pin_memory=True)
+                param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
             else:
                 assert (
                     param.spiral_tensor.shape == param.data.shape

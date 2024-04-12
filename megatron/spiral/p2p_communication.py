@@ -1,4 +1,5 @@
 from typing import Optional, List, Union, Callable, Tuple
+from collections import deque
 
 import nvtx
 import torch
@@ -9,7 +10,19 @@ from megatron.core import mpu
 # Types
 Shape = Union[List[int], torch.Size]
 
+# Constants
 MINIMIZE_INTERNODE_COMM = False # TODO (SpiralPipe) further optimizer internode comm.
+
+# Tensor stores to use for self send-recv
+# Only used when pipeline world size is 1
+# TODO (SpiralPipe) This is temporary solution to avoid breaking the code
+class NOP_Wait:
+    @staticmethod
+    def wait():
+        pass
+
+_self_send_recv_input_tensor_store = deque()
+_self_send_recv_output_tensor_grad_store = deque()
 
 def _batched_p2p_ops(
     *,
@@ -188,16 +201,22 @@ def recv_input_tensor(
     else:
         recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
 
-    [input_tensor], reqs = _communicate(
-        tensor_sends=None,
-        send_ranks=None,
-        recv_ranks=[recv_rank],
-        tensor_shape=tensor_shape,
-        group=mpu.get_pipeline_model_parallel_group(),
-        batch_p2p_comm=batch_p2p_comm,
-        wait_on_reqs=not overlap_p2p_comm,
-        dtype=dtype,
-    )
+    if recv_rank != mpu.get_pipeline_model_parallel_rank():
+        [input_tensor], reqs = _communicate(
+            tensor_sends=None,
+            send_ranks=None,
+            recv_ranks=[recv_rank],
+            tensor_shape=tensor_shape,
+            group=mpu.get_pipeline_model_parallel_group(),
+            batch_p2p_comm=batch_p2p_comm,
+            wait_on_reqs=not overlap_p2p_comm,
+            dtype=dtype,
+        )
+    else:
+        # If we are receiving from ourselves, just pop the tensor from the store
+        input_tensor = _self_send_recv_input_tensor_store.popleft()
+        reqs = [NOP_Wait]
+
     if timers is not None:
         timers("recv_input_tensor").stop()
 
@@ -234,16 +253,22 @@ def send_output_tensor(
     else:
         send_rank = mpu.get_pipeline_model_parallel_next_rank()
 
-    _, reqs = _communicate(
-        tensor_sends=[output_tensor],
-        send_ranks=[send_rank],
-        recv_ranks=None,
-        tensor_shape=None,
-        group=mpu.get_pipeline_model_parallel_group(),
-        wait_on_reqs=not overlap_p2p_comm,
-        batch_p2p_comm=batch_p2p_comm,
-        dtype=None,
-    )
+    if send_rank != mpu.get_pipeline_model_parallel_rank():
+        _, reqs = _communicate(
+            tensor_sends=[output_tensor],
+            send_ranks=[send_rank],
+            recv_ranks=None,
+            tensor_shape=None,
+            group=mpu.get_pipeline_model_parallel_group(),
+            wait_on_reqs=not overlap_p2p_comm,
+            batch_p2p_comm=batch_p2p_comm,
+            dtype=None,
+        )
+    else:
+        # If we are sending to ourselves, just store the tensor for later
+        _self_send_recv_input_tensor_store.append(output_tensor.detach())
+        reqs = [NOP_Wait]
+
     if timers is not None:
         timers("send_output_tensor").stop()
 
@@ -301,16 +326,22 @@ def recv_output_tensor_grad(
         else:
             raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
 
-    [output_tensor_grad], reqs = _communicate(
-        tensor_sends=None,
-        send_ranks=None,
-        recv_ranks=[recv_rank],
-        tensor_shape=tensor_shape,
-        group=mpu.get_pipeline_model_parallel_group(),
-        batch_p2p_comm=batch_p2p_comm,
-        wait_on_reqs=not overlap_p2p_comm,
-        dtype=dtype,
-    )
+    if recv_rank != mpu.get_pipeline_model_parallel_rank():
+        [output_tensor_grad], reqs = _communicate(
+            tensor_sends=None,
+            send_ranks=None,
+            recv_ranks=[recv_rank],
+            tensor_shape=tensor_shape,
+            group=mpu.get_pipeline_model_parallel_group(),
+            batch_p2p_comm=batch_p2p_comm,
+            wait_on_reqs=not overlap_p2p_comm,
+            dtype=dtype,
+        )
+    else:
+        # If we are receiving from ourselves, just pop the tensor from the store
+        output_tensor_grad = _self_send_recv_output_tensor_grad_store.popleft()
+        reqs = [NOP_Wait]
+
     if timers is not None:
         timers("output_tensor_grad").stop()
 
@@ -364,16 +395,22 @@ def send_input_tensor_grad(
         else:
             raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
 
-    _, reqs = _communicate(
-        tensor_sends=[input_tensor_grad],
-        send_ranks=[send_rank],
-        recv_ranks=None,
-        tensor_shape=None,
-        group=mpu.get_pipeline_model_parallel_group(),
-        wait_on_reqs=not overlap_p2p_comm,
-        batch_p2p_comm=batch_p2p_comm,
-        dtype=None,
-    )
+    if send_rank != mpu.get_pipeline_model_parallel_rank():
+        _, reqs = _communicate(
+            tensor_sends=[input_tensor_grad],
+            send_ranks=[send_rank],
+            recv_ranks=None,
+            tensor_shape=None,
+            group=mpu.get_pipeline_model_parallel_group(),
+            wait_on_reqs=not overlap_p2p_comm,
+            batch_p2p_comm=batch_p2p_comm,
+            dtype=None,
+        )
+    else:
+        # If we are sending to ourselves, just store the tensor for later
+        _self_send_recv_output_tensor_grad_store.append(input_tensor_grad.detach())
+        reqs = [NOP_Wait]
+
     if timers is not None:
         timers("send_input_tensor_grad").stop()
 

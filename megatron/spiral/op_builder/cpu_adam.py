@@ -18,14 +18,10 @@ class SpiralCPUAdamBuilder(CPUAdamBuilder):
         if self.build_for_cpu:
             return [
                 os.path.join(self.csrc, "spiral_cpu_adam/cpu_adam.cpp"),
-                os.path.join(
-                    self.csrc, "external/DeepSpeed/csrc/adam/cpu_adam_impl.cpp"
-                ),
             ]
 
         return [
             os.path.join(self.csrc, "spiral_cpu_adam/cpu_adam.cpp"),
-            os.path.join(self.csrc, "external/DeepSpeed/csrc/adam/cpu_adam_impl.cpp"),
             os.path.join(
                 self.csrc, "external/DeepSpeed/csrc/common/custom_cuda_kernel.cu"
             ),
@@ -46,8 +42,9 @@ class SpiralCPUAdamBuilder(CPUAdamBuilder):
 
         include_dirs=[
             os.path.join(self.csrc, 'external/spdlog/include'),
-            os.path.join(self.csrc, 'external/DeepSpeed/csrc/includes'),
+            os.path.join(self.csrc, "spiral_cpu_adam"),
             os.path.join(self.csrc, 'common'),
+            os.path.join(self.csrc, 'external/DeepSpeed/csrc/includes'),
         ]
 
         if self.build_for_cpu:

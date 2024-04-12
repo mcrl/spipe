@@ -103,6 +103,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         self.ds_opt_adam = SpiralCPUAdamBuilder().load()
         self.ds_opt_adam.create_adam(
             self.opt_id,
+            len(self.param_groups),
             self.nparams,
             self.pool_size,
             lr,
@@ -201,6 +202,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                 if fp16_param_groups is not None:
                     self.ds_opt_adam.adam_update_copy(
                         self.opt_id,
+                        group_id,
                         state["step"],
                         group["lr"],
                         beta1,
@@ -218,6 +220,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                 else:
                     self.ds_opt_adam.adam_update(
                         self.opt_id,
+                        group_id,
                         state["step"],
                         group["lr"],
                         beta1,
