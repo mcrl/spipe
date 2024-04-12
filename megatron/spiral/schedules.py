@@ -1166,12 +1166,13 @@ def forward_backward_pipelining_with_spiral(
             if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
                 if (curr_delay_output_tensors >= NUM_DELAY_OUTPUT_TENSORS):
                     # send delayed output tensor
-                    _ = spiral_p2p.send_output_tensor(
-                        delayed_output_tensors.pop(0),
-                        overlap_p2p_comm=overlap_p2p_comm,
-                        batch_p2p_comm=batch_p2p_comm,
-                        timers=timers,
-                    )
+                    if (len(delayed_output_tensors) > 0):
+                        _ = spiral_p2p.send_output_tensor(
+                            delayed_output_tensors.pop(0),
+                            overlap_p2p_comm=overlap_p2p_comm,
+                            batch_p2p_comm=batch_p2p_comm,
+                            timers=timers,
+                        )
                 else:
                     curr_delay_output_tensors += 1
 
@@ -1365,15 +1366,16 @@ def forward_backward_pipelining_with_spiral(
 
             if mpu.get_pipeline_model_parallel_rank() == 0:
                 if (curr_delay_input_tensor_grads >= NUM_DELAY_INPUT_TENSOR_GRADS):
-                    # send delayed input tensor grad
-                    _ = spiral_p2p.send_input_tensor_grad(
-                        delayed_input_tensor_grads.pop(0),
-                        overlap_p2p_comm=overlap_p2p_comm,
-                        batch_p2p_comm=batch_p2p_comm,
-                        timers=timers,
-                    )
+                    if (len(delayed_input_tensor_grads) > 0):
+                        # send delayed input tensor grad
+                        _ = spiral_p2p.send_input_tensor_grad(
+                            delayed_input_tensor_grads.pop(0),
+                            overlap_p2p_comm=overlap_p2p_comm,
+                            batch_p2p_comm=batch_p2p_comm,
+                            timers=timers,
+                        )
                 else:
-                    curr_delay_output_tensor_grads += 1
+                    curr_delay_input_tensor_grads += 1
 
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
