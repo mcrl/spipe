@@ -12,6 +12,7 @@ else
 fi
 
 # Configuration for custom env
+JOB_TYPE="spiral"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for spiral training

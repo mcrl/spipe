@@ -12,6 +12,7 @@ else
 fi
 
 # Configuration for custom env
+JOB_TYPE="interleaving"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training

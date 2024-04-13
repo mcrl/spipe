@@ -1,5 +1,18 @@
 #!/bin/bash
 
+while getopts "s:t:l:f:b:m:g:" opt
+do
+    case "$opt" in
+        s ) MODEL_SIZE="$OPTARG" ;;
+        t ) TRAIN_ITER="$OPTARG" ;;
+        l ) LOG_ITER="$OPTARG" ;;
+        f ) FWD_STAGE="$OPTARG" ;;
+        b ) BWD_STAGE="$OPTARG" ;;
+        m ) MBS="$OPTARG" ;;
+        g ) GBS="$OPTARG" ;;
+    esac
+done
+
 # Modify this file for custom configuration
 
 ## conda
@@ -29,24 +42,73 @@ VOCAB_FILE=/home/n0/yujin/tmp/tokenizer/megatron/gpt2-vocab.json
 MERGE_FILE=/home/n0/yujin/tmp/tokenizer/megatron/gpt2-merges.txt
 
 # Model spec
-LAYER=48
+# 0.4B
+LAYER=32
 HIDDEN=1024
 HEAD=16
-SEQ=1024
-POS=1024
+
+if [ $MODEL_SIZE -eq 1 ]; then
+    # 0.9B
+    LAYER=32
+    HIDDEN=1536
+    HEAD=24
+elif [ $MODEL_SIZE -eq 2 ]; then
+    # 1.8B
+    LAYER=32
+    HIDDEN=2160
+    HEAD=24
+elif [ $MODEL_SIZE -eq 3 ]; then
+    # 3.2B
+    LAYER=32
+    HIDDEN=2880
+    HEAD=32
+elif [ $MODEL_SIZE -eq 6 ]; then
+    # 6.4B
+    LAYER=32
+    HIDDEN=4096
+    HEAD=32
+elif [ $MODEL_SIZE -eq 14 ]; then
+    # 14B
+    LAYER=48
+    HIDDEN=5040
+    HEAD=48
+elif [ $MODEL_SIZE -eq 30 ]; then
+    # 30B
+    LAYER=48
+    HIDDEN=7200
+    HEAD=60
+elif [ $MODEL_SIZE -eq 51 ]; then
+    # 51B
+    LAYER=64
+    HIDDEN=8192
+    HEAD=64
+elif [ $MODEL_SIZE -eq 71 ]; then
+    # 71B
+    LAYER=72
+    HIDDEN=7200
+    HEAD=72
+elif [ $MODEL_SIZE -eq 88 ]; then
+    # 88B
+    LAYER=80
+    HIDDEN=9600
+    HEAD=80
+fi
+
+SEQ=2048
+POS=2048
 
 # Micro Batch size
-MBS=1
-GBS=$(( $MBS * $NP ))
+MBS=${MBS:=1}
+GBS=${GBS:=$(( $MBS * $NP ))}
 
 # iteration
-TRAIN_ITER=100
-LOG_ITER=10
+TRAIN_ITER=${TRAIN_ITER:=101}
+LOG_ITER=${LOG_ITER:=11}
 EVAL_ITER=0
 
 # config for spiral training
-SPIRAL_FWD=1
-SPIRAL_BWD=3
+SPIRAL_FWD=${FWD_STAGE:=1}
+SPIRAL_BWD=${BWD_STAGE:=2}
 SPIRAL_STAGE_OPTIMIZER=YES
 SPIRAL_STAGE_OPTIMIZER_POOL_SIZE=0
 SPIRAL_SHMEM_NAME=/spiral-${USER}
@@ -55,12 +117,12 @@ SPIRAL_SHMEM_HEADER_SIZE=$(( 1 * 2**30 ))
 SPIRAL_DEBUG_BACKEND=NO
 
 # config for interleaving
-INTERLEAVE_VIRTUAL_SIZE=2
+INTERLEAVE_VIRTUAL_SIZE=${FWD_STAGE:=2}
 
 # Print configuration
 echo -e "===========Script Configuration==========="
-echo -e "JOB_NAME=${SLURM_JOB_NAME}\nHOSTS=${HOSTS}\nNSYS_ENABLE=${NSYS_ENABLE}"
-echo -e "LAYER=${LAYER}\nHIDDEN=${HIDDEN}\nHEAD=${HEAD}\nMBS=${MBS}\nGBS=${GBS}"
+echo -e "JOB_TYPE=${JOB_TYPE}\nJOB_NAME=${SLURM_JOB_NAME}\nHOSTS=${HOSTS}\nNSYS_ENABLE=${NSYS_ENABLE}"
+echo -e "MODEL_SIZE=${MODEL_SIZE}\nMBS=${MBS}\nGBS=${GBS}"
 echo -e "TRAIN_ITER=${TRAIN_ITER}\nLOG_ITER=${LOG_ITER}\nEVAL_ITER=${EVAL_ITER}"
 echo -e "SPIRAL_FWD=${SPIRAL_FWD}\nSPIRAL_BWD=${SPIRAL_BWD}"
 echo -e "SPIRAL_STAGE_OPTIMIZER=${SPIRAL_STAGE_OPTIMIZER}(pool_size=${SPIRAL_STAGE_OPTIMIZER_POOL_SIZE})\nSPIRAL_DEBUG_BACKEND=${SPIRAL_DEBUG_BACKEND}"

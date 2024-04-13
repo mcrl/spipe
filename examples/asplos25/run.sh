@@ -5,7 +5,6 @@ ulimit -v unlimited
 ## torch dist.
 export MASTER_ADDR=$(echo $UNWRAPPED_NODELIST | awk '{print $1}')
 export MASTER_PORT=6000
-export CUDA_VISIBLE_DEVICES=0,1,2,3
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 
