@@ -12,7 +12,7 @@ Shape = Union[List[int], torch.Size]
 
 # Constants
 MINIMIZE_INTERNODE_COMM = False # TODO (SpiralPipe) further optimizer internode comm.
-_DEBUG_COMM = True
+_DEBUG_COMM = False
 
 if _DEBUG_COMM:
     from megatron.spiral.debug import spiral_print
