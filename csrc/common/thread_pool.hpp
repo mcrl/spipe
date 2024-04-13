@@ -110,8 +110,9 @@ void ThreadPool::execute()
     while (_jq_size.load() == 0) {
       if (_exit)
         return;
-      printf("(pid:%ld,tid:%ld) release jqm & sleep\n", (long)getpid(),
-             (long)gettid());
+      if (_DEBUG_THREAD_POOL)
+        printf("(pid:%ld,tid:%ld) release jqm & sleep\n", (long)getpid(),
+              (long)gettid());
       _jq_has_job.wait(lck);
     }
 

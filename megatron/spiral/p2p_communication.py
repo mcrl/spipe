@@ -12,6 +12,11 @@ Shape = Union[List[int], torch.Size]
 
 # Constants
 MINIMIZE_INTERNODE_COMM = False # TODO (SpiralPipe) further optimizer internode comm.
+_DEBUG_COMM = False
+
+if _DEBUG_COMM:
+    from megatron.spiral.debug import spiral_print
+
 
 # Tensor stores to use for self send-recv
 # Only used when pipeline world size is 1
@@ -220,6 +225,12 @@ def recv_input_tensor(
     if timers is not None:
         timers("recv_input_tensor").stop()
 
+    if _DEBUG_COMM:
+        if overlap_p2p_comm:
+            spiral_print(f"recv input_tensor(src={recv_rank})")
+        else:
+            spiral_print(f"recv input_tensor(src={recv_rank}, mean={torch.mean(input_tensor)})")
+
     return input_tensor, reqs
 
 
@@ -271,6 +282,9 @@ def send_output_tensor(
 
     if timers is not None:
         timers("send_output_tensor").stop()
+
+    if _DEBUG_COMM:
+        spiral_print(f"send output_tensor(dst={send_rank}, mean={torch.mean(output_tensor)})")
 
     return reqs
 
@@ -345,6 +359,12 @@ def recv_output_tensor_grad(
     if timers is not None:
         timers("output_tensor_grad").stop()
 
+    if _DEBUG_COMM:
+        if overlap_p2p_comm:
+            spiral_print(f"recv output_tensor_grad(src={recv_rank})")
+        else:
+            spiral_print(f"recv output_tensor_grad(src={recv_rank}, mean={torch.mean(output_tensor_grad)})")
+
     return output_tensor_grad, reqs
 
 
@@ -413,5 +433,8 @@ def send_input_tensor_grad(
 
     if timers is not None:
         timers("send_input_tensor_grad").stop()
+
+    if _DEBUG_COMM:
+        spiral_print(f"send input_tensor_grad(dst={send_rank}, mean={torch.mean(input_tensor_grad)})")
 
     return reqs

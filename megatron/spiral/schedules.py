@@ -387,6 +387,18 @@ def forward_backward_pipelining_with_spiral_remap(
     # Data structures for training
     forward_data_store = []
 
+    # Data structures for delayed send
+    # Last pipeline worker will delay sending output tensors of non-last fwd stage
+    # Last pipeline worker will delay sending input tensor grads of non-first bwd stage
+    # TODO (SpiralPipe) Refactor for cleaner code
+    if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+        NUM_DELAY_OUTPUT_TENSORS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
+        NUM_DELAY_INPUT_TENSOR_GRADS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
+        curr_delay_output_tensors = 0
+        curr_delay_input_tensor_grads = 0
+        delayed_output_tensors = []
+        delayed_input_tensor_grads = []
+
     # Event dictionaries. Key is the event tag, thus an event necessarily requires it.
     prefetch_event_queries = {}
     compute_event_queries = {}
@@ -542,13 +554,31 @@ def forward_backward_pipelining_with_spiral_remap(
             ):
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_last_stage():
-                _ = spiral_p2p.send_output_tensor(
-                    output_tensor,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
+                if not mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+                    # send output tensor immediately
+                    _ = spiral_p2p.send_output_tensor(
+                        output_tensor,
+                        overlap_p2p_comm=overlap_p2p_comm,
+                        batch_p2p_comm=batch_p2p_comm,
+                        timers=timers,
+                    )
+                else:
+                    # control path for only last worker
+                    # delay output tensor
+                    delayed_output_tensors.append(output_tensor)
 
+            if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+                if (curr_delay_output_tensors >= NUM_DELAY_OUTPUT_TENSORS):
+                    # send delayed output tensor
+                    if (len(delayed_output_tensors) > 0):
+                        _ = spiral_p2p.send_output_tensor(
+                            delayed_output_tensors.pop(0),
+                            overlap_p2p_comm=overlap_p2p_comm,
+                            batch_p2p_comm=batch_p2p_comm,
+                            timers=timers,
+                        )
+                else:
+                    curr_delay_output_tensors += 1
             torch.cuda.nvtx.range_pop()
         # end fwd microbatches
 
@@ -734,12 +764,30 @@ def forward_backward_pipelining_with_spiral_remap(
             ):
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_first_stage():
-                _ = spiral_p2p.send_input_tensor_grad(
-                    input_tensor_grad,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
+                if not mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+                    # send input tensor grad immediately
+                    _ = spiral_p2p.send_input_tensor_grad(
+                        input_tensor_grad,
+                        overlap_p2p_comm=overlap_p2p_comm,
+                        batch_p2p_comm=batch_p2p_comm,
+                        timers=timers,
+                    )
+                else:
+                    # control path for only last worker
+                    # delay input tensor grad
+                    delayed_input_tensor_grads.append(input_tensor_grad)
+
+            if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+                if (curr_delay_input_tensor_grads >= NUM_DELAY_INPUT_TENSOR_GRADS):
+                    if (len(delayed_input_tensor_grads) > 0):
+                        _ = spiral_p2p.send_input_tensor_grad(
+                            delayed_input_tensor_grads.pop(0),
+                            overlap_p2p_comm=overlap_p2p_comm,
+                            batch_p2p_comm=batch_p2p_comm,
+                            timers=timers,
+                        )
+                else:
+                    curr_delay_input_tensor_grads += 1
 
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
@@ -973,6 +1021,19 @@ def forward_backward_pipelining_with_spiral(
     # Data structures for training
     forward_data_store = []
 
+    # Data structures for delayed send
+    # Last pipeline worker will delay sending output tensors of non-last fwd stage
+    # First pipeline worker will delay sending input tensor grads of non-first bwd stage
+    # TODO (SpiralPipe) Refactor for cleaner code
+    if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+        NUM_DELAY_OUTPUT_TENSORS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
+        curr_delay_output_tensors = 0
+        delayed_output_tensors = []
+    if mpu.get_pipeline_model_parallel_rank() == 0:
+        NUM_DELAY_INPUT_TENSOR_GRADS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
+        curr_delay_input_tensor_grads = 0
+        delayed_input_tensor_grads = []
+
     # NOTE (SpiralPipe) forward_step() in megatron/core/pipeline_parallel/schedules.py has some additional logic to compute loss using output tensor of the last pipeline stage, which is not captured by spiral output tensors. This is a temporary workaround to capture the loss tensor, and a better solution may exist.
     if (
         not forward_only
@@ -1140,12 +1201,31 @@ def forward_backward_pipelining_with_spiral(
             ):
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_last_stage():
-                _ = spiral_p2p.send_output_tensor(
-                    output_tensor,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
+                if not mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+                    # send output tensor immediately
+                    _ = spiral_p2p.send_output_tensor(
+                        output_tensor,
+                        overlap_p2p_comm=overlap_p2p_comm,
+                        batch_p2p_comm=batch_p2p_comm,
+                        timers=timers,
+                    )
+                else:
+                    # control path for only last worker
+                    # delay output tensor
+                    delayed_output_tensors.append(output_tensor)
+
+            if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+                if (curr_delay_output_tensors >= NUM_DELAY_OUTPUT_TENSORS):
+                    # send delayed output tensor
+                    if (len(delayed_output_tensors) > 0):
+                        _ = spiral_p2p.send_output_tensor(
+                            delayed_output_tensors.pop(0),
+                            overlap_p2p_comm=overlap_p2p_comm,
+                            batch_p2p_comm=batch_p2p_comm,
+                            timers=timers,
+                        )
+                else:
+                    curr_delay_output_tensors += 1
 
             torch.cuda.nvtx.range_pop()
         # end fwd microbatches
@@ -1322,12 +1402,31 @@ def forward_backward_pipelining_with_spiral(
             ):
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_first_stage():
-                _ = spiral_p2p.send_input_tensor_grad(
-                    input_tensor_grad,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
+                if not mpu.get_pipeline_model_parallel_rank() == 0:
+                    # send input tensor grad immediately
+                    _ = spiral_p2p.send_input_tensor_grad(
+                        input_tensor_grad,
+                        overlap_p2p_comm=overlap_p2p_comm,
+                        batch_p2p_comm=batch_p2p_comm,
+                        timers=timers,
+                    )
+                else:
+                    # control path for only first worker
+                    # delay input tensor grad
+                    delayed_input_tensor_grads.append(input_tensor_grad)
+
+            if mpu.get_pipeline_model_parallel_rank() == 0:
+                if (curr_delay_input_tensor_grads >= NUM_DELAY_INPUT_TENSOR_GRADS):
+                    if (len(delayed_input_tensor_grads) > 0):
+                        # send delayed input tensor grad
+                        _ = spiral_p2p.send_input_tensor_grad(
+                            delayed_input_tensor_grads.pop(0),
+                            overlap_p2p_comm=overlap_p2p_comm,
+                            batch_p2p_comm=batch_p2p_comm,
+                            timers=timers,
+                        )
+                else:
+                    curr_delay_input_tensor_grads += 1
 
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
