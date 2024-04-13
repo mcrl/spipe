@@ -388,6 +388,9 @@ def forward_backward_pipelining_with_spiral_remap(
     forward_data_store = []
 
     # Data structures for delayed send
+    # Last pipeline worker will delay sending output tensors of non-last fwd stage
+    # Last pipeline worker will delay sending input tensor grads of non-first bwd stage
+    # TODO (SpiralPipe) Refactor for cleaner code
     if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
         NUM_DELAY_OUTPUT_TENSORS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
         NUM_DELAY_INPUT_TENSOR_GRADS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
@@ -1019,6 +1022,9 @@ def forward_backward_pipelining_with_spiral(
     forward_data_store = []
 
     # Data structures for delayed send
+    # Last pipeline worker will delay sending output tensors of non-last fwd stage
+    # First pipeline worker will delay sending input tensor grads of non-first bwd stage
+    # TODO (SpiralPipe) Refactor for cleaner code
     if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
         NUM_DELAY_OUTPUT_TENSORS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
         curr_delay_output_tensors = 0
