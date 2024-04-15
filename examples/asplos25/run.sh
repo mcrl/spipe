@@ -4,7 +4,7 @@ ulimit -v unlimited
 
 ## torch dist.
 export MASTER_ADDR=$(echo $UNWRAPPED_NODELIST | awk '{print $1}')
-export MASTER_PORT=6000
+export MASTER_PORT=$(comm -23 <(seq 10000 65535 | sort) <(ss -tan | awk '{print $4}' | cut -d':' -f2 | grep -v '^\s*$' | sort -u) | shuf -n 1)
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 
