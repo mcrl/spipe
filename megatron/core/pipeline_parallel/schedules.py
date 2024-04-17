@@ -462,6 +462,11 @@ def forward_backward_pipelining_with_interleaving(*,
     if not forward_only:
         output_tensor_grads = [[] for _ in range(len(model))]
 
+    # placeholder
+    # NOTE (SpiralPipe) added due to the following error:
+    #   UnboundLocalError: local variable 'output_tensor' referenced before assignment
+    output_tensor = None
+
     pipeline_parallel_size = parallel_state.get_pipeline_model_parallel_world_size()
     pipeline_parallel_rank = parallel_state.get_pipeline_model_parallel_rank()
 
