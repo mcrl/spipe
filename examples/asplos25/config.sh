@@ -42,56 +42,70 @@ VOCAB_FILE=/home/n0/yujin/tmp/tokenizer/megatron/gpt2-vocab.json
 MERGE_FILE=/home/n0/yujin/tmp/tokenizer/megatron/gpt2-merges.txt
 
 # Model spec
-# 0.4B
 LAYER=32
 HIDDEN=1024
 HEAD=16
 
-if [ $MODEL_SIZE -eq 1 ]; then
+if [ $MODEL_SIZE -eq 0 ]; then
+    # 0.4B
+    LAYER=32
+    HIDDEN=1024
+    HEAD=16
+    SHMEM_BUFFER_SIZE=$(( 2 / $SLURM_JOB_NUM_NODES * 2**30 ))
+elif [ $MODEL_SIZE -eq 1 ]; then
     # 0.9B
     LAYER=32
     HIDDEN=1536
     HEAD=24
+    SHMEM_BUFFER_SIZE=$(( 4 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 2 ]; then
     # 1.8B
     LAYER=32
     HIDDEN=2160
     HEAD=24
+    SHMEM_BUFFER_SIZE=$(( 8 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 3 ]; then
     # 3.2B
     LAYER=32
     HIDDEN=2880
     HEAD=32
+    SHMEM_BUFFER_SIZE=$(( 15 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 6 ]; then
     # 6.4B
     LAYER=32
     HIDDEN=4096
     HEAD=32
+    SHMEM_BUFFER_SIZE=$(( 30 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 14 ]; then
     # 14B
     LAYER=48
     HIDDEN=5040
     HEAD=48
+    SHMEM_BUFFER_SIZE=$(( 60 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 30 ]; then
     # 30B
     LAYER=48
     HIDDEN=7200
     HEAD=60
+    SHMEM_BUFFER_SIZE=$(( 120 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 51 ]; then
     # 51B
     LAYER=64
     HIDDEN=8192
     HEAD=64
+    SHMEM_BUFFER_SIZE=$(( 210 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 71 ]; then
     # 71B
     LAYER=72
     HIDDEN=7200
     HEAD=72
+    SHMEM_BUFFER_SIZE=$(( 290 / $SLURM_JOB_NUM_NODES * 2**30 ))
 elif [ $MODEL_SIZE -eq 88 ]; then
     # 88B
     LAYER=80
     HIDDEN=9600
     HEAD=80
+    SHMEM_BUFFER_SIZE=$(( 360 / $SLURM_JOB_NUM_NODES * 2**30 ))
 fi
 
 SEQ=2048
@@ -112,7 +126,7 @@ SPIRAL_BWD=${BWD_STAGE:=2}
 SPIRAL_STAGE_OPTIMIZER=YES
 SPIRAL_STAGE_OPTIMIZER_POOL_SIZE=0
 SPIRAL_SHMEM_NAME=/spiral-${USER}
-SPIRAL_SHMEM_BUFFER_SIZE=$(( 64 * 2**30 ))
+SPIRAL_SHMEM_BUFFER_SIZE=${SHMEM_BUFFER_SIZE:=$(( 64 * 2**30 ))}
 SPIRAL_SHMEM_HEADER_SIZE=$(( 1 * 2**30 ))
 SPIRAL_DEBUG_BACKEND=NO
 
