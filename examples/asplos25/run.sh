@@ -12,7 +12,6 @@ DISTRIBUTED_ARGS="
     --tensor-model-parallel-size 1 \
     --pipeline-model-parallel-size $NP \
     --distributed-backend nccl \
-    --overlap-p2p-communication \
     --master-addr $MASTER_ADDR \
     --master-port $MASTER_PORT
 "

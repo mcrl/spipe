@@ -21,16 +21,10 @@ EXTRA_ARGS="
     --spiral-forward-virtual-size $SPIRAL_FWD \
     --spiral-backward-virtual-size $SPIRAL_FWD \
     --spiral-recompute-activations \
+    --spiral-overlap-offload-grad \
     --overlap-p2p-communication \
     --megatron-mpi
 "
-
-if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-stage-optimizer"
-    if [ -n ${SPIRAL_STAGE_OPTIMIZER_POOL_SIZE} ]; then
-        EXTRA_ARGS+=" --spiral-stage-optimizer-pool-size ${SPIRAL_STAGE_OPTIMIZER_POOL_SIZE}"
-    fi
-fi
 
 if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-debug-backend"
