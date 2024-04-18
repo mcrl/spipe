@@ -213,6 +213,9 @@ def validate_args(args, defaults={}):
         if args.lr_warmup_fraction is not None:
             assert args.lr_warmup_iters == 0, \
                 'can only specify one of lr-warmup-fraction and lr-warmup-iters'
+        if args.skip_train_iter_zero_timing:
+            assert args.train_iters > 1, \
+                'can only skip iter 0 timing if train iters > 1'
 
     # Sample-based training.
     if args.train_samples:
@@ -688,6 +691,8 @@ def _add_logging_args(parser):
     group.add_argument('--log-world-size-to-tensorboard',
                        action='store_true',
                        help='Enable world size logging to tensorboard.')
+    group.add_argument('--skip-train-iter-zero-timing', action='store_true',
+                       help='Skip logging timing at train iteration zero.')
 
     return parser
 

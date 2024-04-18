@@ -66,6 +66,10 @@ if [ -n "${SPIRAL_SHMEM_NAME}" ] && [ -e "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
     fi
 fi
 
+if [ ${SKIP_TRAIN_ITER_ZERO_TIMING} == "YES" ]; then
+    LOGGING_ARGS+=" --skip-train-iter-zero-timing"
+fi
+
 EXEC_CMD="python ${MEGATRON_PATH}/pretrain_gpt.py ${EXTRA_ARGS} ${DISTRIBUTED_ARGS} ${GPT_ARGS} ${DATA_ARGS} ${LOGGING_ARGS}"
 
 if [ ${NSYS_ENABLE} == "YES" ]; then

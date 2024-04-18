@@ -1055,7 +1055,11 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
 
     if iteration % args.log_interval == 0:
         elapsed_time = timers('interval-time').elapsed(barrier=True)
-        elapsed_time_per_iteration = elapsed_time / (total_iterations-1)
+        if args.skip_train_iter_zero_timing and iteration // args.log_interval == 1:
+            # NOTE (SpiralPipe) Skip iter 0 timing
+            elapsed_time_per_iteration = elapsed_time / (total_iterations - 1)
+        else:
+            elapsed_time_per_iteration = elapsed_time / total_iterations
         throughput = num_floating_point_operations(args, batch_size) / (
             elapsed_time_per_iteration * 10**12 * args.world_size)
         if args.log_timers_to_tensorboard:
@@ -1149,6 +1153,11 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        model,
                        optimizer,
                        opt_param_scheduler)
+        # NOTE (SpiralPipe) Skip iter 0 timing
+        if args.skip_train_iter_zero_timing:
+            if iteration == 0:
+                timers('interval-time').reset()
+                timers('interval-time').start(barrier=True)
         iteration += 1
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
