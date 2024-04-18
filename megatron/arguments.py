@@ -1084,11 +1084,16 @@ def _add_distributed_args(parser):
                        help='Shared memory header size (bytes) to use when --spiral-remap')
     group.add_argument('--spiral-recompute-activations', action='store_true',
                        help='Enable SpiralPipe activation recomputation')
+    group.add_argument('--spiral-overlap-offload-grad', action='store_true',
+                       help='Overlap gradients offload with backward pass')
     group.add_argument('--spiral-stage-optimizer', action='store_true',
                         help='Enable SpiralPipe optimizer to operate independently per stage')
     group.add_argument('--spiral-stage-optimizer-pool-size', type=int, default=0,
                         help='Thread pool size per spiral stage optimizer when --spiral-stage-optimizer is enabled'
                         'Default value (0) enables dynamic thread pool sizing')
+    group.add_argument('--spiral-stage-optimizer-offload-grad-event-granularity', type=str, default='stage',
+                       choices=['stage', 'parameter'],
+                       help='Granularity for event to wait in SpiralPipe CPU optimizer')
     group.add_argument('--spiral-debug-backend', action='store_true',
                        help='Enable SpiralPipe backend logging')
 

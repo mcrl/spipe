@@ -792,7 +792,8 @@ def train_step(forward_step_func, data_iterator,
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
 
     kwargs = {}
-    if args.spiral_stage_optimizer:
+    if args.spiral_overlap_offload_grad and args.spiral_stage_optimizer:
+        # Performs grad offload and optimizer step overlapped with backward
         kwargs["spiral_stage_optimizer"] = optimizer
         kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
         kwargs["spiral_stage_optimizer_step_returns"] = deque() # placeholder to store step() return values
@@ -817,10 +818,32 @@ def train_step(forward_step_func, data_iterator,
     if args.empty_unused_memory_level >= 1:
         torch.cuda.empty_cache()
 
+    offload_grad_after_bwd_stage = args.spiral_overlap_offload_grad
+    optimize_after_bwd_stage = args.spiral_overlap_offload_grad and args.spiral_stage_optimizer
+
     # Reduce gradients.
-    if not args.spiral_stage_optimizer:
-        optimizer.reduce_model_grads(args, timers)
-        # blocking offload gradients, if not yet offloaded
+    if not offload_grad_after_bwd_stage:
+        if (
+            args.spiral
+            and args.spiral_stage_optimizer
+        ):
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                optimizer[bwd_stage_id].reduce_model_grads(args, timers)
+        else:
+            optimizer.reduce_model_grads(args, timers)
+
+    # Offload gradients.
+    if args.spiral:
+        if not offload_grad_after_bwd_stage:
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+                _idx_bwd_stage_id = -bwd_stage_id - 1 if args.spiral_remap else bwd_stage_id
+                model[_idx_bwd_stage_id].spiral_offload_grad(non_blocking=False) # blocking offload gradients
+                model[_idx_bwd_stage_id].spiral_free_grad()
+        else:
+            # Assert gradients are already offloaded and freed on GPU
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+                _idx_bwd_stage_id = -bwd_stage_id - 1 if args.spiral_remap else bwd_stage_id
+                model[_idx_bwd_stage_id].spiral_assert_free_grad()
 
     # Vision gradients.
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
@@ -834,7 +857,24 @@ def train_step(forward_step_func, data_iterator,
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
         timers('optimizer').stop()
     else:
-        update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+        if optimize_after_bwd_stage:
+            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+        else:
+            # Unoverlapped paramter update with SpiralStageOptimizer
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                inner_step_kwargs = {} # empty without events
+                update_successful, grad_norm, num_zeros_in_grad = optimizer[
+                    bwd_stage_id
+                ].step(get_args(), get_timers(), **inner_step_kwargs)
+                kwargs["spiral_stage_optimizer_step_returns"].appendleft(
+                    (update_successful, grad_norm, num_zeros_in_grad)
+                )
+            # join optimizer
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
+                optimizer[bwd_stage_id].optimizer.sync()
+            # process step returns
+            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
 
     # TODO (SpiralPipe) Need to remove when async option was enabled
     torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
