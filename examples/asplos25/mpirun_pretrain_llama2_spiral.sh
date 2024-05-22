@@ -11,9 +11,8 @@ else
     SCRIPT_PATH=$(realpath "$0")
 fi
 
-. ${HOME}/lib/spipe/env.sh
-
 # Configuration for custom env
+JOB_TYPE="spiral"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for spiral training
