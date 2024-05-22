@@ -13,6 +13,7 @@ fi
 
 # Configuration for custom env
 JOB_TYPE="spiral"
+JOB_NAME="llama2"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for spiral training
