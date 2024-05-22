@@ -23,6 +23,6 @@ EXTRA_ARGS="
 "
 
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run.sh
+. $(dirname "${SCRIPT_PATH}")/run_gpt.sh
 
 exit 0

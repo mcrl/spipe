@@ -31,6 +31,6 @@ if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
 fi
 
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run.sh
+. $(dirname "${SCRIPT_PATH}")/run_gpt.sh
 
 exit 0
