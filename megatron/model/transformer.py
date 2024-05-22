@@ -12,7 +12,7 @@ from megatron import get_timers, get_args, get_retro_args, core, get_num_microba
 from .module import MegatronModule
 from megatron.core import mpu, tensor_parallel
 from megatron.core.enums import ModelType
-from megatron.model import LayerNorm
+from megatron.model import LayerNorm, RMSNorm
 from megatron.model.enums import AttnMaskType, LayerType, AttnType
 from megatron.model.fused_softmax import FusedScaleMaskSoftmax
 from megatron.model.fused_bias_gelu import bias_gelu_impl
@@ -421,6 +421,9 @@ class ParallelAttention(MegatronModule):
         self.attn_mask_type = attn_mask_type
         self.params_dtype = args.params_dtype
         self.sequence_parallel = args.sequence_parallel
+        self.num_attention_heads = args.num_attention_heads
+        self.num_key_value_heads = args.num_key_value_heads
+        self.use_gqa = (self.num_attention_heads != self.num_key_value_heads)
 
         self.use_flash_attn = args.use_flash_attn \
             and attention_type == AttnType.self_attn \
@@ -445,11 +448,20 @@ class ParallelAttention(MegatronModule):
         self.num_attention_heads_per_partition = core.utils.divide(
             args.num_attention_heads, world_size)
 
+        # Per GQA head and per partition values
+        self.num_key_value_heads_per_partition = core.utils.divide(
+            args.num_key_value_heads, world_size)
+        self.num_key_value_groups = core.utils.divide(
+            args.num_attention_heads, args.num_key_value_heads)
+        kv_projection_size = args.kv_channels * args.num_key_value_heads
+        assert self.hidden_size_per_attention_head == core.utils.divide(
+            kv_projection_size, args.num_key_value_heads)
+
         # Strided linear layer.
         if attention_type == AttnType.self_attn:
             self.query_key_value = tensor_parallel.ColumnParallelLinear(
                 args.hidden_size,
-                3 * projection_size,
+                projection_size + 2 * kv_projection_size,
                 bias=args.add_bias_linear,
                 gather_output=False,
                 init_method=init_method,
@@ -527,6 +539,23 @@ class ParallelAttention(MegatronModule):
             dtype=self.params_dtype,
             device=torch.cuda.current_device())
 
+    def repeat_kv(self, hidden_states, n_rep):
+        slen, batch, num_key_value_heads_per_partition, head_dim = hidden_states.shape
+        if n_rep == 1:
+            return hidden_states
+        hidden_states = hidden_states[:, :, :, None, :].expand(
+            slen, batch, num_key_value_heads_per_partition, n_rep, head_dim)
+        return hidden_states.reshape(slen, batch,
+                                     num_key_value_heads_per_partition * n_rep,
+                                     head_dim)
+
+    def split_tensor(self, mixed_x_layer):
+        query_layer = mixed_x_layer[:, :, :, :-2, :].reshape(mixed_x_layer.shape[:2] + (-1, self.hidden_size_per_attention_head))
+        key_layer = mixed_x_layer[:, :, :, -2, :]
+        value_layer = mixed_x_layer[:, :, :, -1, :]
+
+        return query_layer, key_layer, value_layer
+
     def forward(self, hidden_states, attention_mask,
                 encoder_output=None, inference_params=None,
                 rotary_pos_emb=None):
@@ -559,17 +588,25 @@ class ParallelAttention(MegatronModule):
             # Attention heads [sq, b, h] --> [sq, b, (np * 3 * hn)]
             mixed_x_layer, _ = self.query_key_value(hidden_states)
 
-            # [sq, b, (np * 3 * hn)] --> [sq, b, np, 3 * hn]
+            # [sq, b, ((nq + 2 * nkv) * hn)] --> [sq, b, nkv, (nq // nkv + 2), hn]
             new_tensor_shape = mixed_x_layer.size()[:-1] + \
-                (self.num_attention_heads_per_partition,
-                 3 * self.hidden_size_per_attention_head)
+                (-1, (self.num_key_value_groups + 2),
+                 self.hidden_size_per_attention_head)
             mixed_x_layer = mixed_x_layer.view(*new_tensor_shape)
 
-            # [sq, b, np, 3 * hn] --> 3 [sq, b, np, hn]
+            # [sq, b, nkv, (nq // nkv + 2), hn] --> 3 [sq, b, np, hn]
             (query_layer,
              key_layer,
-             value_layer) = tensor_parallel.split_tensor_along_last_dim(mixed_x_layer, 3)
+             value_layer) = self.split_tensor(mixed_x_layer)
+
+            # Repeat kv
+            if self.use_gqa:
+                key_layer = self.repeat_kv(key_layer, self.num_key_value_groups)
+                value_layer = self.repeat_kv(value_layer,
+                                             self.num_key_value_groups)
         else:
+            assert not self.use_gqa, 'GQA + cross-attn not tested yet'
+
             # Attention heads [sk, b, h] --> [sk, b, (np * 2 * hn)]
             mixed_kv_layer, _ = self.key_value(encoder_output)
 
@@ -737,12 +774,15 @@ class ParallelTransformerLayer(MegatronModule):
         self.fp32_residual_connection = args.fp32_residual_connection
 
         # Layernorm on the input data.
-        self.input_layernorm = LayerNorm(
-            args.hidden_size,
-            eps=args.layernorm_epsilon,
-            no_persist_layer_norm=args.no_persist_layer_norm,
-            sequence_parallel=args.sequence_parallel,
-            apply_layernorm_1p=args.apply_layernorm_1p)
+        if args.normalization == 'layernorm':
+            self.input_layernorm = LayerNorm(
+                args.hidden_size,
+                eps=args.layernorm_epsilon,
+                no_persist_layer_norm=args.no_persist_layer_norm,
+                sequence_parallel=args.sequence_parallel,
+                apply_layernorm_1p=args.apply_layernorm_1p)
+        else:
+            self.input_layernorm = RMSNorm(args.hidden_size, args.layernorm_epsilon)
 
         # Self attention.
         self.self_attention = ParallelAttention(
@@ -756,12 +796,15 @@ class ParallelTransformerLayer(MegatronModule):
         self.drop_path = DropPath(drop_path_rate) if drop_path_rate > 0.0 else None
 
         # Layernorm on the attention output
-        self.post_attention_layernorm = LayerNorm(
-            args.hidden_size,
-            eps=args.layernorm_epsilon,
-            no_persist_layer_norm=args.no_persist_layer_norm,
-            sequence_parallel=args.sequence_parallel,
-            apply_layernorm_1p=args.apply_layernorm_1p)
+        if args.normalization == 'layernorm':
+            self.post_attention_layernorm = LayerNorm(
+                args.hidden_size,
+                eps=args.layernorm_epsilon,
+                no_persist_layer_norm=args.no_persist_layer_norm,
+                sequence_parallel=args.sequence_parallel,
+                apply_layernorm_1p=args.apply_layernorm_1p)
+        else:
+            self.post_attention_layernorm = RMSNorm(args.hidden_size, args.layernorm_epsilon)
 
         # Cross attention.
         if self.layer_type in (LayerType.decoder,
@@ -774,12 +817,15 @@ class ParallelTransformerLayer(MegatronModule):
                 layer_number,
                 attention_type=AttnType.cross_attn)
             # Layernorm on the attention output.
-            self.post_inter_attention_layernorm = LayerNorm(
-                args.hidden_size,
-                eps=args.layernorm_epsilon,
-                no_persist_layer_norm=args.no_persist_layer_norm,
-                sequence_parallel=args.sequence_parallel,
-                apply_layernorm_1p=args.apply_layernorm_1p)
+            if args.normalization == 'layernorm':
+                self.post_inter_attention_layernorm = LayerNorm(
+                    args.hidden_size,
+                    eps=args.layernorm_epsilon,
+                    no_persist_layer_norm=args.no_persist_layer_norm,
+                    sequence_parallel=args.sequence_parallel,
+                    apply_layernorm_1p=args.apply_layernorm_1p)
+            else:
+                self.post_inter_attention_layernorm = RMSNorm(args.hidden_size, args.layernorm_epsilon)
 
         # MLP
         if args.num_experts is not None:
@@ -1494,12 +1540,15 @@ class ParallelTransformer(MegatronModule):
 
         if self.post_process and self.post_layer_norm:
             # Final layer norm before output.
-            self.final_layernorm = LayerNorm(
-                args.hidden_size,
-                eps=args.layernorm_epsilon,
-                no_persist_layer_norm=args.no_persist_layer_norm,
-                sequence_parallel=args.sequence_parallel,
-                apply_layernorm_1p=args.apply_layernorm_1p)
+            if args.normalization == 'layernorm':
+                self.final_layernorm = LayerNorm(
+                    args.hidden_size,
+                    eps=args.layernorm_epsilon,
+                    no_persist_layer_norm=args.no_persist_layer_norm,
+                    sequence_parallel=args.sequence_parallel,
+                    apply_layernorm_1p=args.apply_layernorm_1p)
+            else:
+                self.final_layernorm = RMSNorm(args.hidden_size, args.layernorm_epsilon)
 
     def _get_layer(self, layer_number):
         return self.layers[layer_number]

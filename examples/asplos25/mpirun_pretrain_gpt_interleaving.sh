@@ -13,6 +13,7 @@ fi
 
 # Configuration for custom env
 JOB_TYPE="interleaving"
+JOB_NAME="gpt"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training
@@ -26,6 +27,6 @@ EXTRA_ARGS="
 "
 
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run.sh
+. $(dirname "${SCRIPT_PATH}")/run_gpt.sh
 
 exit 0

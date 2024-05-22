@@ -13,6 +13,7 @@ fi
 
 # Configuration for custom env
 JOB_TYPE="mobius-no-recompute"
+JOB_NAME="gpt"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training
@@ -30,6 +31,6 @@ if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
 fi
 
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run.sh
+. $(dirname "${SCRIPT_PATH}")/run_gpt.sh
 
 exit 0
