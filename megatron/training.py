@@ -792,7 +792,8 @@ def train_step(forward_step_func, data_iterator,
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
 
     kwargs = {}
-    if args.spiral_stage_optimizer:
+    if args.spiral_overlap_offload_grad and args.spiral_stage_optimizer:
+        # Performs grad offload and optimizer step overlapped with backward
         kwargs["spiral_stage_optimizer"] = optimizer
         kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
         kwargs["spiral_stage_optimizer_step_returns"] = deque() # placeholder to store step() return values
@@ -817,14 +818,32 @@ def train_step(forward_step_func, data_iterator,
     if args.empty_unused_memory_level >= 1:
         torch.cuda.empty_cache()
 
+    offload_grad_after_bwd_stage = args.spiral_overlap_offload_grad
+    optimize_after_bwd_stage = args.spiral_overlap_offload_grad and args.spiral_stage_optimizer
+
     # Reduce gradients.
-    if not args.spiral_stage_optimizer:
-        optimizer.reduce_model_grads(args, timers)
-        # blocking offload gradients, if not yet offloaded
-        if args.spiral:
+    if not offload_grad_after_bwd_stage:
+        if (
+            args.spiral
+            and args.spiral_stage_optimizer
+        ):
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                optimizer[bwd_stage_id].reduce_model_grads(args, timers)
+        else:
+            optimizer.reduce_model_grads(args, timers)
+
+    # Offload gradients.
+    if args.spiral:
+        if not offload_grad_after_bwd_stage:
             for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
-                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=False)
-                model[-bwd_stage_id - 1].spiral_free_grad()
+                _idx_bwd_stage_id = -bwd_stage_id - 1 if args.spiral_remap else bwd_stage_id
+                model[_idx_bwd_stage_id].spiral_offload_grad(non_blocking=False) # blocking offload gradients
+                model[_idx_bwd_stage_id].spiral_free_grad()
+        else:
+            # Assert gradients are already offloaded and freed on GPU
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
+                _idx_bwd_stage_id = -bwd_stage_id - 1 if args.spiral_remap else bwd_stage_id
+                model[_idx_bwd_stage_id].spiral_assert_free_grad()
 
     # Vision gradients.
     if args.vision_pretraining and args.vision_pretraining_type == "dino":
@@ -838,7 +857,24 @@ def train_step(forward_step_func, data_iterator,
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step(args, timers)
         timers('optimizer').stop()
     else:
-        update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+        if optimize_after_bwd_stage:
+            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+        else:
+            # Unoverlapped paramter update with SpiralStageOptimizer
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                inner_step_kwargs = {} # empty without events
+                update_successful, grad_norm, num_zeros_in_grad = optimizer[
+                    bwd_stage_id
+                ].step(get_args(), get_timers(), **inner_step_kwargs)
+                kwargs["spiral_stage_optimizer_step_returns"].appendleft(
+                    (update_successful, grad_norm, num_zeros_in_grad)
+                )
+            # join optimizer
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
+                optimizer[bwd_stage_id].optimizer.sync()
+            # process step returns
+            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
 
     # TODO (SpiralPipe) Need to remove when async option was enabled
     torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())
@@ -1014,15 +1050,22 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 iteration,
             )
 
+    if iteration == 1:
+        timers('interval-time').elapsed(barrier=True)
+
     if iteration % args.log_interval == 0:
         elapsed_time = timers('interval-time').elapsed(barrier=True)
-        elapsed_time_per_iteration = elapsed_time / total_iterations
+        if args.skip_train_iter_zero_timing and iteration // args.log_interval == 1:
+            # NOTE (SpiralPipe) Skip iter 0 timing
+            elapsed_time_per_iteration = elapsed_time / (total_iterations - 1)
+        else:
+            elapsed_time_per_iteration = elapsed_time / total_iterations
         throughput = num_floating_point_operations(args, batch_size) / (
             elapsed_time_per_iteration * 10**12 * args.world_size)
         if args.log_timers_to_tensorboard:
             if writer:
                 writer.add_scalar('iteration-time',
-                                  elapsed_time_per_iteration, iteration)
+                                elapsed_time_per_iteration, iteration)
         log_string = ' iteration {:8d}/{:8d} |'.format(
             iteration, args.train_iters)
         log_string += ' consumed samples: {:12d} |'.format(
@@ -1110,6 +1153,11 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
                        model,
                        optimizer,
                        opt_param_scheduler)
+        # NOTE (SpiralPipe) Skip iter 0 timing
+        if args.skip_train_iter_zero_timing:
+            if iteration == 0:
+                timers('interval-time').reset()
+                timers('interval-time').start(barrier=True)
         iteration += 1
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \

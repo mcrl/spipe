@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J interleaving
+#SBATCH -J no-interleaving
 #SBATCH --mincpus=4
 #SBATCH --mem=0
 #SBATCH --exclusive
@@ -12,16 +12,11 @@ else
 fi
 
 # Configuration for custom env
-JOB_TYPE="interleaving"
+JOB_TYPE="no-interleaving-no-recompute"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training
 EXTRA_ARGS="
-    --num-layers-per-virtual-pipeline-stage $(($LAYER/$NP/$INTERLEAVE_VIRTUAL_SIZE)) \
-    --recompute-granularity full \
-    --recompute-method uniform \
-    --recompute-num-layers $(($LAYER/$NP/$INTERLEAVE_VIRTUAL_SIZE)) \
-    --overlap-p2p-communication \
     --megatron-mpi
 "
 
