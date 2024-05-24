@@ -214,8 +214,8 @@ def validate_args(args, defaults={}):
             assert args.lr_warmup_iters == 0, \
                 'can only specify one of lr-warmup-fraction and lr-warmup-iters'
         if args.skip_train_iter_zero_timing:
-            assert args.train_iters > 1, \
-                'can only skip iter 0 timing if train iters > 1'
+            # Set after training log skips iter zero timing
+            args.skipped_train_iter_zero_timing = False
 
     # Sample-based training.
     if args.train_samples:
@@ -436,6 +436,13 @@ def validate_args(args, defaults={}):
                         "Warning: SpiralPipe without remapping will run with full uniform (recompute num layers=1) recomputation "
                         "regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers"
                     )
+
+    # GQA
+    if args.num_key_value_heads is None:
+        args.num_key_value_heads = args.num_attention_heads
+    assert args.num_attention_heads % args.num_key_value_heads == 0, \
+        f"num_attention_heads must be divisible by num_key_value_heads (got `num_attention_heads`: {args.num_attention_heads} " \
+        f"and `num_key_value_heads`: {args.num_key_value_heads})."
 
     # Print arguments.
     _print_args("arguments", args)

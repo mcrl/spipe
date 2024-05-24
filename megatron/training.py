@@ -1051,32 +1051,63 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             )
 
     if iteration == 1:
-        timers('interval-time').elapsed(barrier=True)
+        timers("interval-time").elapsed(barrier=True)
 
     if iteration % args.log_interval == 0:
-        elapsed_time = timers('interval-time').elapsed(barrier=True)
-        if args.skip_train_iter_zero_timing and iteration // args.log_interval == 1:
-            # NOTE (SpiralPipe) Skip iter 0 timing
+        elapsed_time = timers("interval-time").elapsed(barrier=True)
+
+        # NOTE (SpiralPipe) Skip iter 0 timing
+        invalidate_timing = False
+        decrement_total_iterations_by_one = False
+        if (
+            args.skipped_train_iter_zero_timing == False
+            and args.skip_train_iter_zero_timing
+        ):
+            if total_iterations == 1:
+                invalidate_timing = True
+            else:
+                decrement_total_iterations_by_one = True
+            args.skipped_train_iter_zero_timing = True
+
+        if invalidate_timing:
+            elapsed_time_per_iteration = None
+        elif decrement_total_iterations_by_one:
             elapsed_time_per_iteration = elapsed_time / (total_iterations - 1)
         else:
             elapsed_time_per_iteration = elapsed_time / total_iterations
-        throughput = num_floating_point_operations(args, batch_size) / (
-            elapsed_time_per_iteration * 10**12 * args.world_size)
+
+        if elapsed_time_per_iteration is not None:
+            throughput = num_floating_point_operations(args, batch_size) / (
+                elapsed_time_per_iteration * 10**12 * args.world_size
+            )
+        else:
+            throughput = None
+
         if args.log_timers_to_tensorboard:
             if writer:
-                writer.add_scalar('iteration-time',
-                                elapsed_time_per_iteration, iteration)
-        log_string = ' iteration {:8d}/{:8d} |'.format(
-            iteration, args.train_iters)
-        log_string += ' consumed samples: {:12d} |'.format(
-            args.consumed_train_samples)
-        log_string += ' elapsed time per iteration (ms): {:.1f} |'.format(
-            elapsed_time_per_iteration * 1000.0)
+                writer.add_scalar(
+                    "iteration-time", elapsed_time_per_iteration, iteration
+                )
+        log_string = " iteration {:8d}/{:8d} |".format(iteration, args.train_iters)
+        log_string += " consumed samples: {:12d} |".format(args.consumed_train_samples)
+
+        if elapsed_time_per_iteration:
+            log_string += " elapsed time per iteration (ms): {:.1f} |".format(
+                elapsed_time_per_iteration * 1000.0
+            )
+        else:
+            log_string += " elapsed time per iteration (ms): N/A |"
+
         if args.log_throughput:
-            log_string += f' throughput per GPU (TFLOP/s/GPU): {throughput:.2f} |'
+            if throughput:
+                log_string += f" throughput per GPU (TFLOP/s/GPU): {throughput:.2f} |"
+            else:
+                log_string += " throughput per GPU (TFLOP/s/GPU): N/A |"
+
             if args.log_timers_to_tensorboard:
                 if writer:
-                    writer.add_scalar('throughput', throughput, iteration)
+                    writer.add_scalar("throughput", throughput, iteration)
+
         log_string += ' learning rate: {:.3E} |'.format(learning_rate)
         log_string += ' global batch size: {:5d} |'.format(batch_size)
         for key in total_loss_dict:
