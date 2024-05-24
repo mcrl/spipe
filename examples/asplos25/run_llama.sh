@@ -14,10 +14,6 @@ HEAD=16 # e.g. llama-13b: 40
 SEQ=2048
 NUM_KV_HEADS=4 # llama2 70B uses GQA
 
-MBS=4
-GBS=32 # e.g. llama: 4M tokens
-TRAIN_ITER=100 # e.g. llama: 1T tokens / 4M tokens_per_batch = 250000 steps
-LOG_ITER=1
 LR=3e-4
 MIN_LR=3e-5
 LR_WARMUP_STEPS=20
