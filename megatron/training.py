@@ -1060,8 +1060,8 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         invalidate_timing = False
         decrement_total_iterations_by_one = False
         if (
+            args.skip_train_iter_zero_timing and
             args.skipped_train_iter_zero_timing == False
-            and args.skip_train_iter_zero_timing
         ):
             if total_iterations == 1:
                 invalidate_timing = True
