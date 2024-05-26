@@ -13,7 +13,7 @@ fi
 
 # Configuration for custom env
 JOB_TYPE="spiral"
-JOB_NAME="gpt"
+JOB_NAME="opt"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for spiral training

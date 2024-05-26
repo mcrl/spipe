@@ -13,7 +13,7 @@ fi
 
 # Configuration for custom env
 JOB_TYPE="no-interleaving-recompute"
-JOB_NAME="gpt"
+JOB_NAME="opt"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training
