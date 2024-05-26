@@ -12,19 +12,16 @@ else
 fi
 
 # Configuration for custom env
-JOB_TYPE="no-interleaving-recompute"
-JOB_NAME="gpt"
+JOB_TYPE="no-interleaving-no-recompute"
+JOB_NAME="llama2"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training
 EXTRA_ARGS="
-    --recompute-granularity full \
-    --recompute-method uniform \
-    --recompute-num-layers $(($LAYER/$NP)) \
     --megatron-mpi
 "
 
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run_gpt.sh
+. $(dirname "${SCRIPT_PATH}")/run_llama2.sh
 
 exit 0

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J spiral
+#SBATCH -J mobius-no-recompute
 #SBATCH --mincpus=4
 #SBATCH --mem=0
 #SBATCH --exclusive
@@ -12,23 +12,17 @@ else
 fi
 
 # Configuration for custom env
-JOB_TYPE="spiral"
+JOB_TYPE="mobius-recompute"
 JOB_NAME="llama2"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
-# Configuration for spiral training
+# Configuration for mobius-recompute training
 EXTRA_ARGS="
     --spiral \
-    --spiral-remap \
-    --spiral-shared-memory-name $SPIRAL_SHMEM_NAME \
-    --spiral-shared-memory-buffer-size $SPIRAL_SHMEM_BUFFER_SIZE \
-    --spiral-shared-memory-header-size $SPIRAL_SHMEM_HEADER_SIZE \
     --spiral-forward-virtual-size $SPIRAL_FWD \
-    --spiral-backward-virtual-size $SPIRAL_BWD \
-    --spiral-overlap-offload-grad \
-    --spiral-stage-optimizer \
-    --spiral-stage-optimizer-pool-size 0 \
+    --spiral-backward-virtual-size $SPIRAL_FWD \
     --spiral-recompute-activations \
+    --spiral-overlap-offload-grad \
     --overlap-p2p-communication \
     --megatron-mpi
 "

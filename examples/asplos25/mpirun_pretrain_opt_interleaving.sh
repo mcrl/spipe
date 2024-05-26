@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J mobius-no-recompute
+#SBATCH -J interleaving
 #SBATCH --mincpus=4
 #SBATCH --mem=0
 #SBATCH --exclusive
@@ -12,25 +12,21 @@ else
 fi
 
 # Configuration for custom env
-JOB_TYPE="mobius-no-recompute"
+JOB_TYPE="interleaving"
 JOB_NAME="gpt"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training
 EXTRA_ARGS="
-    --spiral \
-    --spiral-forward-virtual-size $SPIRAL_FWD \
-    --spiral-backward-virtual-size $SPIRAL_FWD \
-    --spiral-overlap-offload-grad \
+    --num-layers-per-virtual-pipeline-stage $(($LAYER/$NP/$INTERLEAVE_VIRTUAL_SIZE)) \
+    --recompute-granularity full \
+    --recompute-method uniform \
+    --recompute-num-layers $(($LAYER/$NP/$INTERLEAVE_VIRTUAL_SIZE)) \
     --overlap-p2p-communication \
     --megatron-mpi
 "
 
-if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-debug-backend"
-fi
-
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run_gpt.sh
+. $(dirname "${SCRIPT_PATH}")/run_opt.sh
 
 exit 0

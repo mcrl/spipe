@@ -12,21 +12,18 @@ else
 fi
 
 # Configuration for custom env
-JOB_TYPE="interleaving"
+JOB_TYPE="interleaving-no-recompute"
 JOB_NAME="gpt"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for mobius-recompute training
 EXTRA_ARGS="
     --num-layers-per-virtual-pipeline-stage $(($LAYER/$NP/$INTERLEAVE_VIRTUAL_SIZE)) \
-    --recompute-granularity full \
-    --recompute-method uniform \
-    --recompute-num-layers $(($LAYER/$NP/$INTERLEAVE_VIRTUAL_SIZE)) \
     --overlap-p2p-communication \
     --megatron-mpi
 "
 
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run_gpt.sh
+. $(dirname "${SCRIPT_PATH}")/run_opt.sh
 
 exit 0

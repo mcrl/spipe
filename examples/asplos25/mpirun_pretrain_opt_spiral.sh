@@ -13,7 +13,7 @@ fi
 
 # Configuration for custom env
 JOB_TYPE="spiral"
-JOB_NAME="llama2"
+JOB_NAME="gpt"
 . $(dirname "${SCRIPT_PATH}")/config.sh
 
 # Configuration for spiral training
@@ -38,6 +38,6 @@ if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
 fi
 
 # Run script
-. $(dirname "${SCRIPT_PATH}")/run_llama2.sh
+. $(dirname "${SCRIPT_PATH}")/run_opt.sh
 
 exit 0
