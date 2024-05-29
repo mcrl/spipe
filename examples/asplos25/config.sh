@@ -1,8 +1,10 @@
 #!/bin/bash
 
-while getopts "s:t:l:f:b:m:g:" opt
+while getopts "j:n:s:t:l:f:b:m:g:" opt
 do
     case "$opt" in
+        j ) JOB_TYPE="$OPTARG" ;;
+        n ) JOB_NAME="$OPTARG" ;;
         s ) MODEL_SIZE="$OPTARG" ;;
         t ) TRAIN_ITER="$OPTARG" ;;
         l ) LOG_ITER="$OPTARG" ;;
@@ -12,8 +14,6 @@ do
         g ) GBS="$OPTARG" ;;
     esac
 done
-
-# Modify this file for custom configuration
 
 ## conda
 source ~/miniconda3/etc/profile.d/conda.sh
@@ -41,6 +41,10 @@ DATA_PATH=/shared/s1/lab08/junyeol/openwebtext/openwebtext_text_document
 VOCAB_FILE=/shared/s1/lab08/junyeol/megatron-deepspeed-data/gpt/gpt2-vocab.json
 MERGE_FILE=/shared/s1/lab08/junyeol/megatron-deepspeed-data/gpt/gpt2-merges.txt
 
+# Job type and model name
+JOB_TYPE=${JOB_TYPE:="spiral"}
+JOB_NAME=${JOB_NAME:="opt"}
+
 # Micro Batch size
 MBS=${MBS:=1}
 GBS=${GBS:=$(( $MBS * $NP ))}
@@ -52,10 +56,10 @@ SKIP_TRAIN_ITER_ZERO_TIMING=NO
 EVAL_ITER=0
 
 # config for spiral training
-SPIRAL_FWD=${FWD_STAGE:=1}
+SPIRAL_FWD=${FWD_STAGE:=2}
 SPIRAL_BWD=${BWD_STAGE:=2}
 SPIRAL_SHMEM_NAME=/spiral-${USER}
-SPIRAL_SHMEM_BUFFER_SIZE=${SHMEM_BUFFER_SIZE:=$(( 400 * 2**30 ))}
+SPIRAL_SHMEM_BUFFER_SIZE=${SHMEM_BUFFER_SIZE:=$(( 64 * 2**30 ))}
 SPIRAL_SHMEM_HEADER_SIZE=$(( 1 * 2**30 ))
 SPIRAL_DEBUG_BACKEND=NO
 

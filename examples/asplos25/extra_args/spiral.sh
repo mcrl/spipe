@@ -1,22 +1,5 @@
 #!/bin/bash
 
-#SBATCH -J spiral
-#SBATCH --mincpus=4
-#SBATCH --mem=0
-#SBATCH --exclusive
-
-if [ -n "${SLURM_JOB_ID:-}" ] ; then
-    SCRIPT_PATH=$(scontrol show job "$SLURM_JOB_ID" | awk -F= '/Command=/{print $2}')
-else
-    SCRIPT_PATH=$(realpath "$0")
-fi
-
-# Configuration for custom env
-JOB_TYPE="spiral"
-JOB_NAME="opt"
-. $(dirname "${SCRIPT_PATH}")/config.sh
-
-# Configuration for spiral training
 EXTRA_ARGS="
     --spiral \
     --spiral-remap \
@@ -36,8 +19,3 @@ EXTRA_ARGS="
 if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-debug-backend"
 fi
-
-# Run script
-. $(dirname "${SCRIPT_PATH}")/run_opt.sh
-
-exit 0
