@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# --spiral-stage-optimizer \
+# --spiral-stage-optimizer-pool-size 0 \
 EXTRA_ARGS="
     --spiral \
     --spiral-remap \
@@ -9,8 +11,6 @@ EXTRA_ARGS="
     --spiral-forward-virtual-size $SPIRAL_FWD \
     --spiral-backward-virtual-size $SPIRAL_BWD \
     --spiral-overlap-offload-grad \
-    --spiral-stage-optimizer \
-    --spiral-stage-optimizer-pool-size 0 \
     --spiral-recompute-activations \
     --overlap-p2p-communication \
     --megatron-mpi
