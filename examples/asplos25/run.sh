@@ -4,6 +4,7 @@
 #SBATCH --mincpus=4
 #SBATCH --mem=0
 #SBATCH --exclusive
+#SBATCH --gres=gpu:4
 
 ulimit -v unlimited
 
@@ -46,6 +47,6 @@ if [ ${NSYS_ENABLE} == "YES" ]; then
 fi
 
 # Run script
-${MPIRUN} -np $NP -host $HOSTS $MPI_OPTIONS ${EXEC_CMD}
+${MPIRUN} -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS ${EXEC_CMD}
 
 exit 0
