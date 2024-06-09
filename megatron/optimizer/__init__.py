@@ -47,7 +47,7 @@ def get_param_groups(modules,
 
             if args.spiral:
                 assert (is_spiral_param(param))
-                if param.spiral_status == SpiralParamStatus.REMOTE:
+                if param.spiral_status == SpiralParamStatus.CPU:
                     param = param.spiral_tensor
 
             if no_weight_decay_cond is not None:

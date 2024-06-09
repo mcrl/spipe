@@ -400,7 +400,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         InsertPostInitMethodToModuleSubClasses.num_spiral_elements += param.numel()
 
         param.spiral_id = sbs.get_add_spiral_next_param_number_to_build()
-        param.spiral_status = SpiralParamStatus.ACTIVE
+        param.spiral_status = SpiralParamStatus.GPU
         param.spiral_shape = param.shape
         param.spiral_stride = param.stride()
         param.spiral_storage_offset = param.storage_offset()
@@ -416,13 +416,13 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             """Free weight data of a parameter."""
             param.data = torch.empty(0, dtype=param.dtype, device=param.device)
             if param.spiral_tensor.numel() == param.spiral_numel:
-                param.spiral_status = SpiralParamStatus.REMOTE
+                param.spiral_status = SpiralParamStatus.CPU
             else:
                 param.spiral_status = SpiralParamStatus.UNAVAILABLE
 
         def _offload_data(param, non_blocking=False):
             """Offload weight data of a parameter to remote device."""
-            assert param.spiral_status == SpiralParamStatus.ACTIVE
+            assert param.spiral_status == SpiralParamStatus.GPU
             assert param.spiral_tensor is not None, "Offload tensor is None"
 
             if param.spiral_tensor.numel() == 0:
@@ -444,10 +444,10 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
             if not non_blocking:
                 # NOTE: for non-blocking offload, spiral_status should be changed after waiting in the caller
-                param.spiral_status = SpiralParamStatus.REMOTE
+                param.spiral_status = SpiralParamStatus.CPU
 
         def _fetch_data(param, non_blocking=False):
-            assert param.spiral_status == SpiralParamStatus.REMOTE
+            assert param.spiral_status == SpiralParamStatus.CPU
             assert param.spiral_tensor is not None, "Fetch tensor is None"
 
             if param.numel() == 0:
@@ -477,7 +477,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     )
             if not non_blocking:
                 # NOTE: for non-blocking fetch, spiral_status should be changed after waiting in the caller
-                param.spiral_status = SpiralParamStatus.ACTIVE
+                param.spiral_status = SpiralParamStatus.GPU
 
         def _offload_grad(param, non_blocking=False):
             """Offload a gradient to remote device."""
@@ -652,7 +652,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                         param.spiral_storage_offset,
                     )
                     if param.spiral_status == SpiralParamStatus.UNAVAILABLE:
-                        param.spiral_status = SpiralParamStatus.REMOTE
+                        param.spiral_status = SpiralParamStatus.CPU
         else:
             for param in module.parameters(recurse=True):
                 if is_spiral_param(param):
