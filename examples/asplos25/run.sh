@@ -40,7 +40,7 @@ if [ -n "${SPIRAL_SHMEM_NAME}" ] && [ -e "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
 fi
 
 # Configure exec cmd
-EXEC_CMD="python ${MEGATRON_PATH}/pretrain_gpt.py ${EXTRA_ARGS} ${DISTRIBUTED_ARGS} ${MODEL_ARGS} ${DATA_ARGS} ${LOGGING_ARGS}"
+EXEC_CMD="python ${MEGATRON_PATH}/pretrain_gpt.py ${EXTRA_ARGS} ${DISTRIBUTED_ARGS} ${MODEL_ARGS} ${DATA_ARGS} ${MIXED_PRECISION_ARGS} ${LOGGING_ARGS}"
 
 if [ ${NSYS_ENABLE} == "YES" ]; then
     EXEC_CMD="${NSYS} profile -t cuda,nvtx -o ${NSYS_OUTPUT}_%q{OMPI_COMM_WORLD_RANK} --force-overwrite true ${EXEC_CMD}"

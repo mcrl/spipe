@@ -378,9 +378,6 @@ def validate_args(args, defaults={}):
         if args.virtual_pipeline_model_parallel_size is not None:
             raise RuntimeError(
                 "SpiralPipe does not support setting virtual pipeline")
-        if args.params_dtype != torch.float:
-            raise RuntimeError(
-                "SpiralPipe only supports fp32")
         if args.lazy_mpu_init:
             raise RuntimeError(
                 "SpiralPipe does not support lazy mpu init")

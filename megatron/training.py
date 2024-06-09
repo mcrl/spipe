@@ -380,6 +380,11 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             )
             this_model.model_type = model_type
 
+            # wrap model with Float16Module
+            if args.fp16 or args.bf16:
+                with SpiralWrapperInitContext(enabled=True):
+                    this_model = Float16Module(this_model, args)
+
             # reset states of the callee
             if mpu.is_spiral_forward_stage():
                 sbs.set_spiral_forward_stage_build_phase(None)
@@ -625,7 +630,10 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         model_module.cuda(torch.cuda.current_device())
 
     # Fp16 conversion.
-    if args.fp16 or args.bf16:
+    # NOTE (SpiralPipe) Wrapping GPTModel into fp16 module is done in `_model_provider_func_wrapper`
+    if args.spiral:
+        pass
+    elif args.fp16 or args.bf16:
         model = [Float16Module(model_module, args) for model_module in model]
 
     if wrap_with_ddp:

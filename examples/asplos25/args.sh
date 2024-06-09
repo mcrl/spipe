@@ -21,6 +21,10 @@ DATA_ARGS="
     --split 949,50,1
 "
 
+MIXED_PRECISION_ARGS="
+    --fp16
+"
+
 LOGGING_ARGS="
     --log-throughput
 "
