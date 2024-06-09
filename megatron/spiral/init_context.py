@@ -38,10 +38,10 @@ _orig_torch_randn = torch.randn
 
 class SpiralParamStatus(Enum):
     # parameter is fully present on local device and ready for use
-    ACTIVE = 1
+    GPU = 1
 
     # parameter is in CPU
-    REMOTE = 2
+    CPU = 2
 
     # parameter is not available
     UNAVAILABLE = 3
