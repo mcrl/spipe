@@ -440,11 +440,11 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                 ),
                 dtype=np.uintc,
             )
-            num_params_per_fwd_build_phase[mpu.get_pipeline_model_parallel_rank()] = [
+            num_params_per_fwd_build_phase_per_rank = np.array([
                 [m.num_spiral_params_recurse for m in __stage_models.module_list]
                 for __stage_models in model[:mpu.get_spiral_forward_virtual_size()]
-            ]
-            num_params_per_fwd_build_phase = get_thunder_group().AllGather(num_params_per_fwd_build_phase)
+            ])
+            get_thunder_group().AllGather(num_params_per_fwd_build_phase, num_params_per_fwd_build_phase_per_rank) # (tgt,src)
             __phase = 0
             __phase_nparam_dict = {}
             for i in range(mpu.get_spiral_forward_virtual_size()):

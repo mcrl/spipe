@@ -19,6 +19,7 @@ class SpiralBackend:
         shared_memory_name,
         shared_memory_buffer_size,
         shared_memory_header_size,
+        alignment,
     ):
         self.thunder_group = spiral_helper.Comm(
             sorted(ranks),
@@ -27,6 +28,7 @@ class SpiralBackend:
             shared_memory_name,
             shared_memory_buffer_size,
             shared_memory_header_size,
+            alignment,
         )
         self.thunder_cuda_manager = SpiralCUDAManager()
         global SPIRAL_BACKEND
