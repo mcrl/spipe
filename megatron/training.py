@@ -548,9 +548,13 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             for stage_model in model:
                 for param in stage_model.parameters(recurse=True):
                     if is_spiral_param(param):
-                        if mpu.is_spiral_remap() and get_thunder_group().IsParamDataLocal(param.spiral_id):
-                            continue
-                        assert getattr(param, "spiral_tensor").is_pinned(), f"{debug_param2name_id(param)} on local node is not pinned."
+                        if (
+                            mpu.is_spiral_remap()
+                            and get_thunder_group().IsParamDataLocal(param.spiral_id)
+                        ):
+                            assert getattr(
+                                param, "spiral_tensor"
+                            ).is_pinned(), f"{debug_param2name_id(param)} on local node is not pinned."
 
         if mpu.is_spiral_remap():
             get_thunder_group().UnsetSpiralCPUAllocator()
