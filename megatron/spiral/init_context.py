@@ -456,7 +456,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                         device=self.local_device, non_blocking=non_blocking
                     ).view(param.spiral_shape)
                 else:
-                    param.data = torch.empty(param.spiral_shape, device=self.local_device)
+                    param.data = torch.empty(param.spiral_shape, device=self.local_device, dtype=param.dtype)
                     get_thunder_group().FetchRemoteParam(
                         param.spiral_id,
                         non_blocking,
@@ -469,7 +469,7 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 if not get_args().spiral_remap or get_thunder_group().IsParamDataLocal(param.spiral_id):
                     param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
                 else:
-                    param.data = torch.empty(param.spiral_shape, device=self.local_device)
+                    param.data = torch.empty(param.spiral_shape, device=self.local_device, dtype=param.dtype)
                     get_thunder_group().FetchRemoteParam(
                         param.spiral_id,
                         non_blocking,
