@@ -433,6 +433,9 @@ def validate_args(args, defaults={}):
                         "Warning: SpiralPipe without remapping will run with full uniform (recompute num layers=1) recomputation "
                         "regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers"
                     )
+        if args.use_distributed_optimizer:
+            raise RuntimeError(
+                "SpiralPipe currently does not support distributed optimizer")
 
     # GQA
     if args.num_key_value_heads is None:
