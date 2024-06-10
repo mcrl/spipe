@@ -2,6 +2,8 @@
 
 """Model and data parallel groups."""
 
+import warnings
+
 import torch
 from typing import Optional
 
@@ -66,6 +68,15 @@ _SPIRAL_BACKWARD_VIRTUAL_RANK = None # should set rank value only when active
 _SPIRAL_FORWARD_VIRTUAL_SIZE = None
 _SPIRAL_BACKWARD_VIRTUAL_SIZE = None
 
+# SpiralPipe cross mapping
+# spiral cross mapping rank list: idx - cm rank, element - pp rank
+# spiral cross mapping cm rank to pp rank dict: { cm rank: pp rank }
+# spiral cross mapping pp rank to cm rank dict: { pp rank: cm rank }
+_SPIRAL_CROSS_MAPPING = None
+_SPIRAL_CROSS_MAPPING_LIST = None
+_SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
+_SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
+
 # Below SpiralPipe variables are lazily set after spiral backend init using CommInfo
 _SPIRAL_INTRA_SIZE = None
 _SPIRAL_INTRA_RANK = None
@@ -81,6 +92,7 @@ def initialize_model_parallel(
     spiral_remap: bool = False,
     spiral_forward_virtual_size: Optional[int] = None,
     spiral_backward_virtual_size: Optional[int] = None,
+    spiral_cross_mapping: bool = False,
     use_fp8: bool = False,
 ) -> None:
     """Initialize model data parallel groups.
@@ -198,10 +210,13 @@ def initialize_model_parallel(
             _SPIRAL_FORWARD_VIRTUAL_SIZE = spiral_forward_virtual_size
         if spiral_backward_virtual_size is not None:
             _SPIRAL_BACKWARD_VIRTUAL_SIZE = spiral_backward_virtual_size
+        global _SPIRAL_CROSS_MAPPING
+        _SPIRAL_CROSS_MAPPING = spiral_cross_mapping
 
     if pipeline_model_parallel_split_rank is not None:
         global _PIPELINE_MODEL_PARALLEL_SPLIT_RANK
         _PIPELINE_MODEL_PARALLEL_SPLIT_RANK = pipeline_model_parallel_split_rank
+        warnings.warn("SpiralPipe cross mapping currently does not consider pipeline_model_parallel_split_rank. Consequencies are unknown.")
 
     rank = torch.distributed.get_rank()
 
@@ -275,6 +290,17 @@ def initialize_model_parallel(
         if rank in ranks:
             _PIPELINE_MODEL_PARALLEL_GROUP = group
             _PIPELINE_GLOBAL_RANKS = ranks
+
+        # Setup spiral cross mapping
+        if rank in ranks:
+            if _SPIRAL_CROSS_MAPPING:
+                global _SPIRAL_CROSS_MAPPING_LIST
+                global _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
+                global _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
+                _SPIRAL_CROSS_MAPPING_LIST = apply_spiral_cross_mapping(list(ranks))
+                _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = {cm_rank: pp_rank for cm_rank, pp_rank in enumerate(_SPIRAL_CROSS_MAPPING_LIST)}
+                _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = {pp_rank: cm_rank for cm_rank, pp_rank in enumerate(_SPIRAL_CROSS_MAPPING_LIST)}
+
         # Setup embedding group (to exchange gradients between
         # first and last stages).
         if len(ranks) > 1:
@@ -289,8 +315,12 @@ def initialize_model_parallel(
                     position_embedding_ranks = [ranks[0],
                                        ranks[pipeline_model_parallel_split_rank]]
             if _SPIRAL and _SPIRAL_REMAP:
-                spiral_embedding_ranks = [ranks[0], ranks[-1]]
-                spiral_position_embedding_ranks = [ranks[0], ranks[-1]] # since forward and backward both have a prep stage
+                if _SPIRAL_CROSS_MAPPING:
+                    spiral_embedding_ranks = [_SPIRAL_CROSS_MAPPING_LIST[0], _SPIRAL_CROSS_MAPPING_LIST[-1]]
+                    spiral_position_embedding_ranks = [_SPIRAL_CROSS_MAPPING_LIST[0], _SPIRAL_CROSS_MAPPING_LIST[-1]] # since forward and backward both have a prep stage
+                else:
+                    spiral_embedding_ranks = [ranks[0], ranks[-1]]
+                    spiral_position_embedding_ranks = [ranks[0], ranks[-1]] # since forward and backward both have a prep stage
         else:
             embedding_ranks = ranks
             position_embedding_ranks = ranks
@@ -298,6 +328,7 @@ def initialize_model_parallel(
             if _SPIRAL and _SPIRAL_REMAP:
                 spiral_embedding_ranks = ranks
                 spiral_position_embedding_ranks = ranks
+                # no need to have separate control flow for spiral cross mapping
 
         group = torch.distributed.new_group(embedding_ranks)
         if rank in embedding_ranks:
@@ -528,9 +559,23 @@ def get_tensor_model_parallel_rank():
 def get_pipeline_model_parallel_rank():
     """Return my rank for the pipeline model parallel group."""
     global _MPU_PIPELINE_MODEL_PARALLEL_RANK
+    rank = None
     if _MPU_PIPELINE_MODEL_PARALLEL_RANK is not None:
-        return _MPU_PIPELINE_MODEL_PARALLEL_RANK
-    return torch.distributed.get_rank(group=get_pipeline_model_parallel_group())
+        rank = _MPU_PIPELINE_MODEL_PARALLEL_RANK
+    else:
+        rank = torch.distributed.get_rank(group=get_pipeline_model_parallel_group())
+    if _SPIRAL_CROSS_MAPPING:
+        assert _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT is not None
+        rank = _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT[rank]
+    return rank
+
+
+def translate_cm_rank_to_pp_rank(cm_rank):
+    """Return the pp_rank of the cm_rank. Generally used to translate back before
+    communication calls using pp_rank based groups"""
+    assert _SPIRAL_CROSS_MAPPING
+    assert _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT is not None
+    return _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT[cm_rank]
 
 
 def get_pipeline_model_parallel_split_rank():
@@ -669,6 +714,15 @@ def is_spiral_remap():
     return _SPIRAL and _SPIRAL_REMAP
 
 
+def is_spiral_cross_mapping():
+    """Return true if SpiralPipe cross mapping is enabled"""
+    if _SPIRAL is None:
+        return False
+    if _SPIRAL_CROSS_MAPPING is None:
+        return False
+    return _SPIRAL and _SPIRAL_CROSS_MAPPING
+
+
 def is_spiral_forward_stage():
     """Return true if current stage is a forward stage in SpiralPipe."""
     if not _SPIRAL:
@@ -768,35 +822,51 @@ def get_data_parallel_src_rank():
 def get_pipeline_model_parallel_first_rank():
     """Return the global rank of the first process in the pipeline for the
     current tensor parallel group"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, \
-        "Pipeline parallel group is not initialized"
-    return _PIPELINE_GLOBAL_RANKS[0]
+    if _SPIRAL_CROSS_MAPPING:
+        assert _SPIRAL_CROSS_MAPPING_LIST is not None
+        return _SPIRAL_CROSS_MAPPING_LIST[0]
+    else:
+        assert _PIPELINE_GLOBAL_RANKS is not None, \
+            "Pipeline parallel group is not initialized"
+        return _PIPELINE_GLOBAL_RANKS[0]
 
 
 def get_pipeline_model_parallel_last_rank():
     """Return the global rank of the last process in the pipeline for the
     current tensor parallel group"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, \
-        "Pipeline parallel group is not initialized"
-    last_rank_local = get_pipeline_model_parallel_world_size() - 1
-    return _PIPELINE_GLOBAL_RANKS[last_rank_local]
+    if _SPIRAL_CROSS_MAPPING:
+        assert _SPIRAL_CROSS_MAPPING_LIST is not None
+        return _SPIRAL_CROSS_MAPPING_LIST[-1]
+    else:
+        assert _PIPELINE_GLOBAL_RANKS is not None, \
+            "Pipeline parallel group is not initialized"
+        last_rank_local = get_pipeline_model_parallel_world_size() - 1
+        return _PIPELINE_GLOBAL_RANKS[last_rank_local]
 
 def get_pipeline_model_parallel_next_rank():
     """Return the global rank that follows the caller in the pipeline"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, \
-        "Pipeline parallel group is not initialized"
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
-    return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline + 1) % world_size]
+    if _SPIRAL_CROSS_MAPPING:
+        assert _SPIRAL_CROSS_MAPPING_LIST is not None
+        return _SPIRAL_CROSS_MAPPING_LIST[(rank_in_pipeline + 1) % world_size]
+    else:
+        assert _PIPELINE_GLOBAL_RANKS is not None, \
+            "Pipeline parallel group is not initialized"
+        return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline + 1) % world_size]
 
 
 def get_pipeline_model_parallel_prev_rank():
     """Return the global rank that preceeds the caller in the pipeline"""
-    assert _PIPELINE_GLOBAL_RANKS is not None, \
-        "Pipeline parallel group is not initialized"
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
-    return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline - 1) % world_size]
+    if _SPIRAL_CROSS_MAPPING:
+        assert _SPIRAL_CROSS_MAPPING_LIST is not None
+        return _SPIRAL_CROSS_MAPPING_LIST[(rank_in_pipeline - 1) % world_size]
+    else:
+        assert _PIPELINE_GLOBAL_RANKS is not None, \
+            "Pipeline parallel group is not initialized"
+        return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline - 1) % world_size]
 
 
 def get_data_parallel_world_size():
@@ -920,3 +990,35 @@ def destroy_model_parallel():
     _SPIRAL_EMBEDDING_GLOBAL_RANKS = None
     global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
     _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None
+
+    global _SPIRAL_CROSS_MAPPING
+    _SPIRAL_CROSS_MAPPING = None
+    global _SPIRAL_CROSS_MAPPING_LIST
+    _SPIRAL_CROSS_MAPPING_LIST = None
+    global _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
+    _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
+    global _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
+    _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
+
+
+def apply_spiral_cross_mapping(ranks):
+    """ Converts sorted pp rank list into list whose index is cm_rank and element is pp_rank.
+    Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes intra-node activation comm.
+
+    TODO (SpiralPipe) currently assumes nprocs_per_node=4 and stride=2
+    """
+    assert ranks == sorted(ranks), "pp rank list must be sorted before appy cross mapping"
+
+    nprocs_per_node = 4
+    nnodes =  len(ranks) // nprocs_per_node
+    stride = 2 # except the first and last process, `stride` processes of a node are sequentially mapped to cm_ranks
+
+    ret = []
+    for i in range(nprocs_per_node // stride):
+        r = range(nnodes) if i % 2 == 0 else range(nnodes-1, -1, -1)
+        for j in r:
+            for k in range(stride):
+                idx = stride*i + j*nprocs_per_node + k
+                # print(f"{i=} {j=} {k=} {idx=}")
+                ret.append(ranks[idx])
+    return ret
