@@ -17,7 +17,7 @@ done
 
 ## conda
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate spiral
+conda activate pytorch-2.3-cuda-12.1-python-3.8
 
 # MPI
 MPIRUN=$(which mpirun)

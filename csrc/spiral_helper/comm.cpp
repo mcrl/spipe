@@ -174,7 +174,8 @@ public:
        const bool init_shmem,
        const char* shared_memory_name,
        const size_t kCpuBufferSize,
-       const size_t kCpuBufferHeaderSize);
+       const size_t kCpuBufferHeaderSize,
+       const size_t alignment);
   Comm(const Comm&) = delete;            // copy ctor
   Comm(Comm&&) = delete;                 // move ctor
   Comm& operator=(const Comm&) = delete; // copy assign
@@ -201,7 +202,7 @@ public:
 
   const py::dict GetCommInfo() const;
   template <typename T>
-  py::array_t<T>& AllGather(py::array_t<T>& fwd_arr) const;
+  void AllGather(py::array_t<T> &tgt, py::array_t<T> &src) const;
 
   inline uintptr_t GetBase(const int mpi_rank) const;
 
@@ -266,7 +267,8 @@ Comm::Comm(std::vector<int> ranks,
            const bool init_shmem,
            const char* shared_memory_name,
            const size_t kCpuBufferSize,
-           const size_t kCpuBufferHeaderSize)
+           const size_t kCpuBufferHeaderSize,
+           const size_t alignment)
 {
   if (Comm::debug)
     spdlog::info("Creating SpiralPipe Comm");
@@ -358,12 +360,11 @@ Comm::Comm(std::vector<int> ranks,
   data_ptr_ = (((char*)shared_ptr_) + kCpuBufferHeaderSize);
 
 #if __WORDSIZE == 64
-  CHECK_MPI(MPI_Allgather(&shared_ptrs_[comm_info_.mpi_rank_], 1,
-                          MPI_UNSIGNED_LONG, shared_ptrs_, 1, MPI_UNSIGNED_LONG,
-                          mpi_comm_));
+  CHECK_MPI(MPI_Allgather(&shared_ptr_, 1, MPI_UNSIGNED_LONG, shared_ptrs_, 1,
+                          MPI_UNSIGNED_LONG, mpi_comm_));
 #else
-  CHECK_MPI(MPI_Allgather(&shared_ptrs_[comm_info_.mpi_rank_], 1, MPI_UNSIGNED,
-                          shared_ptrs_, 1, MPI_UNSIGNED, mpi_comm_));
+  CHECK_MPI(MPI_Allgather(&shared_ptr_, 1, MPI_UNSIGNED, shared_ptrs_, 1,
+                          MPI_UNSIGNED, mpi_comm_));
 #endif
 
   // test
@@ -388,7 +389,7 @@ Comm::Comm(std::vector<int> ranks,
       GetBase(comm_info_.mpi_rank_),
       kCpuBufferSize / comm_info_.intra_size_ * comm_info_.intra_rank_,
       kCpuBufferSize / comm_info_.intra_size_,
-      sizeof(float)); // Shared memory is divided equally among host processes
+      alignment); // Shared memory is divided equally among host processes
 
   CHECK_MPI(MPI_Win_create(data_ptr_, kCpuBufferSize, 1, MPI_INFO_NULL,
                            MPI_COMM_WORLD, &window_));
@@ -570,14 +571,14 @@ bool Comm::IsParamDataLocal(const unsigned int param_id) const
   return param_mapping_tbl_[param_id].inter_rank_ == comm_info_.inter_rank_;
 }
 
-void Comm::SyncParamDataInfo()
-{
+void Comm::SyncParamDataInfo() {
   MPI_Barrier(MPI_COMM_WORLD);
 
   if (comm_info_.intra_rank_ == 0) {
+    assert(shared_memory_header_size_ % sizeof(unsigned long) == 0);
     CHECK_MPI(MPI_Allreduce(MPI_IN_PLACE, param_mapping_tbl_,
-                            shared_memory_header_size_, MPI_BYTE, MPI_SUM,
-                            inter_comm_));
+                            shared_memory_header_size_, MPI_UNSIGNED_CHAR,
+                            MPI_SUM, inter_comm_));
   }
 
   MPI_Barrier(MPI_COMM_WORLD);
@@ -716,16 +717,16 @@ const py::dict Comm::GetCommInfo() const
   return info;
 }
 
-template <typename T> py::array_t<T>& Comm::AllGather(py::array_t<T>& arr) const
-{
-  py::buffer_info buf = arr.request();
-  auto* ptr = (T*)arr.mutable_data();
-  py::ssize_t ag_numel = std::reduce(buf.shape.begin() + 1, buf.shape.end(), 1,
-                                     std::multiplies<>());
-  py::ssize_t ag_offset = comm_info_.mpi_rank_ * ag_numel;
-  CHECK_MPI(MPI_Allgather(&ptr[ag_offset], ag_numel, MPI_UNSIGNED, ptr,
-                          ag_numel, MPI_UNSIGNED, mpi_comm_));
-  return arr;
+template <typename T>
+void Comm::AllGather(py::array_t<T> &tgt, py::array_t<T> &src) const {
+  py::buffer_info buf = src.request();
+  py::ssize_t ag_numel =
+      std::reduce(buf.shape.begin(), buf.shape.end(), 1, std::multiplies<>());
+
+  auto *tgt_buf = (T *)tgt.mutable_data();
+  auto *src_buf = (T *)src.mutable_data();
+  CHECK_MPI(MPI_Allgather(src_buf, ag_numel, MPI_UNSIGNED, tgt_buf, ag_numel,
+                          MPI_UNSIGNED, mpi_comm_));
 }
 
 // Virtual address of allocator memory. Corrsponds to `base_` in
@@ -744,7 +745,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         "SpiralPipeBackend LazyConfigure (C++)");
   py::class_<Comm>(m, "Comm")
       .def(py::init<std::vector<int>, const int, const bool, const char*,
-                    const size_t, const size_t>())
+                    const size_t, const size_t, const size_t>())
       .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
       .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
       .def("RemapParamData", &Comm::RemapParamData)

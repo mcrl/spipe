@@ -388,6 +388,7 @@ def _spiral_backend_init():
             args.spiral_shared_memory_name,
             args.spiral_shared_memory_buffer_size,
             args.spiral_shared_memory_header_size,
+            2 if (args.fp16 or args.bf16) else 4,
         )
         _set_comm_info()
 

@@ -15,11 +15,11 @@ public:
   static SpiralCPUAllocator*
   instance(uintptr_t base, size_t offset, size_t size, size_t align);
 
-  DataPtr allocate(size_t nbytes) const override;
+  DataPtr allocate(size_t nbytes) override;
   void free(void* const ptr);
   at::DeleterFnPtr raw_deleter() const override;
   void* malloc(size_t nbytes);
-
+  void copy_data(void* dest, const void* src, std::size_t count) const override {}; // not implemented
   static constexpr bool debug = false; // TODO (SpiralPipe) remove when release
 
 private:

@@ -425,7 +425,7 @@ def forward_backward_pipelining_with_spiral_remap(
             "compute",
             tag="prefetch:f0",
             post_wait_fn=lambda: _post_wait_set_spiral_param_status(
-                model[0], SpiralParamStatus.ACTIVE
+                model[0], SpiralParamStatus.GPU
             ),
         )
         if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
@@ -468,7 +468,7 @@ def forward_backward_pipelining_with_spiral_remap(
                     "compute",
                     tag=tag,
                     post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[fwd_stage_id + 1], SpiralParamStatus.ACTIVE
+                        model[fwd_stage_id + 1], SpiralParamStatus.GPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
@@ -601,7 +601,7 @@ def forward_backward_pipelining_with_spiral_remap(
                     "prefetch",
                     tag=f"free:f{fwd_stage_id}",
                     post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[fwd_stage_id], SpiralParamStatus.REMOTE
+                        model[fwd_stage_id], SpiralParamStatus.CPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(free_curr) == -1:
@@ -651,7 +651,7 @@ def forward_backward_pipelining_with_spiral_remap(
                     "compute",
                     tag="prefetch:" + f"b{bwd_stage_id - 1}",
                     post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[-bwd_stage_id], SpiralParamStatus.ACTIVE
+                        model[-bwd_stage_id], SpiralParamStatus.GPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
@@ -807,7 +807,7 @@ def forward_backward_pipelining_with_spiral_remap(
                 None if bwd_stage_id == 0 else "prefetch",
                 tag=f"free:b{bwd_stage_id}",
                 post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
-                    model[-bwd_stage_id - 1], SpiralParamStatus.REMOTE
+                    model[-bwd_stage_id - 1], SpiralParamStatus.CPU
                 ),
             )
             if get_thunder_cuda_manager().record_event(free_curr) == -1:
@@ -1073,7 +1073,7 @@ def forward_backward_pipelining_with_spiral(
             "compute",
             tag="prefetch:f0",
             post_wait_fn=lambda: _post_wait_set_spiral_param_status(
-                model[0], SpiralParamStatus.ACTIVE
+                model[0], SpiralParamStatus.GPU
             ),
         )
         if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
@@ -1109,7 +1109,7 @@ def forward_backward_pipelining_with_spiral(
                     "compute",
                     tag=tag,
                     post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[fwd_stage_id + 1], SpiralParamStatus.ACTIVE
+                        model[fwd_stage_id + 1], SpiralParamStatus.GPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
@@ -1252,7 +1252,7 @@ def forward_backward_pipelining_with_spiral(
                     "prefetch",
                     tag=f"free:f{fwd_stage_id}",
                     post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[fwd_stage_id], SpiralParamStatus.REMOTE
+                        model[fwd_stage_id], SpiralParamStatus.CPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(free_curr) == -1:
@@ -1297,7 +1297,7 @@ def forward_backward_pipelining_with_spiral(
                     "compute",
                     tag="prefetch:" + f"b{bwd_stage_id - 1}",
                     post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[bwd_stage_id - 1], SpiralParamStatus.ACTIVE
+                        model[bwd_stage_id - 1], SpiralParamStatus.GPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
@@ -1452,7 +1452,7 @@ def forward_backward_pipelining_with_spiral(
                 None if bwd_stage_id == 0 else "prefetch",
                 tag=f"free:b{bwd_stage_id}",
                 post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
-                    model[bwd_stage_id], SpiralParamStatus.REMOTE
+                    model[bwd_stage_id], SpiralParamStatus.CPU
                 ),
             )
             if get_thunder_cuda_manager().record_event(free_curr) == -1:

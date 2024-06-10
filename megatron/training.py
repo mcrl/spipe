@@ -380,6 +380,11 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             )
             this_model.model_type = model_type
 
+            # wrap model with Float16Module
+            if args.fp16 or args.bf16:
+                with SpiralWrapperInitContext(enabled=True):
+                    this_model = Float16Module(this_model, args)
+
             # reset states of the callee
             if mpu.is_spiral_forward_stage():
                 sbs.set_spiral_forward_stage_build_phase(None)
@@ -440,11 +445,11 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                 ),
                 dtype=np.uintc,
             )
-            num_params_per_fwd_build_phase[mpu.get_pipeline_model_parallel_rank()] = [
+            num_params_per_fwd_build_phase_per_rank = np.array([
                 [m.num_spiral_params_recurse for m in __stage_models.module_list]
                 for __stage_models in model[:mpu.get_spiral_forward_virtual_size()]
-            ]
-            num_params_per_fwd_build_phase = get_thunder_group().AllGather(num_params_per_fwd_build_phase)
+            ])
+            get_thunder_group().AllGather(num_params_per_fwd_build_phase, num_params_per_fwd_build_phase_per_rank) # (tgt,src)
             __phase = 0
             __phase_nparam_dict = {}
             for i in range(mpu.get_spiral_forward_virtual_size()):
@@ -548,9 +553,13 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
             for stage_model in model:
                 for param in stage_model.parameters(recurse=True):
                     if is_spiral_param(param):
-                        if mpu.is_spiral_remap() and get_thunder_group().IsParamDataLocal(param.spiral_id):
-                            continue
-                        assert getattr(param, "spiral_tensor").is_pinned(), f"{debug_param2name_id(param)} on local node is not pinned."
+                        if (
+                            mpu.is_spiral_remap()
+                            and get_thunder_group().IsParamDataLocal(param.spiral_id)
+                        ):
+                            assert getattr(
+                                param, "spiral_tensor"
+                            ).is_pinned(), f"{debug_param2name_id(param)} on local node is not pinned."
 
         if mpu.is_spiral_remap():
             get_thunder_group().UnsetSpiralCPUAllocator()
@@ -621,7 +630,10 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
         model_module.cuda(torch.cuda.current_device())
 
     # Fp16 conversion.
-    if args.fp16 or args.bf16:
+    # NOTE (SpiralPipe) Wrapping GPTModel into fp16 module is done in `_model_provider_func_wrapper`
+    if args.spiral:
+        pass
+    elif args.fp16 or args.bf16:
         model = [Float16Module(model_module, args) for model_module in model]
 
     if wrap_with_ddp:

@@ -378,9 +378,6 @@ def validate_args(args, defaults={}):
         if args.virtual_pipeline_model_parallel_size is not None:
             raise RuntimeError(
                 "SpiralPipe does not support setting virtual pipeline")
-        if args.params_dtype != torch.float:
-            raise RuntimeError(
-                "SpiralPipe only supports fp32")
         if args.lazy_mpu_init:
             raise RuntimeError(
                 "SpiralPipe does not support lazy mpu init")
@@ -436,6 +433,9 @@ def validate_args(args, defaults={}):
                         "Warning: SpiralPipe without remapping will run with full uniform (recompute num layers=1) recomputation "
                         "regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers"
                     )
+        if args.use_distributed_optimizer:
+            raise RuntimeError(
+                "SpiralPipe currently does not support distributed optimizer")
 
     # GQA
     if args.num_key_value_heads is None:

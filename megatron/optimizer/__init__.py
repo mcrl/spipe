@@ -47,7 +47,7 @@ def get_param_groups(modules,
 
             if args.spiral:
                 assert (is_spiral_param(param))
-                if param.spiral_status == SpiralParamStatus.REMOTE:
+                if param.spiral_status == SpiralParamStatus.CPU:
                     param = param.spiral_tensor
 
             if no_weight_decay_cond is not None:
@@ -182,8 +182,6 @@ def get_megatron_optimizer(model,
     #   from the MixedPrecisionOptimizer, which manages any optimizer where
     #   the model params and main params are distinct.
     if args.fp16 or args.bf16 or args.use_distributed_optimizer:
-        if args.spiral:
-            raise RuntimeError("SpiralPipe currently only supports FP32 optimizer.")
         # Grad scaler:
         #    if loss-scale is provided, instantiate the constant scaler.
         #    if we are using fp16 and loss-scale is not present, use a
@@ -212,15 +210,15 @@ def get_megatron_optimizer(model,
             if args.use_distributed_optimizer else \
             Float16OptimizerWithFloat16Params
         return opt_ty(optimizer,
-                      args.clip_grad,
-                      args.log_num_zeros_in_grad,
-                      params_have_main_grad,
-                      args.use_contiguous_buffers_in_local_ddp,
-                      args.fp16,
-                      args.bf16,
-                      args.params_dtype,
-                      grad_scaler,
-                      model)
+                    args.clip_grad,
+                    args.log_num_zeros_in_grad,
+                    params_have_main_grad,
+                    args.use_contiguous_buffers_in_local_ddp,
+                    args.fp16,
+                    args.bf16,
+                    args.params_dtype,
+                    grad_scaler,
+                    model)
 
     # FP32.
     return FP32Optimizer(optimizer, args.clip_grad,
