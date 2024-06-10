@@ -866,6 +866,7 @@ def get_pipeline_model_parallel_prev_rank():
     else:
         assert _PIPELINE_GLOBAL_RANKS is not None, \
             "Pipeline parallel group is not initialized"
+        return _PIPELINE_GLOBAL_RANKS[(rank_in_pipeline - 1) % world_size]
 
 
 def get_data_parallel_world_size():
