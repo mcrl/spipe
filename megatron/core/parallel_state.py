@@ -69,11 +69,13 @@ _SPIRAL_FORWARD_VIRTUAL_SIZE = None
 _SPIRAL_BACKWARD_VIRTUAL_SIZE = None
 
 # SpiralPipe cross mapping
-# if pp rank = 0..3 is cross-mapped into cm rank = 3,1,2,0
-# cross_mapping_list=[3,1,2,0] and cross_mapping_dict={0:3, 1:1, 2:2, 3:0}
+# spiral cross mapping rank list: idx - cm rank, element - pp rank
+# spiral cross mapping cm rank to pp rank dict: { cm rank: pp rank }
+# spiral cross mapping pp rank to cm rank dict: { pp rank: cm rank }
 _SPIRAL_CROSS_MAPPING = None
 _SPIRAL_CROSS_MAPPING_LIST = None
-_SPIRAL_CROSS_MAPPING_DICT = None
+_SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
+_SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
 
 # Below SpiralPipe variables are lazily set after spiral backend init using CommInfo
 _SPIRAL_INTRA_SIZE = None
@@ -293,10 +295,11 @@ def initialize_model_parallel(
         if rank in ranks:
             if _SPIRAL_CROSS_MAPPING:
                 global _SPIRAL_CROSS_MAPPING_LIST
-                global _SPIRAL_CROSS_MAPPING_DICT
-                # TODO (SpiralPipe) currently assumes nprocs_per_node =4 and stride=2
-                _SPIRAL_CROSS_MAPPING_LIST = spiral_cross_mapping_pattern(list(ranks), len(ranks) // 4, 2)
-                _SPIRAL_CROSS_MAPPING_DICT = {pp_rank: cm_rank for cm_rank, pp_rank in enumerate(_SPIRAL_CROSS_MAPPING_LIST)}
+                global _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
+                global _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
+                _SPIRAL_CROSS_MAPPING_LIST = apply_spiral_cross_mapping(list(ranks))
+                _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = {cm_rank: pp_rank for cm_rank, pp_rank in enumerate(_SPIRAL_CROSS_MAPPING_LIST)}
+                _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = {pp_rank: cm_rank for cm_rank, pp_rank in enumerate(_SPIRAL_CROSS_MAPPING_LIST)}
 
         # Setup embedding group (to exchange gradients between
         # first and last stages).
@@ -562,9 +565,17 @@ def get_pipeline_model_parallel_rank():
     else:
         rank = torch.distributed.get_rank(group=get_pipeline_model_parallel_group())
     if _SPIRAL_CROSS_MAPPING:
-        assert _SPIRAL_CROSS_MAPPING_DICT is not None
-        rank = _SPIRAL_CROSS_MAPPING_DICT[rank]
+        assert _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT is not None
+        rank = _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT[rank]
     return rank
+
+
+def translate_cm_rank_to_pp_rank(cm_rank):
+    """Return the pp_rank of the cm_rank. Generally used to translate back before
+    communication calls using pp_rank based groups"""
+    assert _SPIRAL_CROSS_MAPPING
+    assert _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT is not None
+    return _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT[cm_rank]
 
 
 def get_pipeline_model_parallel_split_rank():
@@ -983,12 +994,24 @@ def destroy_model_parallel():
     _SPIRAL_CROSS_MAPPING = None
     global _SPIRAL_CROSS_MAPPING_LIST
     _SPIRAL_CROSS_MAPPING_LIST = None
-    global _SPIRAL_CROSS_MAPPING_DICT
-    _SPIRAL_CROSS_MAPPING_DICT = None
+    global _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
+    _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
+    global _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
+    _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
 
 
-def spiral_cross_mapping_pattern(ranks, nnodes, stride):
-    nprocs_per_node = len(ranks) // nnodes
+def apply_spiral_cross_mapping(ranks):
+    """ Converts sorted pp rank list into list whose index is cm_rank and element is pp_rank.
+    Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes intra-node activation comm.
+
+    TODO (SpiralPipe) currently assumes nprocs_per_node=4 and stride=2
+    """
+    assert ranks == sorted(ranks), "pp rank list must be sorted before appy cross mapping"
+
+    nprocs_per_node = 4
+    nnodes =  len(ranks) // nprocs_per_node
+    stride = 2 # except the first and last process, `stride` processes of a node are sequentially mapped to cm_ranks
+
     ret = []
     for i in range(nprocs_per_node // stride):
         r = range(nnodes) if i % 2 == 0 else range(nnodes-1, -1, -1)

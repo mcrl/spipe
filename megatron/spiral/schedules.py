@@ -353,6 +353,11 @@ def forward_backward_pipelining_with_spiral_remap(
 
         recvs, reqs = None, []  # placeholder
         if len(send_ranks) > 0 or len(recv_ranks) > 0:
+            if mpu.is_spiral_cross_mapping():
+                # translate cm_rank back to pp_rank before communication
+                send_ranks = [mpu.translate_cm_rank_to_pp_rank(rank) for rank in send_ranks]
+                recv_ranks = [mpu.translate_cm_rank_to_pp_rank(rank) for rank in recv_ranks]
+
             recvs, reqs = spiral_p2p._communicate(
                 tensor_sends=tensor_sends if len(tensor_sends) > 0 else None,
                 send_ranks=send_ranks if len(send_ranks) > 0 else None,
