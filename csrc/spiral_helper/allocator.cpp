@@ -106,7 +106,7 @@ SpiralCPUAllocator::~SpiralCPUAllocator() {
   }
 }
 
-DataPtr SpiralCPUAllocator::allocate(size_t nbytes) const {
+DataPtr SpiralCPUAllocator::allocate(size_t nbytes) {
   void* r = const_cast<SpiralCPUAllocator*>(this)->malloc(nbytes);
   return { r, r, &local_raw_delete, at::Device(at::DeviceType::CPU) };
 }

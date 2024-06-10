@@ -5,6 +5,8 @@
 from abc import ABC
 from abc import abstractmethod
 import warnings
+import nvtx
+
 from apex.multi_tensor_apply import multi_tensor_applier
 import amp_C
 import torch
@@ -386,7 +388,7 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
     def reload_model_params(self):
         self._copy_model_params_to_main_params()
 
-
+    @nvtx.annotate("_unscale_main_grads_and_check_for_nan")
     def _unscale_main_grads_and_check_for_nan(self):
 
         # Collect main grads.
@@ -397,9 +399,11 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
 
         # Unscale and set found inf/nan
         if get_args().spiral:
-            for main_grad in main_grads:
-                main_grad.mul_(self.grad_scaler.inv_scale.cpu())
-                self.found_inf.add_(self._has_inf_or_nan(main_grad))
+            # for main_grad in main_grads:
+            #     main_grad.mul_(self.grad_scaler.inv_scale.cpu())
+            #     self.found_inf.add_(self._has_inf_or_nan(main_grad))
+            torch._amp_foreach_non_finite_check_and_unscale_(
+                main_grads, self.found_inf, self.grad_scaler.inv_scale.cpu())
         else:
             torch._amp_foreach_non_finite_check_and_unscale_(
                 main_grads, self.found_inf, self.grad_scaler.inv_scale)
