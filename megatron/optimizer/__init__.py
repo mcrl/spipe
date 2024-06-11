@@ -123,7 +123,6 @@ def get_megatron_optimizer(model,
                     scale_lr_cond,
                     lr_mult,
                 )
-                assert isinstance(opt_ty, FP32Optimizer), "SpiralStageOptimizer currently only supports SpiralCPUAdam wrapped into FP32Optimizer"
                 bwd_stage_optimizers.append(opt_ty)
             return SpiralStageOptimizer(bwd_stage_optimizers)
         else:
