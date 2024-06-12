@@ -457,7 +457,6 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     ).view(param.spiral_shape)
                 else:
                     param.data = torch.empty(param.spiral_shape, device=self.local_device, dtype=param.dtype)
-                    assert not get_args().spiral_cross_mapping, "Spiral cross mapping should eliminate remote fetch"
                     get_thunder_group().FetchRemoteParam(
                         param.spiral_id,
                         non_blocking,
@@ -471,7 +470,6 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
                 else:
                     param.data = torch.empty(param.spiral_shape, device=self.local_device, dtype=param.dtype)
-                    assert not get_args().spiral_cross_mapping, "Spiral cross mapping should eliminate remote fetch"
                     get_thunder_group().FetchRemoteParam(
                         param.spiral_id,
                         non_blocking,

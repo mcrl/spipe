@@ -1003,7 +1003,7 @@ def destroy_model_parallel():
 
 def apply_spiral_cross_mapping(ranks):
     """ Converts sorted pp rank list into list whose index is cm_rank and element is pp_rank.
-    Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes intra-node activation comm.
+    Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes inter-node activation comm.
 
     TODO (SpiralPipe) currently assumes nprocs_per_node=4 and stride=2
     """
