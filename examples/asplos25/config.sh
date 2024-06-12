@@ -27,8 +27,17 @@ NP=$(( $GPUS_PER_NODE * $SLURM_JOB_NUM_NODES ))
 UNWRAPPED_NODELIST=$(scontrol show hostnames $SLURM_NODELIST) # b3 b4
 HOSTS=$(for node in $UNWRAPPED_NODELIST; do echo -n "$node:$GPUS_PER_NODE,"; done | sed 's/,$//') # b3:2,b4:2
 
+MEGATRON_DEEPSPEED=0
+if [[ "$JOB_TYPE" == *"zero3"* || "$JOB_TYPE" == *"infinity"* ]]; then
+    MEGATRON_DEEPSPEED=1
+fi
+
 # Source code
-export MEGATRON_PATH=$HOME/spipe/Megatron-LM-mcrl
+if [[ $MEGATRON_DEEPSPEED -eq 1 ]]; then
+    export MEGATRON_PATH=${HOME}/spipe/Megatron-LM-mcrl/external/Megatron-DeepSpeed
+else
+    export MEGATRON_PATH=${HOME}/spipe/Megatron-LM-mcrl
+fi
 FUSED_KERNEL_LOCK=${MEGATRON_PATH}/megatron/fused_kernels/build/lock
 
 # nsys

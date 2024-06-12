@@ -1110,11 +1110,10 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         else:
             log_string += " elapsed time per iteration (ms): N/A |"
 
-        if args.log_throughput:
-            if throughput:
-                log_string += f" throughput per GPU (TFLOP/s/GPU): {throughput:.2f} |"
-            else:
-                log_string += " throughput per GPU (TFLOP/s/GPU): N/A |"
+        if throughput:
+            log_string += f" throughput per GPU (TFLOP/s/GPU): {throughput:.2f} |"
+        else:
+            log_string += " throughput per GPU (TFLOP/s/GPU): N/A |"
 
             if args.log_timers_to_tensorboard:
                 if writer:

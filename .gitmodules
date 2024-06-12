@@ -4,3 +4,7 @@
 [submodule "csrc/external/DeepSpeed"]
 	path = csrc/external/DeepSpeed
 	url = git@github.com:microsoft/DeepSpeed.git
+[submodule "external/Megatron-DeepSpeed"]
+	path = external/Megatron-DeepSpeed
+	url = git@github.com:mcrl/Megatron-DeepSpeed-mcrl.git
+	branch = spiral
