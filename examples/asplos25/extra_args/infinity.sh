@@ -18,14 +18,7 @@ cat <<EOT > $DS_CONFIG
       "pin_memory": true
     },
     "overlap_comm": true,
-    "contiguous_gradients": true,
-    "sub_group_size": 1e9,
-    "reduce_bucket_size": "auto",
-    "stage3_prefetch_bucket_size": "auto",
-    "stage3_param_persistence_threshold": 0,
-    "stage3_max_live_parameters": 0,
-    "stage3_max_reuse_distance": 0,
-    "stage3_gather_16bit_weights_on_model_save": true
+    "contiguous_gradients": true
   },
   "fp16": {
     "enabled": true
