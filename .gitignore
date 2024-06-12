@@ -11,3 +11,4 @@ logs
 **/tmp
 log*
 *.txt
+results

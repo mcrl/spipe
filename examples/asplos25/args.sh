@@ -11,7 +11,7 @@ DISTRIBUTED_ARGS="
     --master-addr $MASTER_ADDR \
     --master-port $MASTER_PORT
 "
-if [[ $MEGATRON_DEEPSPEED -eq 1 ]]; then
+if [[ $NO_PIPELINE_PARALLEL -eq 1 ]]; then
     DISTRIBUTED_ARGS="
         --pipeline-model-parallel-size 1 \
         ${DISTRIBUTED_ARGS}

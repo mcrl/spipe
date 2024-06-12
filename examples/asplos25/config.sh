@@ -28,8 +28,13 @@ UNWRAPPED_NODELIST=$(scontrol show hostnames $SLURM_NODELIST) # b3 b4
 HOSTS=$(for node in $UNWRAPPED_NODELIST; do echo -n "$node:$GPUS_PER_NODE,"; done | sed 's/,$//') # b3:2,b4:2
 
 MEGATRON_DEEPSPEED=0
-if [[ "$JOB_TYPE" == *"zero3"* || "$JOB_TYPE" == *"infinity"* ]]; then
+if [[ "$JOB_TYPE" == *"zero3"* || "$JOB_TYPE" == *"infinity"* || "$JOB_TYPE" == *"deepspeed"* ]]; then
     MEGATRON_DEEPSPEED=1
+fi
+
+NO_PIPELINE_PARALLEL=0
+if [[ "$JOB_TYPE" == *"zero3"* || "$JOB_TYPE" == *"infinity"* ]]; then
+    NO_PIPELINE_PARALLEL=1
 fi
 
 # Source code
