@@ -7,11 +7,21 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1
 
 DISTRIBUTED_ARGS="
     --tensor-model-parallel-size 1 \
-    --pipeline-model-parallel-size $NP \
     --distributed-backend nccl \
     --master-addr $MASTER_ADDR \
     --master-port $MASTER_PORT
 "
+if [[ $MEGATRON_DEEPSPEED -eq 1 ]]; then
+    DISTRIBUTED_ARGS="
+        --pipeline-model-parallel-size 1 \
+        ${DISTRIBUTED_ARGS}
+    "
+else
+    DISTRIBUTED_ARGS="
+        --pipeline-model-parallel-size $NP \
+        ${DISTRIBUTED_ARGS}
+    "
+fi
 
 DATA_ARGS="
     --data-path $DATA_PATH \
@@ -25,9 +35,7 @@ MIXED_PRECISION_ARGS="
     --fp16
 "
 
-LOGGING_ARGS="
-    --log-throughput
-"
+LOGGING_ARGS=""
 
 if [ ${SKIP_TRAIN_ITER_ZERO_TIMING} == "YES" ]; then
     LOGGING_ARGS+=" --skip-train-iter-zero-timing"
