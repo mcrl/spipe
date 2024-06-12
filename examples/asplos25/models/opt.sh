@@ -31,11 +31,21 @@ elif [ $MODEL_SIZE -eq 30 ]; then
     LAYER=48
     HIDDEN=7168
     HEAD=56
-elif [ $MODEL_SIZE -eq 66 ]; then
-    # 66B
+elif [ $MODEL_SIZE -eq 52 ]; then
+    # 52B
     LAYER=64
-    HIDDEN=9216
-    HEAD=72
+    HIDDEN=8192
+    HEAD=64
+elif [ $MODEL_SIZE -eq 81 ]; then
+    # 81B
+    LAYER=64
+    HIDDEN=10240
+    HEAD=64
+elif [ $MODEL_SIZE -eq 121 ]; then
+    # 121B
+    LAYER=96
+    HIDDEN=10240
+    HEAD=96
 elif [ $MODEL_SIZE -eq 175 ]; then
     # 175B
     LAYER=96

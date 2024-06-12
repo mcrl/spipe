@@ -15,12 +15,41 @@ elif [ $MODEL_SIZE -eq 13 ]; then
     FFN_HIDDEN=13824
     HEAD=40
     NUM_KV_HEADS=40
-elif [ $MODEL_SIZE -eq 70 ]; then
-    # 70B
-    LAYER=80
+elif [ $MODEL_SIZE -eq 52 ]; then
+    # 52B
+    LAYER=64
     HIDDEN=8192
-    HEAD=64
-    NUM_KV_HEADS=4 # llama2 70B uses GQA
+    FFN_HIDDEN=22016
+    HEAD=4
+    NUM_KV_HEADS=4
+elif [ $MODEL_SIZE -eq 81 ]; then
+    # 81B
+    LAYER=64
+    HIDDEN=10240
+    FFN_HIDDEN=27648
+    HEAD=8
+    NUM_KV_HEADS=8
+elif [ $MODEL_SIZE -eq 121 ]; then
+    # 121B
+    LAYER=96
+    HIDDEN=10240
+    FFN_HIDDEN=27648
+    HEAD=8
+    NUM_KV_HEADS=8
+elif [ $MODEL_SIZE -eq 175 ]; then
+    # 127B
+    LAYER=96
+    HIDDEN=13312
+    FFN_HIDDEN=35840
+    HEAD=8
+    NUM_KV_HEADS=8
+elif [ $MODEL_SIZE -eq 200 ]; then
+    # 200B
+    LAYER=96
+    HIDDEN=13312
+    FFN_HIDDEN=35840
+    HEAD=8
+    NUM_KV_HEADS=8
 else
     HIDDEN=2048 
     FFN_HIDDEN=5504
