@@ -1,6 +1,6 @@
 #!/bin/bash
 
-DS_CONFIG="/tmp/slurm-$SLURM_JOB_ID-ds_config.json"
+DS_CONFIG="slurm-$SLURM_JOB_ID-ds_config.json"
 PROFILE_OUTPUT="slurm-$SLURM_JOB_ID-profile.out"
 
 cat <<EOT > $DS_CONFIG
