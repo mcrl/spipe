@@ -37,7 +37,7 @@ elif [ $MODEL_SIZE -eq 121 ]; then
     HEAD=8
     NUM_KV_HEADS=8
 elif [ $MODEL_SIZE -eq 175 ]; then
-    # 127B
+    # 175B
     LAYER=96
     HIDDEN=13312
     FFN_HIDDEN=35840
