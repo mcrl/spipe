@@ -196,7 +196,6 @@ class Float16Module(MegatronModule):
 
 
     def set_input_tensor(self, input_tensor):
-        # assert input_tensor.dtype == torch.float16, f"@@@@@@@@@@@@@"
         return self.module.set_input_tensor(input_tensor)
 
 
