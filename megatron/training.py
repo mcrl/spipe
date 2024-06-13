@@ -382,8 +382,25 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
 
             # wrap model with Float16Module
             if args.fp16 or args.bf16:
+                # only the first or last stage can require cast, where a stage is a spiral phase list
+                # all modules in a spiral phase list shares fid and bid
+                # only the first or last module in the same spiral phase list requires cast
+                enable_cast = (
+                    (fvr == 0 and fbp == 0 and mpu.is_pipeline_first_stage())
+                    or (
+                        fvr == mpu.get_spiral_forward_virtual_size() - 1
+                        and fbp == sbs.get_spiral_forward_stage_build_phase_size() - 1
+                        and mpu.is_pipeline_last_stage()
+                    )
+                    or (bvr == 0 and bbp == 0 and mpu.is_pipeline_first_stage())
+                    or (
+                        bvr == mpu.get_spiral_backward_virtual_size() - 1
+                        and bbp == sbs.get_spiral_backward_stage_build_phase_size() - 1
+                        and mpu.is_pipeline_last_stage()
+                    )
+                )
                 with SpiralWrapperInitContext(enabled=True):
-                    this_model = Float16Module(this_model, args)
+                    this_model = Float16Module(this_model, args, spiral_disable_cast=not enable_cast)
 
             # reset states of the callee
             if mpu.is_spiral_forward_stage():
