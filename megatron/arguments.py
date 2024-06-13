@@ -436,10 +436,6 @@ def validate_args(args, defaults={}):
         if args.use_distributed_optimizer:
             raise RuntimeError(
                 "SpiralPipe currently does not support distributed optimizer")
-        if args.spiral_cross_mapping:
-            if args.spiral_forward_virtual_size != args.spiral_backward_virtual_size:
-                raise RuntimeError(
-                    "SpiralPipe with cross mapping requires forward and backward virtual size to be the same")
 
     # GQA
     if args.num_key_value_heads is None:

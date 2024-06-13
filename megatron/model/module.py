@@ -171,7 +171,12 @@ def float16_to_fp32(val):
 
 class Float16Module(MegatronModule):
 
-    def __init__(self, module, args):
+    def __init__(self, module, args, spiral_disable_cast=False):
+        """Wrap the module with float16/bfloat16 cast.
+
+        Arguments:
+            spiral_disable_cast: bool, whether to disable float32 <-> float16/bfloat16 cast. SpiralPhaseList contains mutliple Float16Modules, while the `fp16/bf16 cast` is only needed at the first Float16Module in the first stage (i.e., fid/bid=0, fbp/bbp=0) and the `fp32 cast` is only needed at the last Float16Module in the last stage (i.e., fid/bid=last, fbp/bbp=last*).
+        """
         super(Float16Module, self).__init__()
 
         if args.fp16:
@@ -186,6 +191,8 @@ class Float16Module(MegatronModule):
             raise Exception('should not be here')
 
         self.float16_convertor = float16_convertor
+        if args.spiral:
+            self.spiral_disable_cast = spiral_disable_cast
 
 
     def set_input_tensor(self, input_tensor):
@@ -193,10 +200,10 @@ class Float16Module(MegatronModule):
 
 
     def forward(self, *inputs, **kwargs):
-        if mpu.is_pipeline_first_stage():
+        if mpu.is_pipeline_first_stage() and not self.spiral_disable_cast:
             inputs = fp32_to_float16(inputs, self.float16_convertor)
         outputs = self.module(*inputs, **kwargs)
-        if mpu.is_pipeline_last_stage():
+        if mpu.is_pipeline_last_stage() and not self.spiral_disable_cast:
             outputs = float16_to_fp32(outputs)
         return outputs
 
