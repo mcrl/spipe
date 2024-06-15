@@ -191,8 +191,7 @@ class Float16Module(MegatronModule):
             raise Exception('should not be here')
 
         self.float16_convertor = float16_convertor
-        if args.spiral:
-            self.spiral_disable_cast = spiral_disable_cast
+        self.spiral_disable_cast = spiral_disable_cast
 
 
     def set_input_tensor(self, input_tensor):
