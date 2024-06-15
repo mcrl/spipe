@@ -821,7 +821,9 @@ def get_data_parallel_src_rank():
 
 def get_pipeline_model_parallel_first_rank():
     """Return the global rank of the first process in the pipeline for the
-    current tensor parallel group"""
+    current pipeline model parallel group
+    NOTE (SpiralPipe) Returns `pp rank` of the first `cm rank` process
+    """
     if _SPIRAL_CROSS_MAPPING:
         assert _SPIRAL_CROSS_MAPPING_LIST is not None
         return _SPIRAL_CROSS_MAPPING_LIST[0]
@@ -833,7 +835,9 @@ def get_pipeline_model_parallel_first_rank():
 
 def get_pipeline_model_parallel_last_rank():
     """Return the global rank of the last process in the pipeline for the
-    current tensor parallel group"""
+    current tensor parallel group
+    NOTE (SpiralPipe) Returns `pp rank` of the last `cm rank` process
+    """
     if _SPIRAL_CROSS_MAPPING:
         assert _SPIRAL_CROSS_MAPPING_LIST is not None
         return _SPIRAL_CROSS_MAPPING_LIST[-1]
@@ -844,7 +848,9 @@ def get_pipeline_model_parallel_last_rank():
         return _PIPELINE_GLOBAL_RANKS[last_rank_local]
 
 def get_pipeline_model_parallel_next_rank():
-    """Return the global rank that follows the caller in the pipeline"""
+    """Return the global rank that follows the caller in the pipeline
+    NOTE (SpiralPipe) Returns `pp rank` of the next `cm rank` process
+    """
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
     if _SPIRAL_CROSS_MAPPING:
@@ -857,7 +863,9 @@ def get_pipeline_model_parallel_next_rank():
 
 
 def get_pipeline_model_parallel_prev_rank():
-    """Return the global rank that preceeds the caller in the pipeline"""
+    """Return the global rank that preceeds the caller in the pipeline
+    NOTE (SpiralPipe) Returns `pp rank` of the previous `cm rank` process
+    """
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
     if _SPIRAL_CROSS_MAPPING:
