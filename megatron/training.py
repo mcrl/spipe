@@ -1157,7 +1157,20 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         total_loss_dict[advanced_iters_key] = 0
         total_loss_dict[skipped_iters_key] = 0
         total_loss_dict[nan_iters_key] = 0
-        print_rank_last(log_string)
+        # TODO (SpiralPipe) Only the pp rank that applies the `loss_func` saves "lm loss" in the `total_loss_dict`
+        # So, we can log loss in two ranks: the rank with last backward stage & the rank with last forward stage
+        # As the rank with last forward stage actually do not need to compute the loss (in future optimization),
+        # we should later print the log string in the rank with last backward stage. Note that this can handle the
+        # optimization case where the forward pass ends at the middle of the pipeline ranks (i.e., the last forward
+        # stage is not mapped to the last pipeline rank), does not compute the loss, while the last pipeline stage
+        # computes the loss after recomputation.
+        if args.spiral:
+            # NOTE (SpiralPipe) Currently, the last pipeline rank computes the loss.
+            # NOTE (SpiralPipe) We must consider the effect of cross-mapping also.
+            if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
+                print(log_string, flush=True)
+        else:
+            print_rank_last(log_string)
         if report_memory_flag and learning_rate > 0.:
             # Report memory after optimizer state has been initialized.
             report_memory('(after {} iterations)'.format(iteration))
