@@ -1079,9 +1079,6 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 iteration,
             )
 
-    if iteration == 1:
-        timers("interval-time").elapsed(barrier=True)
-
     if iteration % args.log_interval == 0:
         elapsed_time = timers("interval-time").elapsed(barrier=True)
 
