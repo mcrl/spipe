@@ -11,4 +11,5 @@ logs
 **/tmp
 log*
 *.txt
-results
+results*
+eval*
