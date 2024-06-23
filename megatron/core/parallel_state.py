@@ -1045,7 +1045,7 @@ def apply_spiral_cross_mapping(ranks):
     nnodes =  len(ranks) // nprocs_per_node
 
     ret = []
-    for i in range(nnodes):
-        for j in range(nprocs_per_node):
+    for j in range(nprocs_per_node):
+        for i in range(nnodes):
             ret.append(i*nprocs_per_node + j)
     return ret
