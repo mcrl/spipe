@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:" opt
+while getopts "j:n:s:t:l:f:b:m:g:x:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -12,12 +12,13 @@ do
         b ) BWD_STAGE="$OPTARG" ;;
         m ) MBS="$OPTARG" ;;
         g ) GBS="$OPTARG" ;;
+        x ) NRR="$OPTARG" ;;
     esac
 done
 
 ## conda
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate pytorch-2.3-cuda-12.1-python-3.8
+conda activate pytorch-2.4-cuda-12.4-python-3.8  
 
 # MPI
 MPIRUN=$(which mpirun)
@@ -66,7 +67,7 @@ GBS=${GBS:=$(( $MBS * $NP ))}
 # iteration
 TRAIN_ITER=${TRAIN_ITER:=100}
 LOG_ITER=${LOG_ITER:=10}
-SKIP_TRAIN_ITER_ZERO_TIMING=NO
+SKIP_TRAIN_ITER_ZERO_TIMING=YES
 EVAL_ITER=0
 
 # config for spiral training

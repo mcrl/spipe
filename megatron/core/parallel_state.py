@@ -1009,30 +1009,6 @@ def destroy_model_parallel():
     _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
 
 
-# def apply_spiral_cross_mapping(ranks):
-#     """ Converts sorted pp rank list into list whose index is cm_rank and element is pp_rank.
-#     Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes inter-node activation comm.
-
-#     TODO (SpiralPipe) currently assumes nprocs_per_node=4 and stride=2
-#     """
-#     assert ranks == sorted(ranks), "pp rank list must be sorted before appy cross mapping"
-
-#     nprocs_per_node = 4
-#     nnodes =  len(ranks) // nprocs_per_node
-#     stride = 2 # except the first and last process, `stride` processes of a node are sequentially mapped to cm_ranks
-
-#     ret = []
-#     for i in range(nprocs_per_node // stride):
-#         r = range(nnodes) if i % 2 == 0 else range(nnodes-1, -1, -1)
-#         for j in r:
-#             for k in range(stride):
-#                 idx = stride*i + j*nprocs_per_node + k
-#                 # print(f"{i=} {j=} {k=} {idx=}")
-#                 ret.append(ranks[idx])
-#     return ret
-
-
-# NRR mapping
 def apply_spiral_cross_mapping(ranks):
     """ Converts sorted pp rank list into list whose index is cm_rank and element is pp_rank.
     Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes inter-node activation comm.
@@ -1043,9 +1019,33 @@ def apply_spiral_cross_mapping(ranks):
 
     nprocs_per_node = 4
     nnodes =  len(ranks) // nprocs_per_node
+    stride = 2 # except the first and last process, `stride` processes of a node are sequentially mapped to cm_ranks
 
     ret = []
-    for j in range(nprocs_per_node):
-        for i in range(nnodes):
-            ret.append(i*nprocs_per_node + j)
+    for i in range(nprocs_per_node // stride):
+        r = range(nnodes) if i % 2 == 0 else range(nnodes-1, -1, -1)
+        for j in r:
+            for k in range(stride):
+                idx = stride*i + j*nprocs_per_node + k
+                # print(f"{i=} {j=} {k=} {idx=}")
+                ret.append(ranks[idx])
     return ret
+
+
+# NRR mapping
+# def apply_spiral_cross_mapping(ranks):
+#     """ Converts sorted pp rank list into list whose index is cm_rank and element is pp_rank.
+#     Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes inter-node activation comm.
+
+#     TODO (SpiralPipe) currently assumes nprocs_per_node=4 and stride=2
+#     """
+#     assert ranks == sorted(ranks), "pp rank list must be sorted before appy cross mapping"
+
+#     nprocs_per_node = 4
+#     nnodes =  len(ranks) // nprocs_per_node
+
+#     ret = []
+#     for j in range(nprocs_per_node):
+#         for i in range(nnodes):
+#             ret.append(i*nprocs_per_node + j)
+#     return ret
