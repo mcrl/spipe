@@ -1,7 +1,5 @@
 #!/bin/bash
 
-# --spiral-stage-optimizer \
-# --spiral-stage-optimizer-pool-size 0 \
 EXTRA_ARGS="
     --spiral \
     --spiral-remap \
@@ -19,4 +17,11 @@ EXTRA_ARGS="
 
 if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-debug-backend"
+fi
+
+if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
+    EXTRA_ARGS+="
+    --spiral-stage-optimizer \
+    --spiral-stage-optimizer-pool-size 0
+    "
 fi

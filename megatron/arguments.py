@@ -384,6 +384,9 @@ def validate_args(args, defaults={}):
         if args.clip_grad > 0.0:
             raise RuntimeError(
                 "SpiralPipe does not support clip_grad > 0.0, since it incurs allreduce.")
+        if args.log_num_zeros_in_grad:
+            raise RuntimeError(
+                "SpiralPipe does not support log_num_zeros_in_grad, since it incurs allreduce.")
         if args.attention_dropout > 0.0:
             raise RuntimeError(
                 "SpiralPipe does not support attention_dropout > 0.0, since it yields different recomputation results from original fwd results")
