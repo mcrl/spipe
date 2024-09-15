@@ -818,6 +818,7 @@ def forward_backward_pipelining_with_spiral_remap(
             if get_thunder_cuda_manager().record_event(free_curr) == -1:
                 raise RuntimeError("record_event failed")
             free_event_queries[free_curr.tag] = free_curr
+        # end free bwd stage
 
         # if grad offload is not overlapped, then it should be reduced and offloaded after `forward_backward_func` at train_step()
         if offload_grad_after_bwd_stage:
@@ -872,6 +873,7 @@ def forward_backward_pipelining_with_spiral_remap(
                 if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 free_event_queries[free_grad_curr.tag] = free_grad_curr
+        # end offload & free grad
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
@@ -1463,6 +1465,7 @@ def forward_backward_pipelining_with_spiral(
             if get_thunder_cuda_manager().record_event(free_curr) == -1:
                 raise RuntimeError("record_event failed")
             free_event_queries[free_curr.tag] = free_curr
+        # end free bwd stage
 
         # if grad offload is not overlapped, then it should be reduced and offloaded after `forward_backward_func` at train_step()
         if offload_grad_after_bwd_stage:
@@ -1517,6 +1520,7 @@ def forward_backward_pipelining_with_spiral(
                 if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 free_event_queries[free_grad_curr.tag] = free_grad_curr
+        # end offload & free grad
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
