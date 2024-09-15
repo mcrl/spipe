@@ -1500,23 +1500,23 @@ def forward_backward_pipelining_with_spiral(
                         (update_successful, grad_norm, num_zeros_in_grad)
                     )
 
-        with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
-            if (
-                get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"))
-                == -1
-            ):
-                raise RuntimeError("wait_event failed")
+            with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
+                if (
+                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"))
+                    == -1
+                ):
+                    raise RuntimeError("wait_event failed")
 
-            # free bwd stage grads
-            model[bwd_stage_id].spiral_free_grad()
-            free_grad_curr = get_thunder_cuda_manager().Event(
-                "free",
-                None,
-                tag=f"free_grad:b{bwd_stage_id}",
-            )
-            if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
-                raise RuntimeError("record_event failed")
-            free_event_queries[free_grad_curr.tag] = free_grad_curr
+                # free bwd stage grads
+                model[bwd_stage_id].spiral_free_grad()
+                free_grad_curr = get_thunder_cuda_manager().Event(
+                    "free",
+                    None,
+                    tag=f"free_grad:b{bwd_stage_id}",
+                )
+                if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
+                    raise RuntimeError("record_event failed")
+                free_event_queries[free_grad_curr.tag] = free_grad_curr
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
