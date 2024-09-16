@@ -26,15 +26,6 @@ import megatron.spiral.build_state as sbs
 spiral_init_context = 0
 top_level_context = None
 
-_orig_torch_tensor = torch.tensor
-_orig_torch_empty = torch.empty
-_orig_torch_zeros = torch.zeros
-_orig_torch_ones = torch.ones
-_orig_torch_full = torch.full
-_orig_torch_arange = torch.arange
-_orig_torch_eye = torch.eye
-_orig_torch_randn = torch.randn
-
 
 class SpiralParamStatus(Enum):
     # parameter is fully present on local device and ready for use
@@ -45,37 +36,6 @@ class SpiralParamStatus(Enum):
 
     # parameter is not available
     UNAVAILABLE = 3
-
-
-def wrapper_for_fp_tensor_constructor(
-    fn: Callable, target_fp_dtype: torch.dtype
-) -> Callable:
-
-    def wrapped_fn(*args, **kwargs) -> Tensor:
-        if kwargs.get("device", None) is None:
-            kwargs["device"] = torch.cuda.current_device()
-        tensor: Tensor = fn(*args, **kwargs)
-        if tensor.is_floating_point():
-            tensor.data = tensor.data.to(target_fp_dtype)
-
-        return tensor
-
-    return wrapped_fn
-
-
-def get_new_tensor_fn_for_dtype(dtype: torch.dtype) -> Callable:
-
-    def new_tensor(cls, *args, **kwargs) -> Tensor:
-        device = torch.cuda.current_device()
-        if not args:
-            args = (0,)
-        tensor = _orig_torch_empty(0, device=device).new_empty(*args, **kwargs)
-        if tensor.is_floating_point():
-            tensor = tensor.to(dtype)
-
-        return tensor
-
-    return new_tensor
 
 
 # https://stackoverflow.com/a/63851681/9201239
@@ -236,8 +196,6 @@ class InsertPostInitMethodToModuleSubClasses(object):
                 torch.nn.modules.module.Module._old_apply
             )
 
-        self._add_tensor_creation_wrappers()
-
         self.patched = True
 
     def unpatch_init_and_builtins(self):
@@ -258,31 +216,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
                     torch.nn.modules.module.Module._old_apply
                 )
 
-            self._remove_tensor_creation_wrappers()
-
             self.patched = False
-
-    def _add_tensor_creation_wrappers(self):
-        torch.Tensor.__new__ = get_new_tensor_fn_for_dtype(self.dtype)
-        torch.tensor = wrapper_for_fp_tensor_constructor(_orig_torch_tensor, self.dtype)
-        torch.empty = wrapper_for_fp_tensor_constructor(_orig_torch_empty, self.dtype)
-        torch.zeros = wrapper_for_fp_tensor_constructor(_orig_torch_zeros, self.dtype)
-        torch.ones = wrapper_for_fp_tensor_constructor(_orig_torch_ones, self.dtype)
-        torch.full = wrapper_for_fp_tensor_constructor(_orig_torch_full, self.dtype)
-        torch.arange = wrapper_for_fp_tensor_constructor(_orig_torch_arange, self.dtype)
-        torch.eye = wrapper_for_fp_tensor_constructor(_orig_torch_eye, self.dtype)
-        torch.randn = wrapper_for_fp_tensor_constructor(_orig_torch_randn, self.dtype)
-
-    def _remove_tensor_creation_wrappers(self):
-        torch.Tensor.__new__ = torch.Tensor.__old_new__
-        torch.tensor = _orig_torch_tensor
-        torch.empty = _orig_torch_empty
-        torch.zeros = _orig_torch_zeros
-        torch.ones = _orig_torch_ones
-        torch.full = _orig_torch_full
-        torch.arange = _orig_torch_arange
-        torch.eye = _orig_torch_eye
-        torch.randn = _orig_torch_randn
 
     # To be implemented by inheriting classes
     def _post_init_method(self, module):
