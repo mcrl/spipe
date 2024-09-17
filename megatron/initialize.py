@@ -226,9 +226,14 @@ def _init_autoresume():
 
 def _set_random_seed(seed_, data_parallel_random_init=False):
     """Set random seed for reproducability."""
+    rank = mpu.get_pipeline_model_parallel_rank()
+    if mpu.is_spiral_remap():
+        # NOTE (SpiralPipe) Set seed for correction check
+        rank = mpu.get_pipeline_model_parallel_world_size() - 1 - rank
+
     if seed_ is not None and seed_ > 0:
         # Ensure that different pipeline MP stages get different seeds.
-        seed = seed_ + (100 * mpu.get_pipeline_model_parallel_rank())
+        seed = seed_ + (100 * rank)
         # Ensure different data parallel ranks get different seeds
         if data_parallel_random_init:
             seed = seed + (10 * mpu.get_data_parallel_rank())
