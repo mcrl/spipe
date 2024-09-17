@@ -869,6 +869,7 @@ def train_step(forward_step_func, data_iterator,
                 model[_idx_bwd_stage_id].spiral_offload_grad(non_blocking=False) # blocking offload gradients
                 model[_idx_bwd_stage_id].spiral_free_grad()
         else:
+            torch.cuda.synchronize() # To ensure non_blocking offload finished
             # Assert gradients are already offloaded and freed on GPU
             for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size()):
                 _idx_bwd_stage_id = -bwd_stage_id - 1 if args.spiral_remap else bwd_stage_id
