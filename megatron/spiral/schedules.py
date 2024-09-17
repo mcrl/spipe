@@ -1348,11 +1348,6 @@ def forward_backward_pipelining_with_spiral(
                 model[bwd_stage_id].module[0].spiral_input_tensors.popleft()
             )
 
-            # wait for recv output tensor grad
-            if recv_handles is not None:
-                for req in recv_handles:
-                    req.wait()
-
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 if recompute:
                     with torch.enable_grad():
@@ -1384,6 +1379,13 @@ def forward_backward_pipelining_with_spiral(
                     _grad_scaler = grad_scaler[bwd_stage_id]
                 else:
                     _grad_scaler = grad_scaler
+
+                # wait for recv output tensor grad
+                # NOTE (SpiralPipe) Must be done in compute stream to avoid error
+                if recv_handles is not None:
+                    for req in recv_handles:
+                        req.wait()
+
                 input_tensor_grad = backward_step(
                     _grad_scaler,
                     input_tensor_ckpt,
