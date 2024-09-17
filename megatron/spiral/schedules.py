@@ -1059,7 +1059,7 @@ def forward_backward_pipelining_with_spiral(
 
     # NOTE (SpiralPipe) microbatch data is yielded by the data iterator into _recompute_data_iterator, in order to guarantee the same data for re-computation. This issue is present only when (1) a stage is used both as fwd and bwd stage, and (2) re-computation is performed. Using a data iterator for forward_step() in original fwd and re-compute fwd incurs some microbatches only being fed to re-compute fwd.
     if not forward_only and recompute:
-        _recompute_data_iterator = [[] for _ in range(len(data_iterator))]
+        _recompute_data_list = [[] for _ in range(len(data_iterator))]
 
     # Event dictionaries. Key is the event tag, thus an event necessarily requires it.
     prefetch_event_queries = {}
@@ -1156,7 +1156,7 @@ def forward_backward_pipelining_with_spiral(
                 _data = next(data_iterator[fwd_stage_id])
                 _data_iterator = iter([_data]) # wrap
                 if not forward_only and recompute:
-                    _recompute_data_iterator[fwd_stage_id].append(_data)
+                    _recompute_data_list[fwd_stage_id].append(_data)
 
                 # wait for recv input tensor
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
@@ -1321,6 +1321,9 @@ def forward_backward_pipelining_with_spiral(
                 ):
                     raise RuntimeError("wait_event failed")
 
+        if recompute:
+            _recompute_data_iterator = iter(_recompute_data_list[bwd_stage_id])
+
         # bwd microbatches
         for i in range(num_microbatches):
             if _DEBUG_SCHEDULE:
@@ -1355,7 +1358,7 @@ def forward_backward_pipelining_with_spiral(
                     with torch.enable_grad():
                         output_tensor = forward_step(
                             forward_step_func,
-                            iter(_recompute_data_iterator[bwd_stage_id]),
+                            _recompute_data_iterator,
                             model[bwd_stage_id],
                             num_microbatches,
                             input_tensor_ckpt,
