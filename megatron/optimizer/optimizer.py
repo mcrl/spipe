@@ -434,27 +434,22 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
     @torch.no_grad()
     def step(self, args, timers, **inner_step_kwargs):
 
-        print("Junyeol 1 offload grad ev wait start")
         spiral_optimizer_thread_queue = None
         if get_args().spiral:
             spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
             spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
             if spiral_offload_grad_ev is not None:
                 spiral_offload_grad_ev.wait()
-        print("Junyeol 1 offload grad ev wait done")
 
-        print("Junyeol 2 _copy_model_grads_to_main_grads start")
         # Copy gradients from model params to main params.
         timers('optimizer-copy-to-main-grad', log_level=1).start(
             barrier=args.barrier_with_L1_time)
         self._copy_model_grads_to_main_grads()
         timers('optimizer-copy-to-main-grad').stop()
-        print("Junyeol 2 _copy_model_grads_to_main_grads done")
 
         # Do unscale, check for inf, and update grad scaler only for
         # the case that grad scaler is provided.
         if self.grad_scaler:
-            print("Junyeol 2")
 
             # Unscale and check for inf/nan.
             timers('optimizer-unscale-and-check-inf', log_level=1).start(
@@ -465,16 +460,12 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
             # We are done with scaling gradients
             # so we can update the loss scale.
             self.grad_scaler.update(found_inf_flag)
-            print("Junyeol 3")
 
             # If we found inf/nan, skip the update.
             if found_inf_flag:
-                print("Junyeol 4")
-
                 if spiral_optimizer_thread_queue is not None:
                     spiral_optimizer_thread_queue.put((False, None, None))
                 return False, None, None
-        print("Junyeol 5")
 
         # Clip the main gradients.
         timers('optimizer-clip-main-grad', log_level=1).start(
@@ -494,8 +485,9 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         # Step the optimizer.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
-        print("Junyeol call to optimizer step skipped")
-        # self.optimizer.step(**inner_step_kwargs)
+        self.optimizer.step(**inner_step_kwargs)
+        if hasattr(self.optimizer, "sync"):
+            self.optimizer.sync()
         timers('optimizer-inner-step').stop()
 
         # Update params from main params.
@@ -669,7 +661,7 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
             for main_param in main_group:
                 if main_param.grad is not None:
                     main_grads.append(main_param.grad.data)
-
+        
         return main_grads
 
 
@@ -685,7 +677,6 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
 
 
     def _copy_model_grads_to_main_grads(self):
-        print("junyeol _copy_model_grads_to_main_grads")
         # This only needs to be done for the float16 group.
         for model_group, main_group in zip(self.float16_groups,
                                            self.fp32_from_float16_groups):
