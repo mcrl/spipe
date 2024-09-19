@@ -9,8 +9,6 @@ EXTRA_ARGS="
     --spiral-forward-virtual-size $SPIRAL_FWD \
     --spiral-backward-virtual-size $SPIRAL_BWD \
     --spiral-overlap-offload-grad \
-    --spiral-stage-optimizer \
-    --spiral-stage-optimizer-pool-size 0 \
     --spiral-recompute-activations \
     --spiral-cross-mapping \
     --overlap-p2p-communication \

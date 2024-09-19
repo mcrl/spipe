@@ -163,7 +163,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
 
         # get spiral kwargs
         ev_long = kwargs.get("spiral_offload_grad_ev_long", -1)
-        print(f"111111111111")
+
         for group_id, group in enumerate(self.param_groups):
             for param_id, p in enumerate(group["params"]):
 
