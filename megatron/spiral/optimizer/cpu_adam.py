@@ -5,7 +5,7 @@ from megatron import get_args
 from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
 
-from .op_builder.cpu_adam import SpiralCPUAdamBuilder
+from .cpu_adam_builder import SpiralCPUAdamBuilder
 
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0

@@ -52,7 +52,6 @@ from megatron.spiral import (
 )
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
-from megatron.spiral.optimizer import SpiralStageOptimizer
 from megatron.spiral.utils import is_spiral_param
 from megatron.spiral.debug import (
     spiral_print,
@@ -61,7 +60,7 @@ from megatron.spiral.debug import (
     debug_param2name_id,
 )
 from megatron.spiral.init_context import patch_extra_repr
-from megatron.spiral.optimizer import (
+from megatron.spiral.optimizer.stage_optimizer import (
     SpiralStageOptimizer,
     SpiralStageOptimizerParamScheduler
 )

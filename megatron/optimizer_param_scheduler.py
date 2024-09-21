@@ -5,7 +5,7 @@
 import math
 
 from megatron import print_rank_0
-from megatron.spiral.optimizer import SpiralStageOptimizer
+from megatron.spiral.optimizer.stage_optimizer import SpiralStageOptimizer
 
 class OptimizerParamScheduler(object):
     """Anneals learning rate and weight decay"""
