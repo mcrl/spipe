@@ -437,9 +437,12 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         spiral_optimizer_thread_queue = None
         if get_args().spiral:
             spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
+            spiral_offload_grad_ev_long = inner_step_kwargs.get("spiral_offload_grad_ev_long", -1)
             spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
             if spiral_offload_grad_ev is not None:
                 spiral_offload_grad_ev.synchronize()
+            if hasattr(self.optimizer, "set_event_long"):
+                self.optimizer.set_event_long(spiral_offload_grad_ev_long)
 
         # Copy gradients from model params to main params.
         timers('optimizer-copy-to-main-grad', log_level=1).start(
@@ -485,9 +488,7 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         # Step the optimizer.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
-        self.optimizer.step(**inner_step_kwargs)
-        if hasattr(self.optimizer, "sync"):
-            self.optimizer.sync()
+        self.optimizer.step()
         timers('optimizer-inner-step').stop()
 
         # Update params from main params.
@@ -797,9 +798,12 @@ class FP32Optimizer(MegatronOptimizer):
         spiral_optimizer_thread_queue = None
         if get_args().spiral:
             spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
+            spiral_offload_grad_ev_long = inner_step_kwargs.get("spiral_offload_grad_ev_long", -1)
             spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
             if spiral_offload_grad_ev is not None:
                 spiral_offload_grad_ev.synchronize()
+            if hasattr(self.optimizer, "set_event_long"):
+                self.optimizer.set_event_long(spiral_offload_grad_ev_long)
 
         """Clip gradients (if needed) and step the base optimizer.
         Always return successful since there is no overflow."""
@@ -837,9 +841,7 @@ class FP32Optimizer(MegatronOptimizer):
         # Update parameters.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
-        self.optimizer.step(**inner_step_kwargs)
-        if hasattr(self.optimizer, "sync"):
-            self.optimizer.sync()
+        self.optimizer.step()
         timers('optimizer-inner-step').stop()
 
         # No overflow for FP32 optimizer.

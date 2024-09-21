@@ -114,6 +114,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             adamw_mode,
             should_log_le("info"),
         )
+        self.ev_long = -1
 
     def __del__(self):
         # need to destroy the C++ object explicitly to avoid a memory leak when deepspeed.initialize
@@ -126,7 +127,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             group.setdefault("amsgrad", False)
 
     @torch.no_grad()
-    def step(self, closure=None, fp16_param_groups=None, **kwargs):
+    def step(self, closure=None, fp16_param_groups=None):
         """Update the model parameters.
 
         .. note::
@@ -160,9 +161,6 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                 fp16_param_groups = [fp16_param_groups]
         elif fp16_param_groups is not None:
             fp16_param_groups = [[fp16_param_groups]]
-
-        # get spiral kwargs
-        ev_long = kwargs.get("spiral_offload_grad_ev_long", -1)
 
         for group_id, group in enumerate(self.param_groups):
             for param_id, p in enumerate(group["params"]):
@@ -215,7 +213,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         state["exp_avg"],
                         state["exp_avg_sq"],
                         fp16_param_groups[group_id][param_id].data,
-                        ev_long,
+                        self.ev_long,
                     )
                 else:
                     self.ds_opt_adam.adam_update(
@@ -232,9 +230,13 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         p.grad.data,
                         state["exp_avg"],
                         state["exp_avg_sq"],
-                        ev_long,
+                        self.ev_long,
                     )
+
+        # Need to sync until all thread optimizer completed
+        self.ds_opt_adam.adam_sync(self.opt_id)
+
         return loss
 
-    def sync(self):
-        self.ds_opt_adam.adam_sync(self.opt_id)
+    def set_event_long(self, ev_long):
+        self.ev_long = ev_long

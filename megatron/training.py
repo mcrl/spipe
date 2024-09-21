@@ -908,10 +908,6 @@ def train_step(forward_step_func, data_iterator,
                 kwargs["spiral_stage_optimizer_step_returns"].appendleft(
                     (update_successful, grad_norm, num_zeros_in_grad)
                 )
-            # join optimizer
-            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-                assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
-                optimizer[bwd_stage_id].optimizer.sync()
             # process step returns
             update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
 
