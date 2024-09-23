@@ -23,6 +23,8 @@ def get_param_groups(modules,
        and learning rate scale condition (args.lr vs lr_mult * args.lr)
        scale_lr_cond is used during finetuning where head of the network requires a scaled
        version of the base learning rate.
+
+       if spiral, only the backward stages' params are considered.
     """
     args = get_args()
 
@@ -46,9 +48,12 @@ def get_param_groups(modules,
                 continue
 
             if args.spiral:
+                # Only params converted to spiral param and currently placed on local CPU memory should enter,
+                # as it is the necessary condition for backward stages
                 assert (is_spiral_param(param))
-                if param.spiral_status == SpiralParamStatus.CPU:
-                    param = param.spiral_tensor
+                assert (param.spiral_status == SpiralParamStatus.CPU)
+                assert (param.spiral_tensor.numel() == param.spiral_numel)
+                param = param.spiral_tensor
 
             if no_weight_decay_cond is not None:
                 if args.spiral:

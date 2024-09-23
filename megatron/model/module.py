@@ -183,10 +183,17 @@ class Float16Module(MegatronModule):
             self.add_module('module', module.half())
             def float16_convertor(val):
                 return val.half()
+            # Spiral requires additional cast of spiral_tensor
+            if args.spiral:
+                self.module.apply(lambda m: [setattr(p, 'spiral_tensor', p.spiral_tensor.half()) for p in m.parameters(recurse=False)])
+
         elif args.bf16:
             self.add_module('module', module.bfloat16())
             def float16_convertor(val):
                 return val.bfloat16()
+            # Spiral requires additional cast of spiral_tensor
+            if args.spiral:
+                self.module.apply(lambda m: [setattr(p, 'spiral_tensor', p.spiral_tensor.half()) for p in m.parameters(recurse=False)])
         else:
             raise Exception('should not be here')
 
