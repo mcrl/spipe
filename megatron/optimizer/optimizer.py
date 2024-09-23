@@ -432,7 +432,14 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         return inf_or_nan.float().max()
 
     @torch.no_grad()
-    def step(self, args, timers):
+    def step(self, args, timers, **inner_step_kwargs):
+
+        spiral_optimizer_thread_queue = None
+        if get_args().spiral:
+            spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
+            spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
+            if spiral_offload_grad_ev is not None:
+                spiral_offload_grad_ev.synchronize()
 
         # Copy gradients from model params to main params.
         timers('optimizer-copy-to-main-grad', log_level=1).start(
@@ -456,6 +463,8 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
 
             # If we found inf/nan, skip the update.
             if found_inf_flag:
+                if spiral_optimizer_thread_queue is not None:
+                    spiral_optimizer_thread_queue.put((False, None, None))
                 return False, None, None
 
         # Clip the main gradients.
@@ -476,7 +485,9 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         # Step the optimizer.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
-        self.optimizer.step()
+        self.optimizer.step(**inner_step_kwargs)
+        if hasattr(self.optimizer, "sync"):
+            self.optimizer.sync()
         timers('optimizer-inner-step').stop()
 
         # Update params from main params.
@@ -486,6 +497,8 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         timers('optimizer-copy-main-to-model-params').stop()
 
         # Successful update.
+        if spiral_optimizer_thread_queue is not None:
+            spiral_optimizer_thread_queue.put((True, grad_norm, num_zeros_in_grad))
         return True, grad_norm, num_zeros_in_grad
 
 
@@ -648,7 +661,7 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
             for main_param in main_group:
                 if main_param.grad is not None:
                     main_grads.append(main_param.grad.data)
-
+        
         return main_grads
 
 
@@ -780,6 +793,14 @@ class FP32Optimizer(MegatronOptimizer):
 
     @torch.no_grad()
     def step(self, args, timers, **inner_step_kwargs):
+
+        spiral_optimizer_thread_queue = None
+        if get_args().spiral:
+            spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
+            spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
+            if spiral_offload_grad_ev is not None:
+                spiral_offload_grad_ev.synchronize()
+
         """Clip gradients (if needed) and step the base optimizer.
         Always return successful since there is no overflow."""
 
@@ -817,9 +838,13 @@ class FP32Optimizer(MegatronOptimizer):
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
         self.optimizer.step(**inner_step_kwargs)
+        if hasattr(self.optimizer, "sync"):
+            self.optimizer.sync()
         timers('optimizer-inner-step').stop()
 
         # No overflow for FP32 optimizer.
+        if spiral_optimizer_thread_queue is not None:
+            spiral_optimizer_thread_queue.put((True, grad_norm, num_zeros_in_grad))
         return True, grad_norm, num_zeros_in_grad
 
 

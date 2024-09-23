@@ -5,6 +5,8 @@ import sys
 from typing import Callable, Iterator, List, Optional, Union, Tuple
 from enum import Enum
 from collections import deque
+from queue import Queue
+import threading
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -263,6 +265,8 @@ def forward_backward_pipelining_with_spiral_remap(
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
+    if optimize_after_bwd_stage:
+        optimizer_threads = [] # (thread, queue, ev)
 
     # TODO (SpiralPipe) Move to spiral_p2p
     @nvtx.annotate("comm_input_ckpt", color="red")
@@ -840,21 +844,29 @@ def forward_backward_pipelining_with_spiral_remap(
                     "free",
                     tag=f"offload_grad:b{bwd_stage_id}"
                 )
-                offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
-                if offload_grad_ev_long == -1:
+                if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
+
                 # if not spiral stage optimizer, then optimizer will be executed after iteration
                 if optimize_after_bwd_stage:
+                    _offload_grad_ev_cpu = torch.cuda.Event() # event to synchronize at cpu
+                    _optimizer_thread_queue = Queue()
+                    _offload_grad_ev_cpu.record()
+
                     inner_step_kwargs = {}
-                    inner_step_kwargs["spiral_offload_grad_ev_long"] = offload_grad_ev_long
+                    inner_step_kwargs["spiral_offload_grad_ev"] = _offload_grad_ev_cpu
+                    inner_step_kwargs["spiral_optimizer_thread_queue"] = _optimizer_thread_queue
+                    inner_step_kwargs["spiral_offload_grad_ev_long"] = _offload_grad_ev_cpu.cuda_event
+
                     # TODO (SpiralPipe) timers is None. Fix it
-                    update_successful, grad_norm, num_zeros_in_grad = optimizer[
-                        bwd_stage_id
-                    ].step(get_args(), get_timers(), **inner_step_kwargs)
-                    kwargs["spiral_stage_optimizer_step_returns"].appendleft(
-                        (update_successful, grad_norm, num_zeros_in_grad)
+                    op = threading.Thread(
+                        target=optimizer[bwd_stage_id].step,
+                        args=(get_args(), get_timers()),
+                        kwargs=inner_step_kwargs,
                     )
+                    op.start()
+                    optimizer_threads.append((op, _optimizer_thread_queue))
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
                 if (
@@ -906,13 +918,12 @@ def forward_backward_pipelining_with_spiral_remap(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-
-            # join optimizer
-            if optimize_after_bwd_stage:
-                assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
-                optimizer[bwd_stage_id].optimizer.sync()
-                if _DEBUG_SCHEDULE:
-                    spiral_print(f"Optimizer synced for stage {bwd_stage_id}")
+    
+    # join optimizer
+    if optimize_after_bwd_stage:
+        for op, q in optimizer_threads:
+            op.join()
+            kwargs["spiral_stage_optimizer_step_returns"].appendleft(q.get())
 
     _cleanup()
     return forward_data_store
@@ -1019,6 +1030,8 @@ def forward_backward_pipelining_with_spiral(
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
+    if optimize_after_bwd_stage:
+        optimizer_threads = [] # (thread, queue, ev)
 
     def _cleanup():
         # cleanup checkpointed input tensors and output tensors
@@ -1496,17 +1509,26 @@ def forward_backward_pipelining_with_spiral(
                 if offload_grad_ev_long == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
+
                 # if not spiral stage optimizer, then optimizer will be executed after iteration
                 if optimize_after_bwd_stage:
+                    _offload_grad_ev_cpu = torch.cuda.Event() # event to synchronize at cpu
+                    _optimizer_thread_queue = Queue()
+                    _offload_grad_ev_cpu.record()
+
                     inner_step_kwargs = {}
-                    inner_step_kwargs["spiral_offload_grad_ev_long"] = offload_grad_ev_long
+                    inner_step_kwargs["spiral_offload_grad_ev"] = _offload_grad_ev_cpu
+                    inner_step_kwargs["spiral_optimizer_thread_queue"] = _optimizer_thread_queue
+                    inner_step_kwargs["spiral_offload_grad_ev_long"] = _offload_grad_ev_cpu.cuda_event
+                    
                     # TODO (SpiralPipe) timers is None. Fix it
-                    update_successful, grad_norm, num_zeros_in_grad = optimizer[
-                        bwd_stage_id
-                    ].step(get_args(), get_timers(), **inner_step_kwargs)
-                    kwargs["spiral_stage_optimizer_step_returns"].appendleft(
-                        (update_successful, grad_norm, num_zeros_in_grad)
+                    op = threading.Thread(
+                        target=optimizer[bwd_stage_id].step,
+                        args=(get_args(), get_timers()),
+                        kwargs=inner_step_kwargs,
                     )
+                    op.start()
+                    optimizer_threads.append((op, _optimizer_thread_queue))
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
                 if (
@@ -1548,12 +1570,11 @@ def forward_backward_pipelining_with_spiral(
             ):
                 raise RuntimeError("wait_event failed")
 
-            # join optimizer
-            if optimize_after_bwd_stage:
-                assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
-                optimizer[bwd_stage_id].optimizer.sync()
-                if _DEBUG_SCHEDULE:
-                    spiral_print(f"Optimizer synced for stage {bwd_stage_id}")
+    # join optimizer
+    if optimize_after_bwd_stage:
+        for op, q in optimizer_threads:
+            op.join()
+            kwargs["spiral_stage_optimizer_step_returns"].appendleft(q.get())
 
     _cleanup()
     return forward_data_store

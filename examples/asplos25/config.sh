@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:x:" opt
+while getopts "j:n:s:t:l:f:b:m:g:x:o:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -13,6 +13,7 @@ do
         m ) MBS="$OPTARG" ;;
         g ) GBS="$OPTARG" ;;
         x ) NRR="$OPTARG" ;;
+        o ) OPTIMIZER="$OPTARG" ;;
     esac
 done
 
@@ -77,7 +78,12 @@ SPIRAL_SHMEM_NAME=/spiral-${USER}
 SPIRAL_SHMEM_BUFFER_SIZE=${SHMEM_BUFFER_SIZE:=$(( 64 * 2**30 ))}
 SPIRAL_SHMEM_HEADER_SIZE=$(( 1 * 2**30 ))
 SPIRAL_DEBUG_BACKEND=NO
-SPIRAL_STAGE_OPTIMIZER=NO
+
+if [[ "$OPTIMIZER" == "stage" ]]; then
+    SPIRAL_STAGE_OPTIMIZER=YES
+else
+    SPIRAL_STAGE_OPTIMIZER=NO
+fi
 
 # config for interleaving
 INTERLEAVE_VIRTUAL_SIZE=${FWD_STAGE:=2}
@@ -87,6 +93,7 @@ echo -e "===========Script Configuration==========="
 echo -e "JOB_TYPE=${JOB_TYPE}\nJOB_NAME=${JOB_NAME}\nHOSTS=${HOSTS}\nNSYS_ENABLE=${NSYS_ENABLE}"
 echo -e "MODEL_SIZE=${MODEL_SIZE}\nMBS=${MBS}\nGBS=${GBS}"
 echo -e "TRAIN_ITER=${TRAIN_ITER}\nLOG_ITER=${LOG_ITER}(skip0=${SKIP_TRAIN_ITER_ZERO_TIMING})\nEVAL_ITER=${EVAL_ITER}"
+echo -e "SPIRAL_STAGE_OPTIMIZER=${SPIRAL_STAGE_OPTIMIZER}"
 echo -e "SPIRAL_FWD=${SPIRAL_FWD}\nSPIRAL_BWD=${SPIRAL_BWD}"
 echo -e "INTERLEAVE_VIRTUAL_SIZE=${INTERLEAVE_VIRTUAL_SIZE}"
 echo "==========================================="
