@@ -609,9 +609,6 @@ def forward_backward_pipelining_with_spiral_remap(
                     "free",
                     "prefetch",
                     tag=f"free:f{fwd_stage_id}",
-                    post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[fwd_stage_id], SpiralParamStatus.CPU
-                    ),
                 )
                 if get_thunder_cuda_manager().record_event(free_curr) == -1:
                     raise RuntimeError("record_event failed")
@@ -815,9 +812,6 @@ def forward_backward_pipelining_with_spiral_remap(
                 "free",
                 None if bwd_stage_id == 0 else "prefetch",
                 tag=f"free:b{bwd_stage_id}",
-                post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
-                    model[-bwd_stage_id - 1], SpiralParamStatus.CPU
-                ),
             )
             if get_thunder_cuda_manager().record_event(free_curr) == -1:
                 raise RuntimeError("record_event failed")
@@ -918,7 +912,7 @@ def forward_backward_pipelining_with_spiral_remap(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-    
+
     # join optimizer
     if optimize_after_bwd_stage:
         for op, q in optimizer_threads:
@@ -1271,9 +1265,6 @@ def forward_backward_pipelining_with_spiral(
                     "free",
                     "prefetch",
                     tag=f"free:f{fwd_stage_id}",
-                    post_wait_fn=lambda fwd_stage_id=fwd_stage_id: _post_wait_set_spiral_param_status(
-                        model[fwd_stage_id], SpiralParamStatus.CPU
-                    ),
                 )
                 if get_thunder_cuda_manager().record_event(free_curr) == -1:
                     raise RuntimeError("record_event failed")
@@ -1476,9 +1467,6 @@ def forward_backward_pipelining_with_spiral(
                 "free",
                 None if bwd_stage_id == 0 else "prefetch",
                 tag=f"free:b{bwd_stage_id}",
-                post_wait_fn=lambda bwd_stage_id=bwd_stage_id: _post_wait_set_spiral_param_status(
-                    model[bwd_stage_id], SpiralParamStatus.CPU
-                ),
             )
             if get_thunder_cuda_manager().record_event(free_curr) == -1:
                 raise RuntimeError("record_event failed")
@@ -1520,7 +1508,7 @@ def forward_backward_pipelining_with_spiral(
                     inner_step_kwargs["spiral_offload_grad_ev"] = _offload_grad_ev_cpu
                     inner_step_kwargs["spiral_optimizer_thread_queue"] = _optimizer_thread_queue
                     inner_step_kwargs["spiral_offload_grad_ev_long"] = _offload_grad_ev_cpu.cuda_event
-                    
+
                     # TODO (SpiralPipe) timers is None. Fix it
                     op = threading.Thread(
                         target=optimizer[bwd_stage_id].step,

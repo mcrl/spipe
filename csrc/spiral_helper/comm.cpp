@@ -185,11 +185,11 @@ public:
   void SetSpiralCPUAllocator();
   void UnsetSpiralCPUAllocator();
 
-  void RemapParamData(torch::Tensor& tensor,
-                      const unsigned int param_id,
-                      const c10::IntArrayRef sizes,
-                      const c10::IntArrayRef strides,
-                      const int64_t storage_offset);
+  void RemapLocalParamData(torch::Tensor& tensor,
+                          const unsigned int param_id,
+                          const c10::IntArrayRef sizes,
+                          const c10::IntArrayRef strides,
+                          const int64_t storage_offset);
   void SetParamDataInfo(const unsigned int param_id,
                         const uintptr_t dataptr,
                         const size_t size_bytes);
@@ -503,7 +503,7 @@ void Comm::UnsetSpiralCPUAllocator()
   prev_allocator_ptr_ = nullptr;
 }
 
-void Comm::RemapParamData(torch::Tensor& tensor,
+void Comm::RemapLocalParamData(torch::Tensor& tensor,
                           const unsigned int param_id,
                           const c10::IntArrayRef sizes,
                           const c10::IntArrayRef strides,
@@ -748,7 +748,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
                     const size_t, const size_t, const size_t>())
       .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
       .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
-      .def("RemapParamData", &Comm::RemapParamData)
+      .def("RemapLocalParamData", &Comm::RemapLocalParamData)
       .def("SetParamDataInfo", &Comm::SetParamDataInfo)
       .def("GetCommInfo", &Comm::GetCommInfo)
       .def("AllGather", &Comm::AllGather<unsigned int>)

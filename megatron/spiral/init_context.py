@@ -34,9 +34,6 @@ class SpiralParamStatus(Enum):
     # parameter is in CPU memory of local/remote host
     CPU = 2
 
-    # parameter is not available
-    UNAVAILABLE = 3
-
 
 # https://stackoverflow.com/a/63851681/9201239
 def get_all_subclasses(cls):
@@ -349,14 +346,10 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         def _free_data(param: Parameter) -> None:
             """Free weight data of a parameter."""
             param.data = torch.empty(0, dtype=param.dtype, device=self.local_device)
-            if param.spiral_tensor.numel() == param.spiral_numel:
-                param.spiral_status = SpiralParamStatus.CPU
-            else:
-                param.spiral_status = SpiralParamStatus.UNAVAILABLE
+            param.spiral_status = SpiralParamStatus.CPU
 
         def _offload_data(param, non_blocking=False):
             """Offload weight data of a parameter to remote device."""
-            assert param.spiral_status != SpiralParamStatus.UNAVAILABLE, "Can't offload unavailable param"
             assert param.spiral_tensor is not None, "Offload tensor is None"
 
             if param.spiral_tensor.numel() == 0:
@@ -575,17 +568,17 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         if get_args().spiral_remap:
             for param in module.parameters(recurse=True):
                 if is_spiral_param(param):
-                    assert (param.spiral_status == SpiralParamStatus.UNAVAILABLE), "Only unavailable spiral params can be remapped"
                     param.spiral_id = (
                         sbs.get_add_spiral_next_param_number_to_build()
                     )
-                    get_thunder_group().RemapParamData(
-                        param.spiral_tensor,
-                        param.spiral_id,
-                        param.spiral_shape,
-                        param.spiral_stride,
-                        param.spiral_storage_offset,
-                    )
+                    if get_thunder_group().IsParamDataLocal(param.spiral_id):
+                        get_thunder_group().RemapLocalParamData(
+                            param.spiral_tensor,
+                            param.spiral_id,
+                            param.spiral_shape,
+                            param.spiral_stride,
+                            param.spiral_storage_offset,
+                        )
                     param.spiral_status = SpiralParamStatus.CPU
         else:
             for param in module.parameters(recurse=True):
