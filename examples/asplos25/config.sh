@@ -85,7 +85,7 @@ else
     SPIRAL_STAGE_OPTIMIZER=NO
 fi
 
-if [ $CROSS_MAPPING -eq 1 ]; then
+if [[ "$CROSS_MAPPING" == "1" ]]; then
     SPIRAL_CROSS_MAPPING=YES
 else
     SPIRAL_CROSS_MAPPING=NO
