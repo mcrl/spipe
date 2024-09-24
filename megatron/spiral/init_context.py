@@ -568,7 +568,6 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         if get_args().spiral_remap:
             for param in module.parameters(recurse=True):
                 if is_spiral_param(param):
-                    assert (param.spiral_status == SpiralParamStatus.UNAVAILABLE), "Only unavailable spiral params can be remapped"
                     param.spiral_id = (
                         sbs.get_add_spiral_next_param_number_to_build()
                     )
