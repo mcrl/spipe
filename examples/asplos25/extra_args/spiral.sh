@@ -10,7 +10,6 @@ EXTRA_ARGS="
     --spiral-backward-virtual-size $SPIRAL_BWD \
     --spiral-overlap-offload-grad \
     --spiral-recompute-activations \
-    --spiral-cross-mapping \
     --overlap-p2p-communication \
     --megatron-mpi
 "
@@ -24,4 +23,8 @@ if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
     --spiral-stage-optimizer \
     --spiral-stage-optimizer-pool-size 0
     "
+fi
+
+if [ ${SPIRAL_CROSS_MAPPING} == "YES" ]; then
+    EXTRA_ARGS+=" --spiral-cross-mapping"
 fi

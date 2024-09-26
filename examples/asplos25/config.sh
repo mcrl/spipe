@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:x:o:" opt
+while getopts "j:n:s:t:l:f:b:m:g:o:x:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -12,8 +12,8 @@ do
         b ) BWD_STAGE="$OPTARG" ;;
         m ) MBS="$OPTARG" ;;
         g ) GBS="$OPTARG" ;;
-        x ) NRR="$OPTARG" ;;
         o ) OPTIMIZER="$OPTARG" ;;
+        x ) CROSS_MAPPING="$OPTARG" ;;
     esac
 done
 
@@ -85,6 +85,12 @@ else
     SPIRAL_STAGE_OPTIMIZER=NO
 fi
 
+if [[ "$CROSS_MAPPING" == "1" ]]; then
+    SPIRAL_CROSS_MAPPING=YES
+else
+    SPIRAL_CROSS_MAPPING=NO
+fi
+
 # config for interleaving
 INTERLEAVE_VIRTUAL_SIZE=${FWD_STAGE:=2}
 
@@ -94,6 +100,7 @@ echo -e "JOB_TYPE=${JOB_TYPE}\nJOB_NAME=${JOB_NAME}\nHOSTS=${HOSTS}\nNSYS_ENABLE
 echo -e "MODEL_SIZE=${MODEL_SIZE}\nMBS=${MBS}\nGBS=${GBS}"
 echo -e "TRAIN_ITER=${TRAIN_ITER}\nLOG_ITER=${LOG_ITER}(skip0=${SKIP_TRAIN_ITER_ZERO_TIMING})\nEVAL_ITER=${EVAL_ITER}"
 echo -e "SPIRAL_STAGE_OPTIMIZER=${SPIRAL_STAGE_OPTIMIZER}"
+echo -e "SPIRAL_CROSS_MAPPING=${SPIRAL_CROSS_MAPPING}"
 echo -e "SPIRAL_FWD=${SPIRAL_FWD}\nSPIRAL_BWD=${SPIRAL_BWD}"
 echo -e "INTERLEAVE_VIRTUAL_SIZE=${INTERLEAVE_VIRTUAL_SIZE}"
 echo "==========================================="
