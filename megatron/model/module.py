@@ -197,16 +197,22 @@ class Float16Module(MegatronModule):
         # Spiral remap does not require the casted tensor to be pinned because using spiral_init_context pins all spiral_tensors
         if args.spiral:
             self.module.apply(
-                lambda m: [setattr(p, "spiral_tensor",
-                                   (float16_convertor(p.spiral_tensor) if args.spiral_remap else float16_convertor(p.spiral_tensor).pin_memory()))
-                                   for p in m.parameters(recurse=False)
+                lambda m: [
+                    setattr(
+                        p,
+                        "spiral_tensor",
+                        (
+                            float16_convertor(p.spiral_tensor)
+                            if args.spiral_remap
+                            else float16_convertor(p.spiral_tensor).pin_memory()
+                        ),
+                    )
+                    for p in m.parameters(recurse=False)
                 ]
             )
 
-
     def set_input_tensor(self, input_tensor):
         return self.module.set_input_tensor(input_tensor)
-
 
     def forward(self, *inputs, **kwargs):
         if mpu.is_pipeline_first_stage() and not self.spiral_disable_cast:
@@ -216,15 +222,12 @@ class Float16Module(MegatronModule):
             outputs = float16_to_fp32(outputs)
         return outputs
 
-
     def state_dict(self, prefix='', keep_vars=False):
         return self.module.state_dict(prefix=prefix, keep_vars=keep_vars)
-
 
     def state_dict_for_save_checkpoint(self, prefix='', keep_vars=False):
         return self.module.state_dict_for_save_checkpoint(prefix=prefix,
                                                           keep_vars=keep_vars)
-
 
     def load_state_dict(self, state_dict, strict=True):
         self.module.load_state_dict(state_dict, strict=strict)
