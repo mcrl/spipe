@@ -41,12 +41,12 @@ def _build_key_size_numel_dictionaries(keys, data):
         torch.distributed.broadcast(sizes_cpu, get_tensor_model_parallel_src_rank(),
                                     group=get_spiral_tensor_model_parallel_group_gloo())
     else:
-    # Move to GPU and broadcast.
-    sizes_cuda = torch.cuda.LongTensor(sizes)
-    torch.distributed.broadcast(sizes_cuda, get_tensor_model_parallel_src_rank(),
-                                group=get_tensor_model_parallel_group())
-    # Move back to cpu and unpack.
-    sizes_cpu = sizes_cuda.cpu()
+        # Move to GPU and broadcast.
+        sizes_cuda = torch.cuda.LongTensor(sizes)
+        torch.distributed.broadcast(sizes_cuda, get_tensor_model_parallel_src_rank(),
+                                    group=get_tensor_model_parallel_group())
+        # Move back to cpu and unpack.
+        sizes_cpu = sizes_cuda.cpu()
 
     key_size = {}
     key_numel = {}
