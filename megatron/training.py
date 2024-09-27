@@ -574,9 +574,19 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                             mpu.is_spiral_remap()
                             and get_thunder_group().IsParamDataLocal(param.spiral_id)
                         ):
+                            # spiral remap requires params on local node to be pinned
                             assert getattr(
                                 param, "spiral_tensor"
                             ).is_pinned(), f"{debug_param2name_id(param)} on local node is not pinned."
+
+                        if (
+                            mpu.is_spiral()
+                            and not mpu.is_spiral_remap()
+                        ):
+                            # spiral w/o remap requires all params to be pinned
+                            assert getattr(
+                                param, "spiral_tensor"
+                            ).is_pinned(), f"{debug_param2name_id(param)} is not pinned."
 
         if mpu.is_spiral_remap():
             get_thunder_group().UnsetSpiralCPUAllocator()
