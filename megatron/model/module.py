@@ -183,22 +183,25 @@ class Float16Module(MegatronModule):
             self.add_module('module', module.half())
             def float16_convertor(val):
                 return val.half()
-            # Spiral requires additional cast of spiral_tensor
-            if args.spiral:
-                self.module.apply(lambda m: [setattr(p, 'spiral_tensor', p.spiral_tensor.half()) for p in m.parameters(recurse=False)])
-
         elif args.bf16:
             self.add_module('module', module.bfloat16())
             def float16_convertor(val):
                 return val.bfloat16()
-            # Spiral requires additional cast of spiral_tensor
-            if args.spiral:
-                self.module.apply(lambda m: [setattr(p, 'spiral_tensor', p.spiral_tensor.half()) for p in m.parameters(recurse=False)])
         else:
             raise Exception('should not be here')
 
         self.float16_convertor = float16_convertor
         self.spiral_disable_cast = spiral_disable_cast
+
+        # Spiral requires additional cast of spiral_tensor
+        # Spiral remap does not require the casted tensor to be pinned because using spiral_init_context pins all spiral_tensors
+        if args.spiral:
+            self.module.apply(
+                lambda m: [setattr(p, "spiral_tensor",
+                                   (float16_convertor(p.spiral_tensor) if args.spiral_remap else float16_convertor(p.spiral_tensor).pin_memory()))
+                                   for p in m.parameters(recurse=False)
+                ]
+            )
 
 
     def set_input_tensor(self, input_tensor):
