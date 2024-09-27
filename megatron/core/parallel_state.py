@@ -10,7 +10,9 @@ from typing import Optional
 from .utils import GlobalMemoryBuffer
 
 # Intra-layer model parallel group that the current rank belongs to.
+# spiral tp group gloo required for core/tensor_parallel/data.py _build_key_size_numel_dictionaries() broadcast of `sizes` in cpu, since "d2h" in the original logic of h2d -> bcast -> d2h conflicts with overlapped gradient offload of spiral due to d2h bandwidth contention
 _TENSOR_MODEL_PARALLEL_GROUP = None
+_SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO = None
 # Inter-layer model parallel group that the current rank belongs to.
 _PIPELINE_MODEL_PARALLEL_GROUP = None
 # Model parallel group (both intra- and pipeline) that the current rank belongs to.
@@ -251,14 +253,19 @@ def initialize_model_parallel(
 
     # Build the tensor model-parallel groups.
     global _TENSOR_MODEL_PARALLEL_GROUP
+    global _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO
     assert _TENSOR_MODEL_PARALLEL_GROUP is None, \
         'tensor model parallel group is already initialized'
+    assert _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO is None, \
+        'spiral tensor model parallel group-gloo is already initialized'
     for i in range(num_tensor_model_parallel_groups):
         ranks = range(i * tensor_model_parallel_size,
                       (i + 1) * tensor_model_parallel_size)
         group = torch.distributed.new_group(ranks)
         if rank in ranks:
             _TENSOR_MODEL_PARALLEL_GROUP = group
+            if spiral:
+                _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO = torch.distributed.new_group(ranks, backend="gloo")
 
     # Build the pipeline model-parallel groups and embedding groups
     # (first and last rank in each pipeline model-parallel group).
@@ -419,6 +426,13 @@ def get_tensor_model_parallel_group():
     assert _TENSOR_MODEL_PARALLEL_GROUP is not None, \
         'intra_layer_model parallel group is not initialized'
     return _TENSOR_MODEL_PARALLEL_GROUP
+
+
+def get_spiral_tensor_model_parallel_group_gloo():
+    """Get the spiral tensor model parallel group-gloo the caller rank belongs to."""
+    assert _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO is not None, \
+        'spiral tensor model parallel group-gloo is not initialized'
+    return _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO
 
 
 def get_pipeline_model_parallel_group():
@@ -985,6 +999,9 @@ def destroy_model_parallel():
     _SPIRAL_INTRA_SIZE = None
     global _SPIRAL_IS_HOST_LEADER
     _SPIRAL_IS_HOST_LEADER = None
+
+    global _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO
+    _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO = None
 
     global _SPIRAL_EMBEDDING_GROUP
     _SPIRAL_EMBEDDING_GROUP = None

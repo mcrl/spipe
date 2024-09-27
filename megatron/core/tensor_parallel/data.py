@@ -2,10 +2,12 @@
 
 import torch
 
+from megatron import get_args
 from megatron.core.parallel_state import (
     get_tensor_model_parallel_group,
     get_tensor_model_parallel_rank,
     get_tensor_model_parallel_src_rank,
+    get_spiral_tensor_model_parallel_group_gloo,
 )
 
 
@@ -34,13 +36,18 @@ def _build_key_size_numel_dictionaries(keys, data):
                 sizes[i + offset] = s
             offset += max_dim
 
-    # Move to GPU and broadcast.
-    sizes_cuda = torch.cuda.LongTensor(sizes)
-    torch.distributed.broadcast(sizes_cuda, get_tensor_model_parallel_src_rank(),
-                                group=get_tensor_model_parallel_group())
+    if get_args().spiral:
+        sizes_cpu = torch.LongTensor(sizes)
+        torch.distributed.broadcast(sizes_cpu, get_tensor_model_parallel_src_rank(),
+                                    group=get_spiral_tensor_model_parallel_group_gloo())
+    else:
+        # Move to GPU and broadcast.
+        sizes_cuda = torch.cuda.LongTensor(sizes)
+        torch.distributed.broadcast(sizes_cuda, get_tensor_model_parallel_src_rank(),
+                                    group=get_tensor_model_parallel_group())
+        # Move back to cpu and unpack.
+        sizes_cpu = sizes_cuda.cpu()
 
-    # Move back to cpu and unpack.
-    sizes_cpu = sizes_cuda.cpu()
     key_size = {}
     key_numel = {}
     total_numel = 0
