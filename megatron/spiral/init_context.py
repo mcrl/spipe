@@ -614,3 +614,10 @@ def patch_extra_repr():
         for subclass in get_all_subclasses(torch.nn.modules.module.Module):
             subclass.extra_repr = subclass._old_extra_repr
             del subclass._old_extra_repr
+
+
+def set_module_spiral_status(module, status: SpiralParamStatus):
+    for param in module.parameters(recurse=True):
+        if is_spiral_param(param):
+            assert hasattr(param, "spiral_status"), "spiral_status not found in param"
+            setattr(param, "spiral_status", status)
