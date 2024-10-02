@@ -229,6 +229,27 @@ def get_pp_rank_for_fwd_phase(global_phase):
     )
 
 
+def get_pp_rank_for_bwd_phase(global_phase):
+    """Get the pipeline model parallel rank for the backward stage execution of global build phase"""
+    assert (
+        global_phase
+        < get_spiral_total_build_phase_size()
+        * mpu.get_pipeline_model_parallel_world_size()
+    )
+    return (
+        mpu.get_pipeline_model_parallel_world_size()
+        - (
+            global_phase
+            % (
+                get_spiral_backward_stage_build_phase_size()
+                * mpu.get_pipeline_model_parallel_world_size()
+            )
+            // get_spiral_backward_stage_build_phase_size()
+        )
+        - 1
+    )
+
+
 def fwd_phase2local_stage_phase(global_phase):
     """Translate global fwd phase to local stage and local phase
     NOTE (SpiralPipe) This function does not assert that global phase belongs to forward stage of this rank
@@ -246,6 +267,26 @@ def fwd_phase2local_stage_phase(global_phase):
         global_phase % get_spiral_forward_stage_build_phase_size()
     )
     return local_stage, local_phase
+
+
+def bwd_phase2local_stage_phase(global_phase):
+    """Translate global bwd phase to local stage and local phase
+    NOTE (SpiralPipe) This function does not assert that global phase belongs to backward stage of this rank
+    """
+    assert (
+        global_phase
+        < get_spiral_total_build_phase_size()
+        * mpu.get_pipeline_model_parallel_world_size()
+    )
+    local_stage = global_phase // (
+        get_spiral_backward_stage_build_phase_size()
+        * mpu.get_pipeline_model_parallel_world_size()
+    )
+    local_phase = (
+        global_phase % get_spiral_backward_stage_build_phase_size()
+    )
+    return local_stage, local_phase
+
 
 
 # NOTE (SpiralPipe) currently has no caller
