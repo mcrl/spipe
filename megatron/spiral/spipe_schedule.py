@@ -1,5 +1,7 @@
 import contextlib
 import warnings
+import nvtx
+import sys
 from typing import Callable, Iterator, List, Optional, Union
 from collections import deque
 from queue import Queue
@@ -17,7 +19,11 @@ from megatron.spiral.initialize import get_thunder_cuda_manager
 from megatron.spiral.debug import spiral_print
 import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
+from megatron.spiral.utils import is_spiral_param
 from megatron.spiral.generic import ContextManagers
+import megatron.spiral.build_state as sbs
+from megatron.spiral.ckpt_communication import comm_input_ckpt
+from megatron.spiral.ckpt_schedule import CkptSendRecvType, CkptSendRecvSchedule, CkptSendRecvOp
 
 
 # Types
@@ -27,7 +33,7 @@ Shape = Union[List[int], torch.Size]
 _DEBUG_SCHEDULE = True
 
 
-def mobius_schedule(
+def spipe_schedule(
     *,
     forward_step_func,
     data_iterator: Union[Iterator, List[Iterator]],
@@ -50,15 +56,13 @@ def mobius_schedule(
     param_sync_func: Optional[Callable] = None,
     **kwargs,
 ):
-    """Run SpiralPipe schedule w/o remapping, with communication between pipeline stages as needed.
-    Resembles Mobius pipeline schedule. Implements both (non)re-computation versions.
+    """Run sprial schedule, with communication between pipeline stages as needed.
 
     Returns dictionary with losses if the last stage, empty dict otherwise."""
 
-    # TODO (SpiralPipe) Recomputation implementation currently suffers redundant saving of input/output tensors.
-    recompute = get_args().spiral_recompute_activations
-
-    assert isinstance(model, list), "SpiralPipe expected model chunking by stage"
+    assert isinstance(
+        model, list
+    ), "SpiralPipe expected model chunking by stage"
     assert isinstance(
         data_iterator, list
     ), "SpiralPipe expected each model chunk to have a data iterator"
@@ -132,45 +136,32 @@ def mobius_schedule(
         optimizer_threads = [] # (thread, queue, ev)
 
     def _cleanup():
-        # cleanup checkpointed input tensors and output tensors
+        # cleanup checkpointed input tensors
         for module in model:
             empty_input_tensors: Callable = get_attr_wrapped_model(
                 module, "empty_input_tensors"
             )
-            empty_output_tensors: Callable = get_attr_wrapped_model(
-                module, "empty_output_tensors"
-            )
             empty_input_tensors()
-            empty_output_tensors()
+
+    # Init input ckpt send recv schedule
+    ckpt_send_recv_schedule = None  # placeholder
+    if not forward_only:
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches)
 
     # Data structures for training
     forward_data_store = []
 
     # Data structures for delayed send
     # Last pipeline worker will delay sending output tensors of non-last fwd stage
-    # First pipeline worker will delay sending input tensor grads of non-first bwd stage
+    # Last pipeline worker will delay sending input tensor grads of non-first bwd stage
     # TODO (SpiralPipe) Refactor for cleaner code
     if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
         NUM_DELAY_OUTPUT_TENSORS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
-        curr_delay_output_tensors = 0
-        delayed_output_tensors = []
-    if mpu.get_pipeline_model_parallel_rank() == 0:
         NUM_DELAY_INPUT_TENSOR_GRADS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
+        curr_delay_output_tensors = 0
         curr_delay_input_tensor_grads = 0
+        delayed_output_tensors = []
         delayed_input_tensor_grads = []
-
-    # NOTE (SpiralPipe) forward_step() in megatron/core/pipeline_parallel/schedules.py has some additional logic to compute loss using output tensor of the last pipeline stage, which is not captured by spiral output tensors. This is a temporary workaround to capture the loss tensor, and a better solution may exist.
-    if (
-        not forward_only
-        and not recompute
-        and mpu.get_pipeline_model_parallel_rank()
-        == mpu.get_pipeline_model_parallel_world_size() - 1
-    ):
-        losses = []
-
-    # NOTE (SpiralPipe) microbatch data is yielded by the data iterator into _recompute_data_iterator, in order to guarantee the same data for re-computation. This issue is present only when (1) a stage is used both as fwd and bwd stage, and (2) re-computation is performed. Using a data iterator for forward_step() in original fwd and re-compute fwd incurs some microbatches only being fed to re-compute fwd.
-    if not forward_only and recompute:
-        _recompute_data_list = [[] for _ in range(len(data_iterator))]
 
     # Event dictionaries. Key is the event tag, thus an event necessarily requires it.
     prefetch_event_queries = {}
@@ -182,6 +173,12 @@ def mobius_schedule(
     recv_handles = None
 
     """ Start training """
+
+    # nop pre-pipeline non-compute timesteps
+    __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
+    for _ in range(__num_pre_pipeline_non_compute_ts):
+        if not forward_only:
+            next(ckpt_send_recv_schedule)
 
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
@@ -218,10 +215,17 @@ def mobius_schedule(
                 ):
                     raise RuntimeError("wait_event failed")
 
-            # skip prefetch if processing last fwd stage, as it will be reused as last bwd stage
-            if not fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1:
+            # skip prefetch if forward only and processing last fwd stage
+            if not (
+                forward_only
+                and fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1
+            ):
                 model[fwd_stage_id + 1].spiral_fetch(non_blocking=True)
-                tag = "prefetch:" + f"f{fwd_stage_id + 1}"
+                tag = "prefetch:" + (
+                    f"f{fwd_stage_id + 1}"
+                    if fwd_stage_id + 1 < mpu.get_spiral_forward_virtual_size()
+                    else f"b{mpu.get_spiral_backward_virtual_size() - 1}"
+                )
                 prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
@@ -248,6 +252,10 @@ def mobius_schedule(
                 spiral_print(f" microbatch {i}")
             torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{i}]")
 
+            # send input tensor ckpt
+            if not forward_only:
+                comm_input_ckpt(next(ckpt_send_recv_schedule), model, tensor_shape, dtype)
+
             # set input tensor
             if mpu.is_pipeline_first_stage():
                 input_tensor = None
@@ -262,26 +270,19 @@ def mobius_schedule(
                 )
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
-                # NOTE (SpiralPipe) Creating a new iterator with _data results in deep copy of _data. So, calling detach_variable() as in backward() of CheckpointFunction (random.py) is not necessary. However, we must note that a redundant data storage is created here, while a detached tensor shares the underlying storage with the original. https://pytorch.org/docs/stable/generated/torch.Tensor.detach.html
-                # TODO (SpiralPipe) Seek better solution to use detached tensor, using detach_variable().
-                _data = next(data_iterator[fwd_stage_id])
-                _data_iterator = iter([_data]) # wrap
-                if not forward_only and recompute:
-                    _recompute_data_list[fwd_stage_id].append(_data)
-
                 # wait for recv input tensor
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
                 if recv_handles is not None:
                     for req in recv_handles:
                         req.wait()
 
-                _ctx = []
-                if forward_only or recompute:
-                    _ctx.append(torch.no_grad())
-                with ContextManagers(_ctx):
+                # NOTE (SpiralPipe) Original FWD should not create computation graph for two reasons
+                # 1. It will be recomputed in BWD
+                # 2. It creates computation graph to the input ckpt tensor, which leads to computation graph duplication when BWD is performed in the same rank. Symptoms include size error due to ops with size 0 tensor.
+                with torch.no_grad():
                     output_tensor = forward_step(
                         forward_step_func,
-                        _data_iterator,
+                        data_iterator[fwd_stage_id],
                         model[fwd_stage_id],
                         num_microbatches,
                         input_tensor,
@@ -291,15 +292,6 @@ def mobius_schedule(
                         dtype,
                         enable_autocast,
                     )
-
-                if (
-                    not forward_only
-                    and not recompute
-                    and mpu.is_pipeline_last_stage()
-                ):
-                    # save loss for pipeline last stage bwd
-                    assert isinstance(output_tensor, torch.Tensor) and output_tensor.numel() == 1
-                    losses.append(output_tensor)
 
                 compute_microbatch = get_thunder_cuda_manager().Event(
                     "compute",
@@ -351,7 +343,6 @@ def mobius_schedule(
                         )
                 else:
                     curr_delay_output_tensors += 1
-
             torch.cuda.nvtx.range_pop()
         # end fwd microbatches
 
@@ -362,9 +353,12 @@ def mobius_schedule(
             ):
                 raise RuntimeError("wait_event failed")
 
-            # skip free if processing last fwd stage, as it will be reused as last bwd stage
-            if not fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1:
-                model[fwd_stage_id].spiral_free()
+            # free fwd stage
+            model[fwd_stage_id].spiral_free()
+            if not (
+                forward_only
+                and fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1
+            ):
                 free_curr = get_thunder_cuda_manager().Event(
                     "free",
                     "prefetch",
@@ -391,28 +385,33 @@ def mobius_schedule(
         mpu.set_spiral_backward_virtual_rank(bwd_stage_id)
 
         assert (
-            hasattr(model[bwd_stage_id], "spiral_backward_stage_id")
-            and getattr(model[bwd_stage_id], "spiral_backward_stage_id") == bwd_stage_id
+            hasattr(model[-bwd_stage_id - 1], "spiral_backward_stage_id")
+            and getattr(model[-bwd_stage_id - 1], "spiral_backward_stage_id")
+            == bwd_stage_id
         ), "Backward stage ID mismatch between virtual rank and model."
 
         # prefetch next stage
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
-            # skip free wait if processing last bwd stage, as last fwd stage doesn't free
-            if not bwd_stage_id == mpu.get_spiral_backward_virtual_size() - 1:
-                if (
-                    get_thunder_cuda_manager().wait_event(free_event_queries.pop(f"free:b{bwd_stage_id + 1}"))
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
+            if (
+                get_thunder_cuda_manager().wait_event(
+                    free_event_queries.pop(
+                        f"free:f{fwd_stage_id}"
+                        if bwd_stage_id == mpu.get_spiral_backward_virtual_size() - 1
+                        else f"free:b{bwd_stage_id + 1}"
+                    )
+                )
+                == -1
+            ):
+                raise RuntimeError("wait_event failed")
 
             if not bwd_stage_id == 0:
-                model[bwd_stage_id - 1].spiral_fetch(non_blocking=True)
+                model[-bwd_stage_id].spiral_fetch(non_blocking=True)
                 prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
                     tag="prefetch:" + f"b{bwd_stage_id - 1}",
                     post_wait_fn=lambda bwd_stage_id=bwd_stage_id: set_module_spiral_status(
-                        model[bwd_stage_id - 1], SpiralParamStatus.GPU
+                        model[-bwd_stage_id], SpiralParamStatus.GPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
@@ -420,23 +419,24 @@ def mobius_schedule(
                 prefetch_event_queries[prefetch_next.tag] = prefetch_next
 
         # compute stream wait for prefetch current stage
+        # NOTE: prefetch for last bwd stage is called in the fwd loop
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
-            # skip prefetch wait if processing last bwd stage, as last bwd stage reuse last fwd stage
-            if not bwd_stage_id == mpu.get_spiral_backward_virtual_size() - 1:
-                if (
-                    get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(f"prefetch:b{bwd_stage_id}"))
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
-
-        if recompute:
-            _recompute_data_iterator = iter(_recompute_data_list[bwd_stage_id])
+            if (
+                get_thunder_cuda_manager().wait_event(prefetch_event_queries.pop(f"prefetch:b{bwd_stage_id}"))
+                == -1
+            ):
+                raise RuntimeError("wait_event failed")
 
         # bwd microbatches
         for i in range(num_microbatches):
             if _DEBUG_SCHEDULE:
                 spiral_print(f" microbatch {i}")
             torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{i}]")
+
+            # recv input tensor ckpt
+            recv_input_ckpts, recv_input_ckpt_handle = comm_input_ckpt(
+                next(ckpt_send_recv_schedule), model, tensor_shape, dtype
+            )
 
             # set output tensor grad
             if mpu.is_pipeline_last_stage():
@@ -451,42 +451,17 @@ def mobius_schedule(
                     timers=timers,
                 )
 
-            # set input tensor ckpt
-            input_tensor_ckpt = (
-                model[bwd_stage_id].module[0].spiral_input_tensors.popleft()
-            )
-
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
-                if recompute:
-                    with torch.enable_grad():
-                        output_tensor = forward_step(
-                            forward_step_func,
-                            _recompute_data_iterator,
-                            model[bwd_stage_id],
-                            num_microbatches,
-                            input_tensor_ckpt,
-                            [],
-                            timers,
-                            collect_non_loss_data,
-                            dtype,
-                            enable_autocast,
-                        )
-                else:
-                    output_tensor = (
-                        model[bwd_stage_id].module[-1].spiral_output_tensors.popleft()
-                    )
-                    # NOTE (SpiralPipe) Although we can make conditional code with above code line that handles output tensor, we do it this way to pop the output tensor from the last pipeline stage, just to be sure that those tensors should not be accesssed from somewhere else.
-                    if mpu.is_pipeline_last_stage():
-                        output_tensor = losses.pop(0)
-                        assert isinstance(output_tensor, torch.Tensor) and output_tensor.numel() == 1
-                    assert output_tensor.requires_grad
-
-                if optimize_after_bwd_stage:
-                    # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
-                    # (same as optimizer_list in SpiralStageOptimizer)
-                    _grad_scaler = grad_scaler[bwd_stage_id]
-                else:
-                    _grad_scaler = grad_scaler
+                # wait for recv input tensor ckpt
+                # NOTE (SpiralPipe) Must be done in compute stream to avoid error
+                if recv_input_ckpt_handle is not None:
+                    for req in recv_input_ckpt_handle:
+                        req.wait()
+                if recv_input_ckpts is not None:
+                    assert (
+                        len(recv_input_ckpts) == 1
+                    ), f"Only 1 input tensor ckpt expected. Got {len(recv_input_ckpts)}"
+                    input_tensor_ckpt = recv_input_ckpts.pop(0)
 
                 # wait for recv output tensor grad
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
@@ -494,6 +469,27 @@ def mobius_schedule(
                     for req in recv_handles:
                         req.wait()
 
+                output_tensor = forward_step(
+                    forward_step_func,
+                    data_iterator[
+                        bwd_stage_id + mpu.get_spiral_forward_virtual_size()
+                    ],
+                    model[-bwd_stage_id - 1],
+                    num_microbatches,
+                    input_tensor_ckpt,
+                    [],
+                    timers,
+                    collect_non_loss_data,
+                    dtype,
+                    enable_autocast,
+                )
+
+                if optimize_after_bwd_stage:
+                    # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
+                    # (same as optimizer_list in SpiralStageOptimizer)
+                    _grad_scaler = grad_scaler[bwd_stage_id]
+                else:
+                    _grad_scaler = grad_scaler
                 input_tensor_grad = backward_step(
                     _grad_scaler,
                     input_tensor_ckpt,
@@ -529,7 +525,7 @@ def mobius_schedule(
             ):
                 raise RuntimeError("wait_event failed")
             if not mpu.is_pipeline_first_stage():
-                if not mpu.get_pipeline_model_parallel_rank() == 0:
+                if not mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
                     # send input tensor grad immediately
                     _ = spiral_p2p.send_input_tensor_grad(
                         input_tensor_grad,
@@ -538,14 +534,13 @@ def mobius_schedule(
                         timers=timers,
                     )
                 else:
-                    # control path for only first worker
+                    # control path for only last worker
                     # delay input tensor grad
                     delayed_input_tensor_grads.append(input_tensor_grad)
 
-            if mpu.get_pipeline_model_parallel_rank() == 0:
+            if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
                 if (curr_delay_input_tensor_grads >= NUM_DELAY_INPUT_TENSOR_GRADS):
                     if (len(delayed_input_tensor_grads) > 0):
-                        # send delayed input tensor grad
                         _ = spiral_p2p.send_input_tensor_grad(
                             delayed_input_tensor_grads.pop(0),
                             overlap_p2p_comm=overlap_p2p_comm,
@@ -566,7 +561,7 @@ def mobius_schedule(
                 raise RuntimeError("wait_event failed")
 
             # free bwd stage
-            model[bwd_stage_id].spiral_free()
+            model[-bwd_stage_id - 1].spiral_free()
             free_curr = get_thunder_cuda_manager().Event(
                 "free",
                 None if bwd_stage_id == 0 else "prefetch",
@@ -589,16 +584,15 @@ def mobius_schedule(
                 if optimize_after_bwd_stage:
                     optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
                 else:
-                    model[bwd_stage_id].allreduce_gradients()
+                    model[-bwd_stage_id - 1].allreduce_gradients()
                 # offload grads
-                model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
+                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
                     "free",
                     tag=f"offload_grad:b{bwd_stage_id}"
                 )
-                offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
-                if offload_grad_ev_long == -1:
+                if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
 
@@ -630,7 +624,7 @@ def mobius_schedule(
                     raise RuntimeError("wait_event failed")
 
                 # free bwd stage grads
-                model[bwd_stage_id].spiral_free_grad()
+                model[-bwd_stage_id - 1].spiral_free_grad()
                 free_grad_curr = get_thunder_cuda_manager().Event(
                     "free",
                     None,
@@ -643,6 +637,17 @@ def mobius_schedule(
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
+
+    # do post-pipeline non-compute timesteps
+    assert not forward_only, "Forward only mode should have returned already"
+    __num_post_pipeline_non_compute_ts = (
+        mpu.get_pipeline_model_parallel_world_size()
+        - mpu.get_pipeline_model_parallel_rank()
+        - 1
+    )
+    for _ in range(__num_post_pipeline_non_compute_ts):
+        if not forward_only:
+            comm_input_ckpt(next(ckpt_send_recv_schedule), model, tensor_shape, dtype)
 
     # cleanup schedule events
     if (
