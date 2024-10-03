@@ -211,7 +211,7 @@ def mobius_schedule(
                     req.wait()
             else:
                 input_tensor, reqs = recvs.pop(0)
-                for i, req in enumerate(reqs):
+                for req in reqs:
                     req.wait()
 
             spiral_print(f"tin={torch.mean(input_tensor)}")
