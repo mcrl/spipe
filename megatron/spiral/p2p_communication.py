@@ -438,3 +438,153 @@ def send_input_tensor_grad(
         spiral_print(f"send input_tensor_grad(dst={send_rank}, mean={torch.mean(input_tensor_grad)})")
 
     return reqs
+
+
+@nvtx.annotate("snrp", color="cyan")
+def send_next_recv_prev(
+    tensor_send: torch.Tensor,
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[List[Work]]]:
+    if timers is not None:
+        timers("send_next_recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        recv_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("send_next_recv_prev").stop()
+    return recv, reqs
+
+
+@nvtx.annotate("sprn", color="cyan")
+def send_prev_recv_next(
+    tensor_send: torch.Tensor,
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[List[Work]]]:
+    if timers is not None:
+        timers("send_next_recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        recv_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("send_next_recv_prev").stop()
+    return recv, reqs
+
+
+@nvtx.annotate("sn", color="cyan")
+def send_next(
+    tensor_send: torch.Tensor,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Optional[Work]:
+    if timers is not None:
+        timers("send_next", log_level=2).start()
+    _, reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        recv_ranks=None,
+        tensor_shape=None,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=None,
+    )
+    if timers is not None:
+        timers("send_next").stop()
+    return reqs
+
+
+@nvtx.annotate("rp", color="purple")
+def recv_prev(
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[Work]]:
+    if timers is not None:
+        timers("recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=None,
+        send_ranks=None,
+        recv_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("recv_prev").stop()
+    return recv, reqs
+
+
+@nvtx.annotate("sp", color="cyan")
+def send_prev(
+    tensor_send: torch.Tensor,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Optional[Work]:
+    if timers is not None:
+        timers("send_next", log_level=2).start()
+    _, reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        recv_ranks=None,
+        tensor_shape=None,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=None,
+    )
+    if timers is not None:
+        timers("send_next").stop()
+    return reqs
+
+
+@nvtx.annotate("rn", color="purple")
+def recv_next(
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[Work]]:
+    if timers is not None:
+        timers("recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=None,
+        send_ranks=None,
+        recv_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("recv_prev").stop()
+    return recv, reqs
