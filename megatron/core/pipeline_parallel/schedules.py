@@ -12,7 +12,7 @@ from megatron.core import parallel_state
 from megatron.core.pipeline_parallel import p2p_communication
 from megatron.core.enums import ModelType
 from megatron.core.utils import get_attr_wrapped_model, get_model_type
-import megatron.spiral.schedules
+import megatron.spiral.schedule
 
 # Types
 Shape = Union[List[int], torch.Size]
@@ -128,9 +128,9 @@ def get_forward_backward_func():
     """
     pipeline_model_parallel_size = parallel_state.get_pipeline_model_parallel_world_size()
     if parallel_state.is_spiral_remap():
-        forward_backward_func = megatron.spiral.schedules.forward_backward_pipelining_with_spiral_remap
+        forward_backward_func = megatron.spiral.schedule.forward_backward_pipelining_with_spiral_remap
     elif parallel_state.is_spiral():
-        forward_backward_func = megatron.spiral.schedules.forward_backward_pipelining_with_spiral
+        forward_backward_func = megatron.spiral.schedule.forward_backward_pipelining_with_spiral
     elif pipeline_model_parallel_size > 1:
         if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:
             forward_backward_func = forward_backward_pipelining_with_interleaving

@@ -12,7 +12,7 @@ from .p2p_communication import (
     recv_output_tensor_grad,
     send_input_tensor_grad,
 )
-from .schedules import (
+from .schedule import (
     forward_backward_pipelining_with_spiral_remap,
     forward_backward_pipelining_with_spiral,
 )

@@ -1,2 +1,0 @@
-from .spipe_schedule import spipe_schedule as forward_backward_pipelining_with_spiral_remap
-from .mobius_schedule import mobius_schedule as forward_backward_pipelining_with_spiral
