@@ -20,6 +20,8 @@ import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
 from megatron.spiral.generic import ContextManagers
 
+from .mobius_communication import comm_activation, comm_activation_grad
+
 
 # Types
 Shape = Union[List[int], torch.Size]
@@ -195,11 +197,9 @@ def mobius_schedule(
 
             # set input tensor
             if mpu.is_pipeline_first_stage():
-                input_tensor = None
-                ### TEMP CODE FOR JUST CHECK
-                input_tensor = torch.randn(tensor_shape, dtype=dtype, device=torch.cuda.current_device())
+                # input_tensor = None
+                input_tensor = torch.randn(tensor_shape, dtype=dtype, device=torch.cuda.current_device()) # TODO: delete
             elif fwd_stage_id == 0 and m_i == 0:
-                spiral_print("recv_prev")
                 input_tensor, reqs = spiral_p2p.recv_prev(
                     tensor_shape,
                     dtype,
@@ -212,9 +212,7 @@ def mobius_schedule(
             else:
                 input_tensor, reqs = recvs.pop(0)
                 for i, req in enumerate(reqs):
-                    spiral_print(f"wait for req[{i}/{len(reqs)}]")
-                    req.wait() # wait for recv complete
-                    spiral_print("done")
+                    req.wait()
 
             spiral_print(f"tin={torch.mean(input_tensor)}")
 
@@ -230,72 +228,19 @@ def mobius_schedule(
             if mpu.is_pipeline_last_stage():
                 output_tensors.append(output_tensor)
 
-            # send output tensor
-            if (fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1 and not mpu.is_pipeline_last_stage()) and m_i == num_microbatches - 1:
-                ## non-pipeline-last-stage 이지만 마지막 fwd stage의 경우 마지막 micro-batch 때 send output tensor (연두)
-                # sd tensors
-                spiral_print("send_next")
-                reqs = spiral_p2p.send_next(
-                    output_tensor,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait() # wait for send enqueue
-            elif mpu.is_pipeline_last_stage() and m_i == num_microbatches - 1:
-                ## pipeline last stage의 경우 마지막 micro-batch는 sdrv 없음 (진초록)
-                spiral_print("pass")
-                pass
-            elif mpu.is_pipeline_first_stage() and m_i < mpu.get_pipeline_model_parallel_world_size() - 1:
-                ## first pipeline stage의 경우, microbatch ppsize - 1 개만큼은 recv 없음 (보라))
-                # sd tensor, skip recv
-                spiral_print("send_next")
-                reqs = spiral_p2p.send_next(
-                    output_tensor,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait() # wait for send enqueue
-            elif (fwd_stage_id == mpu.get_spiral_forward_virtual_size() - 1 and not mpu.is_pipeline_last_stage()) and m_i >= mpu.get_pipeline_model_parallel_world_size() - 1:
-                ## non-pipeline-last-stage 이지만 마지막 fwd stage의 경우 micro-batch idx가 ppsize-1보다 크거나 같을 경우 recv 없음 (핑크) -- 물론 연두는 제외됨
-                # sd tensor, skip recv
-                spiral_print("send_next")
-                reqs = spiral_p2p.send_next(
-                    output_tensor,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait() # wait for send enqueue
-            elif mpu.is_pipeline_last_stage() and m_i < num_microbatches - 1:
-                ## last pipeline stage의 경우, 무조건 send 없음 (m_i=num_microbatches-1을 제외한건 진녹에서 이미 처리하고 있기 때문) (빨강)
-                # rv tensor, skip send
-                spiral_print("recv_prev")
-                recv_tensor, reqs = spiral_p2p.recv_prev(
-                    tensor_shape,
-                    dtype,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                recvs.append((recv_tensor, reqs))
-            else:
-                ## 나머진 무조건 sr
-                # sdrv tensors
-                spiral_print("send_next_recv_prev")
-                recv_tensor, reqs = spiral_p2p.send_next_recv_prev(
-                    output_tensor,
-                    tensor_shape,
-                    dtype,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                recvs.append((recv_tensor, reqs))
+            # sdrv activation
+            comm_activation(
+                output_tensor,
+                recvs,
+                fwd_stage_id,
+                m_i,
+                num_microbatches,
+                dtype,
+                tensor_shape,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
 
             torch.cuda.nvtx.range_pop()
         # end fwd microbatches
@@ -361,72 +306,19 @@ def mobius_schedule(
             spiral_print(f"tout={torch.mean(input_tensor_grad)}")
             ###
 
-            # send input tensor grad
-            if mpu.is_pipeline_first_stage() and m_i == num_microbatches - 1:
-                ## pipeline first stage의 경우 마지막 micro-batch는 sdrv 없음 (진초록)
-                spiral_print("pass")
-                pass
-            elif mpu.is_pipeline_first_stage() and m_i < num_microbatches - 1:
-                ## first pipeline stage의 경우, 무조건 send 없음 (m_i=num_microbatches-1을 제외한건 진녹에서 이미 처리하고 있기 때문) (빨강)
-                spiral_print("recv_next")
-                # rv tensor, skip send
-                recv_tensor, reqs = spiral_p2p.recv_next(
-                    tensor_shape,
-                    dtype,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                recvs.append((recv_tensor, reqs))
-            elif mpu.is_pipeline_last_stage() and m_i < mpu.get_pipeline_model_parallel_world_size() - 1:
-                ## last pipeline stage의 경우, microbatch ppsize - 1 개만큼은 recv 없음 (보라))
-                spiral_print("send_prev")
-                # sd tensor, skip recv
-                reqs = spiral_p2p.send_prev(
-                    input_tensor_grad,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait()
-            elif (bwd_stage_id == 0 and not mpu.is_pipeline_first_stage()) and m_i == num_microbatches - 1:
-                ## non-pipeline-first-stage 이지만 첫번째 bwd stage의 경우 마지막 micro batch는 무조건 send임 (연두)
-                spiral_print("send_prev")
-                # sd tensor, skip recv
-                reqs = spiral_p2p.send_prev(
-                    input_tensor_grad,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait()
-            elif (bwd_stage_id == 0 and not mpu.is_pipeline_first_stage()) and m_i >= mpu.get_pipeline_model_parallel_world_size() - 1:
-                ## non-pipeline-first-stage 이지만 첫번째 bwd stage의 경우 micro-batch idx가 ppsize-1보다 크거나 같을 경우 recv 없음 (핑크) -- 물론 연두는 제외됨
-                # sd tensor, skip recv
-                spiral_print("send_prev")
-                reqs = spiral_p2p.send_prev(
-                    input_tensor_grad,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait()
-            else:
-                ## 나머진 무조건 sr
-                spiral_print("send_prev_recv_next")
-                # sdrv tensors
-                recv_tensor, reqs = spiral_p2p.send_prev_recv_next(
-                    input_tensor_grad,
-                    tensor_shape,
-                    dtype,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                recvs.append((recv_tensor, reqs))
+            # sdrv activation grad
+            comm_activation_grad(
+                input_tensor_grad,
+                recvs,
+                bwd_stage_id,
+                m_i,
+                num_microbatches,
+                dtype,
+                tensor_shape,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
 
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
