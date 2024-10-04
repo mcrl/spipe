@@ -12,7 +12,7 @@ Shape = Union[List[int], torch.Size]
 
 # Constants
 MINIMIZE_INTERNODE_COMM = False # TODO (SpiralPipe) further optimizer internode comm.
-_DEBUG_COMM = False
+_DEBUG_COMM = True
 
 if _DEBUG_COMM:
     from megatron.spiral.debug import spiral_print
@@ -37,6 +37,7 @@ def _batched_p2p_ops(
     recv_ranks: Optional[List[int]],
     group: torch.distributed.ProcessGroup,
 ):
+    spiral_print("entered _batched_p2p_ops")
     ops = []
     if tensor_sends is not None:
         assert send_ranks is not None and len(tensor_sends) == len(send_ranks)
@@ -56,6 +57,7 @@ def _batched_p2p_ops(
         reqs = torch.distributed.batch_isend_irecv(ops)
     else:
         reqs = []
+    spiral_print("exited _batched_p2p_ops")
     return reqs
 
 
@@ -67,6 +69,7 @@ def _p2p_ops(
     recv_ranks: Optional[List[int]],
     group: torch.distributed.ProcessGroup,
 ):
+    spiral_print(f"entered _p2p_ops {send_ranks} {recv_ranks}")
     reqs = []
     if mpu.get_pipeline_model_parallel_rank() % 2 == 0:
         if tensor_sends is not None:
@@ -74,22 +77,27 @@ def _p2p_ops(
             for tensor, rank in zip(tensor_sends, send_ranks):
                 send_req = torch.distributed.isend(tensor, rank, group=group)
                 reqs.append(send_req)
+                spiral_print(f"sent tensor to {rank}")
         if tensor_recvs is not None:
             assert recv_ranks is not None and len(tensor_recvs) == len(recv_ranks)
             for tensor, rank in zip(tensor_recvs, recv_ranks):
                 recv_req = torch.distributed.irecv(tensor, src=rank, group=group)
                 reqs.append(recv_req)
+                spiral_print(f"received tensor from {rank}")
     else:
         if tensor_recvs is not None:
             assert recv_ranks is not None and len(tensor_recvs) == len(recv_ranks)
             for tensor, rank in zip(tensor_recvs, recv_ranks):
                 recv_req = torch.distributed.irecv(tensor, src=rank, group=group)
                 reqs.append(recv_req)
+                spiral_print(f"received tensor from {rank}")
         if tensor_sends is not None:
             assert send_ranks is not None and len(tensor_sends) == len(send_ranks)
             for tensor, rank in zip(tensor_sends, send_ranks):
                 send_req = torch.distributed.isend(tensor, rank, group=group)
                 reqs.append(send_req)
+                spiral_print(f"sent tensor to {rank}")
+    spiral_print("exited _p2p_ops")
     return reqs
 
 
@@ -451,6 +459,7 @@ def send_next_recv_prev(
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
     if timers is not None:
         timers("send_next_recv_prev", log_level=2).start()
+    spiral_print("entered snrp")
     [recv], reqs = _communicate(
         tensor_sends=[tensor_send],
         send_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
@@ -461,12 +470,41 @@ def send_next_recv_prev(
         batch_p2p_comm=batch_p2p_comm,
         dtype=dtype,
     )
+    spiral_print("exit snrp")
     if timers is not None:
         timers("send_next_recv_prev").stop()
     return recv, reqs
 
 
-@nvtx.annotate("sprn", color="cyan")
+@nvtx.annotate("snrn", color="red")
+def send_next_recv_next(
+    tensor_send: torch.Tensor,
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[List[Work]]]:
+    if timers is not None:
+        timers("send_next_recv_next", log_level=2).start()
+    spiral_print("entered snrn")
+    [recv], reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        recv_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    spiral_print("exited snrn")
+    if timers is not None:
+        timers("send_next_recv_next").stop()
+    return recv, reqs
+
+
+@nvtx.annotate("sprn", color="yellow")
 def send_prev_recv_next(
     tensor_send: torch.Tensor,
     tensor_shape: Shape,
@@ -492,7 +530,7 @@ def send_prev_recv_next(
     return recv, reqs
 
 
-@nvtx.annotate("sn", color="cyan")
+@nvtx.annotate("sn", color="purple")
 def send_next(
     tensor_send: torch.Tensor,
     overlap_p2p_comm: bool = False,
@@ -524,6 +562,7 @@ def recv_prev(
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[Work]]:
+    spiral_print("entered recv_prev")
     if timers is not None:
         timers("recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
@@ -541,13 +580,14 @@ def recv_prev(
     return recv, reqs
 
 
-@nvtx.annotate("sp", color="cyan")
+@nvtx.annotate("sp", color="rapids")
 def send_prev(
     tensor_send: torch.Tensor,
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Optional[Work]:
+    spiral_print("entered send_prev")
     if timers is not None:
         timers("send_next", log_level=2).start()
     _, reqs = _communicate(
