@@ -131,12 +131,9 @@ def spipe_schedule(
     if offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer:
         assert "spiral_stage_optimizer" in kwargs
         assert "spiral_grad_scaler" in kwargs
-        assert "spiral_stage_optimizer_step_returns" in kwargs and isinstance(kwargs["spiral_stage_optimizer_step_returns"], deque)
         optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
-    if optimize_after_bwd_stage:
-        optimizer_threads = [] # (thread, queue, ev)
 
     def _cleanup():
         # cleanup checkpointed input tensors
@@ -584,23 +581,7 @@ def spipe_schedule(
 
                 # if not spiral stage optimizer, then optimizer will be executed after iteration
                 if optimize_after_bwd_stage:
-                    _offload_grad_ev_cpu = torch.cuda.Event() # event to synchronize at cpu
-                    _optimizer_thread_queue = Queue()
-                    _offload_grad_ev_cpu.record()
-
-                    inner_step_kwargs = {}
-                    inner_step_kwargs["spiral_offload_grad_ev"] = _offload_grad_ev_cpu
-                    inner_step_kwargs["spiral_optimizer_thread_queue"] = _optimizer_thread_queue
-                    inner_step_kwargs["spiral_offload_grad_ev_long"] = _offload_grad_ev_cpu.cuda_event
-
-                    # TODO (SpiralPipe) timers is None. Fix it
-                    op = threading.Thread(
-                        target=optimizer[bwd_stage_id].step,
-                        args=(get_args(), get_timers()),
-                        kwargs=inner_step_kwargs,
-                    )
-                    op.start()
-                    optimizer_threads.append((op, _optimizer_thread_queue))
+                    optimizer.step(bwd_stage_id, offload_grad_curr, get_args(), get_timers())
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
                 if (
@@ -659,12 +640,6 @@ def spipe_schedule(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-
-    # join optimizer
-    if optimize_after_bwd_stage:
-        for op, q in optimizer_threads:
-            op.join()
-            kwargs["spiral_stage_optimizer_step_returns"].appendleft(q.get())
 
     _cleanup()
     return forward_data_store

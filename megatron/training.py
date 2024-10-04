@@ -834,7 +834,6 @@ def train_step(forward_step_func, data_iterator,
         # Performs grad offload and optimizer step overlapped with backward
         kwargs["spiral_stage_optimizer"] = optimizer
         kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
-        kwargs["spiral_stage_optimizer_step_returns"] = deque() # placeholder to store step() return values
 
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,
@@ -897,7 +896,7 @@ def train_step(forward_step_func, data_iterator,
         timers('optimizer').stop()
     else:
         if optimize_after_bwd_stage:
-            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+            update_successful, grad_norm, num_zeros_in_grad = optimizer.join_step()
         else:
             # Unoverlapped paramter update with SpiralStageOptimizer
             for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
@@ -909,7 +908,7 @@ def train_step(forward_step_func, data_iterator,
                     (update_successful, grad_norm, num_zeros_in_grad)
                 )
             # process step returns
-            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+            update_successful, grad_norm, num_zeros_in_grad = optimizer.join_step()
 
     # TODO (SpiralPipe) Need to remove when async option was enabled
     torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())

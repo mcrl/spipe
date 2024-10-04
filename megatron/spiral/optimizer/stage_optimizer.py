@@ -1,7 +1,14 @@
+from queue import Queue
+from collections import deque
+import threading
+
+from megatron.spiral.initialize import get_thunder_cuda_manager
+
 class SpiralStageOptimizer:
 
     def __init__(self, optimizers, *args, **kwargs):
         self.optimizer_list = optimizers  # do not change attr name
+        self.optimizer_threads = []
 
     # Required for checkpointing
     def state_dict(self):
@@ -38,8 +45,34 @@ class SpiralStageOptimizer:
     def get_loss_scale(self, opt_ty_idx=0):
         return self.optimizer_list[opt_ty_idx].get_loss_scale()
 
-    @staticmethod
-    def process_step_returns(step_rets: list):
+    def step(self, idx, event_query, args, timers):
+        event = get_thunder_cuda_manager().get_event(event_query)
+        _optimizer_thread_queue = Queue()
+
+        inner_step_kwargs = {}
+        inner_step_kwargs["spiral_offload_grad_ev"] = event
+        inner_step_kwargs["spiral_offload_grad_ev_long"] = event.cuda_event
+        inner_step_kwargs["spiral_optimizer_thread_queue"] = _optimizer_thread_queue
+
+        op = threading.Thread(
+            target=self.optimizer_list[idx].step,
+            args=(args, timers),
+            kwargs=inner_step_kwargs,
+        )
+        op.start()
+        self.optimizer_threads.append((op, _optimizer_thread_queue))
+
+    def join_step(self):
+        spiral_stage_optimizer_step_returns = deque()
+
+        for op, q in self.optimizer_threads:
+            op.join()
+            spiral_stage_optimizer_step_returns.appendleft(q.get())
+        
+        self.optimizer_threads = []
+        return self._process_step_returns(spiral_stage_optimizer_step_returns)
+
+    def _process_step_returns(self, step_rets: list):
         """Static method to reduce the return values of individual optimizer steps."""
         update_successful_values, grad_norm_values, num_zeros_in_grad_values = zip(
             *step_rets
