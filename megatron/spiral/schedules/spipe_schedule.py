@@ -26,6 +26,7 @@ import megatron.spiral.build_state as sbs
 from megatron.spiral.ckpt_communication import comm_input_ckpt
 from megatron.spiral.ckpt_schedule import CkptSendRecvType, CkptSendRecvSchedule, CkptSendRecvOp
 
+from .spipe_communication import comm_activation, comm_activation_grad
 
 # Types
 Shape = Union[List[int], torch.Size]
@@ -189,17 +190,18 @@ def spipe_schedule(
         # TODO: compute stream wait for prefetch current stage
 
         # fwd microbatches
-        for i in range(num_microbatches):
+        for m_i in range(num_microbatches):
             if _DEBUG_SCHEDULE:
-                spiral_print(f" microbatch {i}")
-            torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{i}]")
+                spiral_print(f" microbatch {m_i}")
+            torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{m_i}]")
 
             # set input tensor
             if mpu.is_pipeline_first_stage():
                 input_tensor = None
                 ### TEMP CODE FOR JUST CHECK
-                input_tensor = torch.rand(tensor_shape, dtype=dtype, device=torch.cuda.current_device())
-            elif fwd_stage_id == 0 and i == 0:
+                input_tensor = torch.randn(tensor_shape, dtype=dtype, device=torch.cuda.current_device())
+                ###
+            elif fwd_stage_id == 0 and m_i == 0:
                 spiral_print("recv_prev")
                 input_tensor, reqs = spiral_p2p.recv_prev(
                     tensor_shape,
@@ -215,40 +217,31 @@ def spipe_schedule(
                 for req in reqs:
                     req.wait() # wait for recv complete
 
-            # spiral_print(f"{input_tensor=}")
+            spiral_print(f"tin={torch.mean(input_tensor)}")
 
             # TODO: send input tensor ckpt
 
             # TODO: Get output tensor
             output_tensor = None # TODO
+
             ### TEMP CODE FOR JUST CHECK
-            output_tensor = input_tensor
+            output_tensor = torch.randn(tensor_shape, dtype=dtype, device=torch.cuda.current_device())
+            spiral_print(f"tout={torch.mean(output_tensor)}")
             ###
 
-            # send output tensor
-            if _skip_fwd_rv(i):
-                spiral_print("send_next")
-                # sd tensor, skip recv
-                reqs = spiral_p2p.send_next(
-                    output_tensor,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait() # wait for send enqueue
-            else:
-                spiral_print("send_next_recv_prev")
-                # sdrv tensors
-                recv_tensor, reqs = spiral_p2p.send_next_recv_prev(
-                    output_tensor,
-                    tensor_shape,
-                    dtype,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                recvs.append((recv_tensor, reqs))
+            # sdrv activation
+            comm_activation(
+                output_tensor,
+                recvs,
+                fwd_stage_id,
+                m_i,
+                num_microbatches,
+                dtype,
+                tensor_shape,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
 
             torch.cuda.nvtx.range_pop()
         # end fwd microbatches
@@ -279,60 +272,38 @@ def spipe_schedule(
         # NOTE: prefetch for last bwd stage is called in the fwd loop
 
         # bwd microbatches
-        for i in range(num_microbatches):
+        for m_i in range(num_microbatches):
             if _DEBUG_SCHEDULE:
-                spiral_print(f" microbatch {i}")
-            torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{i}]")
+                spiral_print(f" microbatch {m_i}")
+            torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{m_i}]")
 
             # set output tensor grad
             output_tensor_grad, reqs = recvs.pop(0)
             for req in reqs:
                 req.wait()
             ###
-            # spiral_print(f"{output_tensor_grad=}")
+            spiral_print(f"tin={torch.mean(output_tensor_grad)}")
             ###
             # TODO: Get input tensor grad
             ### TEMP CODE FOR JUST CHECK
-            input_tensor_grad = output_tensor_grad
+            input_tensor_grad = torch.randn(tensor_shape, dtype=dtype, device=torch.cuda.current_device())
+            spiral_print(f"tout={torch.mean(input_tensor_grad)}")
             ###
             # input_tensor_grad = None
 
-            # send input tensor grad
-            if _skip_bwd_sd(i):
-                if i == num_microbatches - 1:
-                    pass
-                else:
-                    spiral_print("recv_prev")
-                    # rv tensor, skip send
-                    recv, reqs = spiral_p2p.recv_prev(
-                        tensor_shape,
-                        dtype,
-                        overlap_p2p_comm=overlap_p2p_comm,
-                        batch_p2p_comm=batch_p2p_comm,
-                        timers=timers,
-                    )
-                    recvs.append((recv, reqs))
-            elif bwd_stage_id == 0 and i == num_microbatches - 1:
-                spiral_print("send_next")
-                reqs = spiral_p2p.send_next(
-                    input_tensor_grad,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                for req in reqs:
-                    req.wait()
-            else:
-                spiral_print("send_next_recv_prev")
-                recv_tensor, reqs = spiral_p2p.send_next_recv_prev(
-                    input_tensor_grad,
-                    tensor_shape,
-                    dtype,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
-                recvs.append((recv_tensor, reqs))
+            # sdrv activation grad
+            comm_activation_grad(
+                input_tensor_grad,
+                recvs,
+                bwd_stage_id,
+                m_i,
+                num_microbatches,
+                dtype,
+                tensor_shape,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
 
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
