@@ -249,6 +249,8 @@ def spipe_schedule(
                     timers=timers,
                 )
                 recvs.append((recv_tensor, reqs))
+
+            torch.cuda.nvtx.range_pop()
         # end fwd microbatches
 
         mpu.set_spiral_forward_virtual_rank(None)
@@ -331,6 +333,8 @@ def spipe_schedule(
                     timers=timers,
                 )
                 recvs.append((recv_tensor, reqs))
+
+            torch.cuda.nvtx.range_pop()
         # end bwd microbatches
 
         mpu.set_spiral_backward_virtual_rank(None)
