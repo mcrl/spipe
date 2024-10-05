@@ -165,8 +165,19 @@ class CkptSendRecvSchedule:
                 # end for microbatch
 
     def _optimize_schedule_async(self):
-        """Optimizer the schedule by dropping unnecessary send/recv ops."""
-        pass
+        """Optimizer the schedule by dropping unnecessary send/recv ops.
+
+        e.g., if bwd stage i = [bp2, bp1, bp0], only send/recv ops for bp2 are required.
+        """
+        _unoptimized_schedule = self.global_schedule
+        self.global_schedule = [
+            [
+                [op for op in ts_schedule if (op.phase_id + 1) % sbs.get_spiral_backward_stage_build_phase_size() == 0]
+                for ts_schedule in pprank_schedule
+            ]
+            for pprank_schedule in _unoptimized_schedule
+        ]
+
 
     def __str__(self) -> str:
         _str = ""
