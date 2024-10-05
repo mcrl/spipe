@@ -6,6 +6,7 @@ import torch
 import megatron.spiral.build_state as sbs
 import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.core import mpu
+from megatron.spiral.build_state import bwd_phase2local_stage_phase
 from megatron.spiral.debug import spiral_print
 from .spipe_ckpt_schedule import CkptSendRecvType
 
@@ -17,9 +18,16 @@ Shape = Union[List[int], torch.Size]
 _DEBUG_CKPT_COMMUNICATION = True
 
 
+# Handle for self send/recv
+class NOP_Wait:
+    @staticmethod
+    def wait():
+        pass
+
+
 # TODO (SpiralPipe) Move to spiral_p2p
-@nvtx.annotate("comm_input_ckpt", color="red")
-def comm_input_ckpt(schedule, model, tensor_shape: Shape, dtype: torch.dtype):
+@nvtx.annotate("comm_ckpt", color="darkgreen")
+def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dtype):
     if _DEBUG_CKPT_COMMUNICATION:
         spiral_print(f"comm: {schedule}")
 
@@ -64,6 +72,10 @@ def comm_input_ckpt(schedule, model, tensor_shape: Shape, dtype: torch.dtype):
                     .detach()
                     .requires_grad_()
                 )
+
+                ### TEMP
+                # input_ckpt_ = torch.randn(tensor_shape, dtype=dtype, device=torch.cuda.current_device(), requires_grad=True)
+                ###
                 assert (
                     input_ckpt_.requires_grad
                 ), "Input ckpt must require grad before feeding to BWD"
@@ -99,6 +111,11 @@ def comm_input_ckpt(schedule, model, tensor_shape: Shape, dtype: torch.dtype):
                     .module[local_phase_id]
                     .spiral_input_tensors.popleft()
                 )
+
+                ### TEMP
+                # tensor_sends.append(torch.randn(tensor_shape, dtype=dtype, device=torch.cuda.current_device()))
+                ###
+
                 send_ranks.append(op.rank)
             send_idx += 1
         else:
@@ -117,15 +134,22 @@ def comm_input_ckpt(schedule, model, tensor_shape: Shape, dtype: torch.dtype):
             recv_ranks=recv_ranks if len(recv_ranks) > 0 else None,
             tensor_shape=tensor_shape,
             group=mpu.get_spiral_input_tensor_ckpt_group(),
-            batch_p2p_comm=True,
+            batch_p2p_comm=False,
             wait_on_reqs=False,
             dtype=dtype,
         )
+        reqs = reqs[len(send_ranks):] if mpu.get_pipeline_model_parallel_rank() % 2 == 0 else reqs[:len(recv_ranks)]
 
     for recv_idx, recv_val in zip(insert_idx_to_recvs, insert_value_to_recvs):
         if recvs is None:
             recvs = []
         recvs.insert(recv_idx, recv_val)
+        reqs.insert(recv_idx, NOP_Wait)
 
-    return recvs, reqs
-# end comm_input_ckpt()
+    if recvs and len(recvs) > 0:
+        for _recv, _req, _op in zip(recvs, reqs, filter(lambda op: op.comm_type == CkptSendRecvType.RECV, schedule)):
+            bid, _ = bwd_phase2local_stage_phase(_op.phase_id)
+            ckpt_recvs[bid].append((_recv, [_req]))
+
+    if _DEBUG_CKPT_COMMUNICATION:
+        spiral_print(f"comm: {schedule} => done")

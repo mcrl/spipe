@@ -24,7 +24,7 @@ from megatron.spiral.utils import is_spiral_param
 from megatron.spiral.generic import ContextManagers
 import megatron.spiral.build_state as sbs
 
-from .spipe_ckpt_communication import comm_input_ckpt
+from .spipe_ckpt_communication import comm_ckpt
 from .spipe_ckpt_schedule import CkptSendRecvType, CkptSendRecvSchedule, CkptSendRecvOp
 from .spipe_communication import comm_activation, comm_activation_grad
 
@@ -146,20 +146,14 @@ def spipe_schedule(
             empty_input_tensors()
 
     # Init input ckpt send recv schedule
-    # ckpt_send_recv_schedule = None  # placeholder
-    # if not forward_only:
-    #     ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches)
+    ckpt_send_recv_schedule = None  # placeholder
+    if not forward_only:
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches)
 
     # Data structures for training
     forward_data_store = []
     recvs: List[Tuple[torch.Tensor, List[Work]]] = []
-
-    #
-    def _skip_fwd_rv(midx):
-        return mpu.is_pipeline_first_stage() and midx < mpu.get_pipeline_model_parallel_world_size() - 1
-
-    def _skip_bwd_sd(midx):
-        return mpu.is_pipeline_first_stage() and midx >= num_microbatches - mpu.get_pipeline_model_parallel_world_size()
+    ckpt_recvs: List[List[Tuple[torch.Tensor, Work]]] = [[] for _ in range(mpu.get_spiral_backward_virtual_size())]
 
     # Event dictionaries. Key is the event tag, thus an event necessarily requires it.
     prefetch_event_queries = {}
@@ -169,8 +163,17 @@ def spipe_schedule(
 
     """ Start training """
 
-    # TODO: nop pre-pipeline non-compute timesteps
-
+    # nop pre-pipeline non-compute timesteps
+    __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
+    for _ in range(__num_pre_pipeline_non_compute_ts):
+        if not forward_only:
+            comm_ckpt(
+                next(ckpt_send_recv_schedule),
+                model,
+                ckpt_recvs,
+                tensor_shape,
+                dtype,
+            )
 
     # TODO: prefetch 1st fwd stage
 
@@ -219,8 +222,6 @@ def spipe_schedule(
 
             spiral_print(f"tin={torch.mean(input_tensor)}")
 
-            # TODO: send input tensor ckpt
-
             # TODO: Get output tensor
             output_tensor = None # TODO
 
@@ -229,6 +230,15 @@ def spipe_schedule(
             spiral_print(f"tout={torch.mean(output_tensor)}")
             ###
 
+            # sdrv ckpt
+            if not forward_only:
+                comm_ckpt(next(ckpt_send_recv_schedule),
+                    model,
+                    ckpt_recvs,
+                    tensor_shape,
+                    dtype,
+                )
+
             # sdrv activation
             comm_activation(
                 output_tensor,
@@ -236,8 +246,8 @@ def spipe_schedule(
                 fwd_stage_id,
                 m_i,
                 num_microbatches,
-                dtype,
                 tensor_shape,
+                dtype,
                 overlap_p2p_comm=overlap_p2p_comm,
                 batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
@@ -277,6 +287,17 @@ def spipe_schedule(
                 spiral_print(f" microbatch {m_i}")
             torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{m_i}]")
 
+            # set input tensor ckpt
+            # NOTE: Must be done in compute stream to avoid error
+            assert len(ckpt_recvs[bwd_stage_id]) > 0, "Missing input tensor ckpt"
+            input_tensor_ckpt, ckpt_reqs = ckpt_recvs[bwd_stage_id].pop(0)
+            for ckpt_req in ckpt_reqs:
+                ckpt_req.wait()
+
+            # TODO: Recomputation
+
+            # TODO: Backward
+
             # set output tensor grad
             output_tensor_grad, reqs = recvs.pop(0)
             for req in reqs:
@@ -291,6 +312,14 @@ def spipe_schedule(
             ###
             # input_tensor_grad = None
 
+            # sdrv ckpt
+            comm_ckpt(next(ckpt_send_recv_schedule),
+                model,
+                ckpt_recvs,
+                tensor_shape,
+                dtype,
+            )
+
             # sdrv activation grad
             comm_activation_grad(
                 input_tensor_grad,
@@ -298,8 +327,8 @@ def spipe_schedule(
                 bwd_stage_id,
                 m_i,
                 num_microbatches,
-                dtype,
                 tensor_shape,
+                dtype,
                 overlap_p2p_comm=overlap_p2p_comm,
                 batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
