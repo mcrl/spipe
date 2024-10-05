@@ -7,10 +7,12 @@ from .init_context import SpiralInitContext, SpiralParamStatus
 from .wrapper_init_context import SpiralWrapperInitContext
 from .generic import ContextManagers
 from .p2p_communication import (
-    recv_input_tensor,
-    send_output_tensor,
-    recv_output_tensor_grad,
-    send_input_tensor_grad,
+    send_next_recv_prev,
+    send_prev_recv_next,
+    send_next,
+    recv_prev,
+    send_prev,
+    recv_next,
 )
 from .schedule import (
     forward_backward_pipelining_with_spiral_remap,

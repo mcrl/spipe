@@ -288,7 +288,6 @@ def bwd_phase2local_stage_phase(global_phase):
     return local_stage, local_phase
 
 
-
 # NOTE (SpiralPipe) currently has no caller
 def destroy_spiral_build_state():
     global _SPIRAL_FORWARD_STAGE_BUILD_PHASE
