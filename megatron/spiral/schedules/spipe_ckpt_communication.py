@@ -7,19 +7,7 @@ import megatron.spiral.build_state as sbs
 import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.core import mpu
 from megatron.spiral.debug import spiral_print
-from megatron.spiral.ckpt_schedule import CkptSendRecvType
-
-
-# Typesimport nvtx
-from typing import List, Union
-
-import torch
-
-import megatron.spiral.build_state as sbs
-import megatron.spiral.p2p_communication as spiral_p2p
-from megatron.core import mpu
-from megatron.spiral.debug import spiral_print
-from megatron.spiral.ckpt_schedule import CkptSendRecvType
+from .spipe_ckpt_schedule import CkptSendRecvType
 
 
 # Types

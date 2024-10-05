@@ -16,14 +16,6 @@ from .schedule import (
     forward_backward_pipelining_with_spiral_remap,
     forward_backward_pipelining_with_spiral,
 )
-from .ckpt_schedule import (
-    CkptSendRecvOp,
-    CkptSendRecvType,
-    CkptSendRecvSchedule,
-)
-from .ckpt_communication import (
-    comm_input_ckpt,
-)
 from .optimizer import (
     SpiralStageOptimizer,
     SpiralStageOptimizerParamScheduler,

@@ -9,7 +9,7 @@ import megatron.spiral.build_state as sbs
 
 
 # Constants
-_USE_ASYNC_CKPT_SDRV = False
+_USE_ASYNC_CKPT_SDRV = True
 
 
 class CkptSendRecvType(Enum):
@@ -69,6 +69,7 @@ class CkptSendRecvSchedule:
             # recv early but wait at the exact timestep to overlap transmission
             self._set_send_schedule_async()
             self._set_recv_schedule_async()
+            self._optimize_schedule_async()
         else:
             # recv and wait at the exact timestep for simplicity
             self._set_recv_schedule()
@@ -148,7 +149,6 @@ class CkptSendRecvSchedule:
                     + sbs.get_spiral_forward_stage_build_phase_size() * pp_rank
                 )
                 for _ in range(self.num_microbatches):
-                    curr_ts += 1
                     for send_phase in range(
                         fwd_phases_start,
                         fwd_phases_start
@@ -160,6 +160,13 @@ class CkptSendRecvSchedule:
                             sbs.get_pp_rank_for_bwd_phase(send_phase),
                         )
                         self.global_schedule[pp_rank][curr_ts].append(_op)
+                    # end for fwd phase
+                    curr_ts += 1
+                # end for microbatch
+
+    def _optimize_schedule_async(self):
+        """Optimizer the schedule by dropping unnecessary send/recv ops."""
+        pass
 
     def __str__(self) -> str:
         _str = ""

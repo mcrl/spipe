@@ -23,9 +23,9 @@ from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_st
 from megatron.spiral.utils import is_spiral_param
 from megatron.spiral.generic import ContextManagers
 import megatron.spiral.build_state as sbs
-from megatron.spiral.ckpt_communication import comm_input_ckpt
-from megatron.spiral.ckpt_schedule import CkptSendRecvType, CkptSendRecvSchedule, CkptSendRecvOp
 
+from .spipe_ckpt_communication import comm_input_ckpt
+from .spipe_ckpt_schedule import CkptSendRecvType, CkptSendRecvSchedule, CkptSendRecvOp
 from .spipe_communication import comm_activation, comm_activation_grad
 
 # Types
