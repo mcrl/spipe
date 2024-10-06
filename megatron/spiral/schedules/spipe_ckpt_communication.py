@@ -4,7 +4,6 @@ from typing import List, Union
 import torch
 
 import megatron.spiral.build_state as sbs
-import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.core import mpu
 from megatron.spiral.build_state import bwd_phase2local_stage_phase
 from megatron.spiral.debug import spiral_print
@@ -66,30 +65,20 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                 # can perform fwd and bwd of the same phase. Re-computation using this tensor will lead to duplicated computation
                 # graph being constructed. So, we currently perform the original FWD in torch.no_grad() mode, and then recompute
                 # in BWD without torch.no_grad(). Another solution may exist.
-                # input_ckpt_ = (
-                #     model[local_stage_id]
-                #     .module[local_phase_id]
-                #     .spiral_input_tensors.popleft()
-                #     .detach()
-                #     .requires_grad_()
-                # )
-
-                ### TEMP
-                input_ckpt_ = torch.randn(
-                    tensor_shape,
-                    dtype=dtype,
-                    device=torch.cuda.current_device(),
-                    requires_grad=True,
+                input_ckpt_ = (
+                    model[local_stage_id]
+                    .module[local_phase_id]
+                    .spiral_input_tensors.popleft()
+                    .detach()
+                    .requires_grad_()
                 )
-                ###
+
                 assert (
                     input_ckpt_.requires_grad
                 ), "Input ckpt must require grad before feeding to BWD"
                 recvs.append(input_ckpt_)
                 reqs.append(NOP_Wait)
 
-                if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(f"  ckptout = {torch.mean(input_ckpt_)}")
             else:
                 if _DEBUG_CKPT_COMMUNICATION:
                     spiral_print(
@@ -123,19 +112,11 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                 reqs.append(NOP_Wait)
             else:
                 if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(
-                        _prefix
-                        + " Send to other rank => pop ckpt"
-                    )
-                # tensor_sends.append(
-                #     model[local_stage_id]
-                #     .module[local_phase_id]
-                #     .spiral_input_tensors.popleft()
-                # )
-
-                ### TEMP
-                t = torch.randn(
-                    tensor_shape, dtype=dtype, device=torch.cuda.current_device()
+                    spiral_print(_prefix + " Send to other rank => pop ckpt")
+                input_ckpt_ = (
+                    model[local_stage_id]
+                    .module[local_phase_id]
+                    .spiral_input_tensors.popleft()
                 )
                 dst = (
                     mpu.translate_pp_rank_to_cm_rank(op.rank)
@@ -144,16 +125,15 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                 )
                 reqs.append(
                     torch.distributed.isend(
-                        t, dst, group=mpu.get_spiral_input_tensor_ckpt_group()
+                        input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_group()
                     )
                 )
-                ###
-                if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(f"  ckptout = {torch.mean(t)}")
+
         else:
             raise RuntimeError(f"Invalid comm type {op.comm_type}")
 
     if recvs and len(recvs) > 0:
+        # zip recv with corresponding req => append to ckpt_recvs
         for recv, (req, op) in zip(
             recvs,
             filter(
