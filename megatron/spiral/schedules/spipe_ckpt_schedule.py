@@ -69,7 +69,8 @@ class CkptSendRecvSchedule:
             # recv early but wait at the exact timestep to overlap transmission
             self._set_send_schedule_async()
             self._set_recv_schedule_async()
-            self._optimize_schedule_async()
+            self._optimize_schedule()
+            self._resolve_p2p_hang()
         else:
             # recv and wait at the exact timestep for simplicity
             self._set_recv_schedule()
@@ -164,20 +165,50 @@ class CkptSendRecvSchedule:
                     curr_ts += 1
                 # end for microbatch
 
-    def _optimize_schedule_async(self):
-        """Optimizer the schedule by dropping unnecessary send/recv ops.
+    def _optimize_schedule(self):
+        """Optimize the schedule by dropping unnecessary send/recv ops.
 
         e.g., if bwd stage i = [bp2, bp1, bp0], only send/recv ops for bp2 are required.
         """
-        _unoptimized_schedule = self.global_schedule
         self.global_schedule = [
             [
                 [op for op in ts_schedule if (op.phase_id + 1) % sbs.get_spiral_backward_stage_build_phase_size() == 0]
                 for ts_schedule in pprank_schedule
             ]
-            for pprank_schedule in _unoptimized_schedule
+            for pprank_schedule in self.global_schedule
         ]
 
+    def _resolve_p2p_hang(self):
+        """Resolve P2P hang (when using p2p_ops) by jointly sorting timestep schedule of ranks by isend-irecv pairs.
+
+        e.g., timestep 5 of gpu=3, #f=2, #b=3, #micro=3
+        Before) Hangs since irecvs of corresponding isends are not called
+          rank 0                      rank 1                      rank 2
+            isend->rank 1(phase 9)      isend->rank 2(phase 13)     isend->rank 1(phase 15)
+            irecv<-rank 2(phase 17)     irecv<-rank 0(phase 9)      isend->rank 0(phase 17)
+                                        irecv<-rank 2(phase 15)     irecv<-rank 1(phase 13)
+        After) Hangs resolved
+          rank 0                      rank 1                      rank 2
+            isend->rank 1(phase 9)      irecv<-rank 0(phase 9)
+                                        isend->rank 2(phase 13)     irecv<-rank 1(phase 13)
+                                        irecv<-rank 2(phase 15)     isend->rank 1(phase 15)
+            irecv<-rank 2(phase 17)                                 isend->rank 0(phase 17)
+        """
+        _unoptimized_schedule = self.global_schedule
+        self.global_schedule = [
+            [[] for _ in range(self.total_ts)]
+            for _ in range(mpu.get_pipeline_model_parallel_world_size())
+        ]
+
+        for ts, ts_schedules in enumerate(zip(*_unoptimized_schedule)):
+            _merged = [
+                (op, pp_rank)
+                for pp_rank, ts_schedule in enumerate(ts_schedules)
+                for op in ts_schedule
+            ]
+            _merged.sort(key=lambda tup: tup[0].phase_id)
+            for op, pp_rank in _merged:
+                self.global_schedule[pp_rank][ts].append(op)
 
     def __str__(self) -> str:
         _str = ""
