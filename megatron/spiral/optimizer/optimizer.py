@@ -119,19 +119,6 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
 
 class SpiralFP32Optimizer(FP32Optimizer):
     @torch.no_grad()
-    def step(self, args, timers, **inner_step_kwargs):
-
-        spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
-        spiral_offload_grad_ev_long = inner_step_kwargs.get("spiral_offload_grad_ev_long", -1)
-        spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
-        if spiral_offload_grad_ev is not None:
-            spiral_offload_grad_ev.synchronize()
-
-        if hasattr(self.optimizer, "set_event_long"):
-            self.optimizer.set_event_long(spiral_offload_grad_ev_long)
-
-        step_ret = super().step(args, timers)
-
-        if spiral_optimizer_thread_queue is not None:
-            spiral_optimizer_thread_queue.put(step_ret)
-        return step_ret
+    def step(self, args, timers, offload_grad_ev_long):
+        self.optimizer.set_event_long(offload_grad_ev_long)
+        self.optimizer.step()

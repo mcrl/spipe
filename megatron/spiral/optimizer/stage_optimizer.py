@@ -1,14 +1,10 @@
-from queue import Queue
 from collections import deque
-import threading
-
 from megatron.spiral.initialize import get_thunder_cuda_manager
 
 class SpiralStageOptimizer:
 
     def __init__(self, optimizers, *args, **kwargs):
         self.optimizer_list = optimizers  # do not change attr name
-        self.optimizer_threads = []
 
     # Required for checkpointing
     def state_dict(self):
@@ -47,29 +43,15 @@ class SpiralStageOptimizer:
 
     def step(self, idx, event_query, args, timers):
         event = get_thunder_cuda_manager().get_event(event_query)
-        _optimizer_thread_queue = Queue()
-
-        inner_step_kwargs = {}
-        inner_step_kwargs["spiral_offload_grad_ev"] = event
-        inner_step_kwargs["spiral_offload_grad_ev_long"] = event.cuda_event
-        inner_step_kwargs["spiral_optimizer_thread_queue"] = _optimizer_thread_queue
-
-        op = threading.Thread(
-            target=self.optimizer_list[idx].step,
-            args=(args, timers),
-            kwargs=inner_step_kwargs,
-        )
-        op.start()
-        self.optimizer_threads.append((op, _optimizer_thread_queue))
+        self.optimizer_list[idx].step(args, timers, event.cuda_event)
 
     def join_step(self):
         spiral_stage_optimizer_step_returns = deque()
-
-        for op, q in self.optimizer_threads:
-            op.join()
-            spiral_stage_optimizer_step_returns.appendleft(q.get())
-        
-        self.optimizer_threads = []
+        for optimizer in reversed(self.optimizer_list):
+            # TODO: need to grad_scaler update
+            found_inf = optimizer.optimizer.sync()
+            spiral_stage_optimizer_step_returns.appendleft((True, None, None))
+            
         return self._process_step_returns(spiral_stage_optimizer_step_returns)
 
     def _process_step_returns(self, step_rets: list):
