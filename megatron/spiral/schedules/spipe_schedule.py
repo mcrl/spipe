@@ -148,7 +148,7 @@ def spipe_schedule(
     # Init input ckpt send recv schedule
     ckpt_send_recv_schedule = None  # placeholder
     if not forward_only:
-        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches)
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches)
 
     # Data structures for training
     forward_data_store = []
@@ -342,7 +342,6 @@ def spipe_schedule(
 
     ### TEMP CODE FOR JUST CHECK
     spiral_print("SpiralPipe schedule finished")
-    exit(0)
     ###
 
     _cleanup()

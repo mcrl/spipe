@@ -24,7 +24,21 @@ class CkptSendRecvOp:
     rank: int
 
 
-class CkptSendRecvSchedule:
+class CkptSendRecvScheduleMeta(type):
+    """CkptSendRecvSchedule cache with num_microbatches as key."""
+
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        num_microbatches = kwargs.get("num_microbatches", get_num_microbatches())
+        if num_microbatches not in cls._instances:
+            cls._instances[num_microbatches] = super().__call__(*args, **kwargs)
+        _ins = cls._instances[num_microbatches]
+        setattr(_ins, "_schedule_generator", _ins._generator())
+        return _ins
+
+
+class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
     """A schedule for sending and receiving input tensor checkpoints.
 
     Construct global schedule for all timestep of all rank.
@@ -46,9 +60,7 @@ class CkptSendRecvSchedule:
 
     """
 
-    def __init__(self, num_microbatches: Optional[int]):
-        if num_microbatches is None:
-            num_microbatches = get_num_microbatches()
+    def __init__(self, num_microbatches = None):
         assert (
             num_microbatches >= mpu.get_pipeline_model_parallel_world_size()
         ), "CkptSendRecvSchedule requires num_microbatches >= pipeline model parallel world size"
@@ -75,7 +87,6 @@ class CkptSendRecvSchedule:
             # recv and wait at the exact timestep for simplicity
             self._set_recv_schedule()
             self._set_send_schedule()
-        self._schedule_generator = self._generator()
 
     def _set_recv_schedule(self):
         for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
