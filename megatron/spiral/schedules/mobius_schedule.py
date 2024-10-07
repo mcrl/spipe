@@ -251,7 +251,7 @@ def mobius_schedule(
                     batch_p2p_comm=batch_p2p_comm,
                     timers=timers,
                 )
-                input_tensor, recv_reqs = recvs.pop(0)
+            input_tensor, recv_reqs = recvs.pop(0)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 # NOTE (SpiralPipe) Creating a new iterator with _data results in deep copy of _data. So, calling detach_variable() as in backward() of CheckpointFunction (random.py) is not necessary. However, we must note that a redundant data storage is created here, while a detached tensor shares the underlying storage with the original. https://pytorch.org/docs/stable/generated/torch.Tensor.detach.html
@@ -430,7 +430,7 @@ def mobius_schedule(
                     batch_p2p_comm=batch_p2p_comm,
                     timers=timers,
                 )
-                output_tensor_grad, recv_reqs = recvs.pop(0)
+            output_tensor_grad, recv_reqs = recvs.pop(0)
 
             # set input tensor ckpt
             input_tensor_ckpt = (
