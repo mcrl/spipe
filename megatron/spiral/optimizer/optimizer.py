@@ -4,7 +4,8 @@ import warnings
 import nvtx
 
 from megatron.core import tensor_parallel
-from megatron.optimizer.optimizer import MegatronOptimizer, Float16OptimizerWithFloat16Params, FP32Optimizer
+from megatron.optimizer.optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
+from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
 
 
 class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
@@ -29,50 +30,51 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
         self.fp32_from_float16_groups = []
         self.fp32_from_fp32_groups = []
 
-        # For all the groups in the original optimizer:
-        for param_group in self.optimizer.param_groups:
-            float16_params_this_group = []
-            fp32_params_this_group = []
-            fp32_from_float16_params_this_group = []
-            # For all the parameters in this group:
-            for i, param in enumerate(param_group['params']):
-                # NOTE (SpiralPipe) cpu params do not need to require grad
+        if type(self.optimizer) != SpiralCPUAdam:
+            # For all the groups in the original optimizer:
+            for param_group in self.optimizer.param_groups:
+                float16_params_this_group = []
+                fp32_params_this_group = []
+                fp32_from_float16_params_this_group = []
+                # For all the parameters in this group:
+                for i, param in enumerate(param_group['params']):
+                    # NOTE (SpiralPipe) cpu params do not need to require grad
 
-                # float16 params:
-                if param.type() in ['torch.HalfTensor',
-                                    'torch.BFloat16Tensor']:
-                    float16_params_this_group.append(param)
-                    # Create a copy
-                    main_param = param.detach().clone().float()
-                    # Copy tensor model parallel attributes.
-                    tensor_parallel.copy_tensor_model_parallel_attributes(main_param,
-                                                                        param)
-                    if hasattr(param, 'shared'):
-                        main_param.shared = param.shared
-                    # Replace the optimizer params with the new fp32 copy.
-                    param_group['params'][i] = main_param
+                    # float16 params:
+                    if param.type() in ['torch.HalfTensor',
+                                        'torch.BFloat16Tensor']:
+                        float16_params_this_group.append(param)
+                        # Create a copy
+                        main_param = param.detach().clone().float()
+                        # Copy tensor model parallel attributes.
+                        tensor_parallel.copy_tensor_model_parallel_attributes(main_param,
+                                                                            param)
+                        if hasattr(param, 'shared'):
+                            main_param.shared = param.shared
+                        # Replace the optimizer params with the new fp32 copy.
+                        param_group['params'][i] = main_param
 
-                    fp32_from_float16_params_this_group.append(main_param)
-                    # Reset existing state dict key to the new main param.
-                    if param in self.optimizer.state:
-                        self.optimizer.state[main_param] \
-                            = self.optimizer.state.pop(param)
-                # fp32 params.
-                elif param.type() == 'torch.FloatTensor':
-                    fp32_params_this_group.append(param)
-                    param_group['params'][i] = param
+                        fp32_from_float16_params_this_group.append(main_param)
+                        # Reset existing state dict key to the new main param.
+                        if param in self.optimizer.state:
+                            self.optimizer.state[main_param] \
+                                = self.optimizer.state.pop(param)
+                    # fp32 params.
+                    elif param.type() == 'torch.FloatTensor':
+                        fp32_params_this_group.append(param)
+                        param_group['params'][i] = param
 
-                else:
-                    raise TypeError('Wrapped parameters must be one of '
-                                    'torch.FloatTensor,  '
-                                    'torch.HalfTensor, or '
-                                    'torch.BFloat16Tensor. '
-                                    'Received {}'.format(param.type()))
+                    else:
+                        raise TypeError('Wrapped parameters must be one of '
+                                        'torch.FloatTensor,  '
+                                        'torch.HalfTensor, or '
+                                        'torch.BFloat16Tensor. '
+                                        'Received {}'.format(param.type()))
 
-            self.float16_groups.append(float16_params_this_group)
-            self.fp32_from_float16_groups.append(
-                fp32_from_float16_params_this_group)
-            self.fp32_from_fp32_groups.append(fp32_params_this_group)
+                self.float16_groups.append(float16_params_this_group)
+                self.fp32_from_float16_groups.append(
+                    fp32_from_float16_params_this_group)
+                self.fp32_from_fp32_groups.append(fp32_params_this_group)
 
     def _unscale_main_grads_and_check_for_nan(self):
 
@@ -99,26 +101,22 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
         return found_inf_flag
 
     @torch.no_grad()
-    def step(self, args, timers, **inner_step_kwargs):
-
-        spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
-        spiral_offload_grad_ev_long = inner_step_kwargs.get("spiral_offload_grad_ev_long", -1)
-        spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
-        if spiral_offload_grad_ev is not None:
-            spiral_offload_grad_ev.synchronize()
-
-        if hasattr(self.optimizer, "set_event_long"):
-            self.optimizer.set_event_long(spiral_offload_grad_ev_long)
-
-        step_ret = super().step(args, timers)
-
-        if spiral_optimizer_thread_queue is not None:
-            spiral_optimizer_thread_queue.put(step_ret)
-        return step_ret
+    def step(self, args, timers, offload_grad_ev_long=-1):
+        if type(self.optimizer) != SpiralCPUAdam:
+            return super().step(args, timers)
+        else:
+            self.optimizer.set_grad_scaler(self.grad_scaler)
+            self.optimizer.set_event_long(offload_grad_ev_long)
+            self.optimizer.step()
+            return 0
 
 
 class SpiralFP32Optimizer(FP32Optimizer):
     @torch.no_grad()
-    def step(self, args, timers, offload_grad_ev_long):
-        self.optimizer.set_event_long(offload_grad_ev_long)
-        self.optimizer.step()
+    def step(self, args, timers, offload_grad_ev_long=-1):
+        if type(self.optimizer) != SpiralCPUAdam:
+            return super().step(args, timers)
+        else:
+            self.optimizer.set_event_long(offload_grad_ev_long)
+            self.optimizer.step()
+            return 0
