@@ -61,9 +61,11 @@ def comm_activation(
             # @color lightgreen
             # (last fwd stage & !last pipeline stage) & (last microbatch) -> send next
             case_color = CaseColor.LightGreen
-        elif mid >= mpu.get_pipeline_model_parallel_world_size() - 1:
+        elif (mid >= mpu.get_pipeline_model_parallel_world_size() - 1) and (
+            mpu.get_pipeline_model_parallel_rank() == 0
+        ):
             # @color pink
-            # (last fwd stage & !last pipeline stage) & (microbatch idx >= ppsize-1) & !@lightgreen -> send next
+            # (last fwd stage & !last pipeline stage) & (microbatch idx >= ppsize-1) & !@lightgreen & first pipeline rank -> send next
             assert mid < nm - 1
             case_color = CaseColor.Pink
         else:
@@ -152,9 +154,12 @@ def comm_activation_grad(
             # @color lightgreen
             # (first bwd stage & !first pipeline stage) & (last microbatch) -> send prev
             case_color = CaseColor.LightGreen
-        elif mid >= mpu.get_pipeline_model_parallel_world_size() - 1:
+        elif (mid >= mpu.get_pipeline_model_parallel_world_size() - 1) and (
+            mpu.get_pipeline_model_parallel_rank()
+            == mpu.get_pipeline_model_parallel_world_size() - 1
+        ):
             # @color pink
-            # (first bwd stage & !first pipeline stage) & (microbatch idx >= ppsize-1) & !@lightgreen -> send prev
+            # (first bwd stage & !first pipeline stage) & (microbatch idx >= ppsize-1) & !@lightgreen & last pipeline rank -> send prev
             assert mid < nm - 1
             case_color = CaseColor.Pink
         else:
@@ -223,7 +228,8 @@ def fwd_init_recvs(
     timers: Callable = None,
 ):
     if mpu.is_pipeline_first_stage():
-        recvs.append((None, [NOP_Wait]))
+        # Must insert to head because received tensors can precede otherwise
+        recvs.insert(0, (None, [NOP_Wait]))
     elif fid == 0 and mid == 0:
         recv, reqs = spiral_p2p.recv_prev(
             tensor_shape,
@@ -232,7 +238,7 @@ def fwd_init_recvs(
             batch_p2p_comm=batch_p2p_comm,
             timers=timers,
         )
-        recvs.append((recv, reqs))
+        recvs.insert(0, (recv, reqs))
 
 
 def bwd_init_recvs(
@@ -247,7 +253,8 @@ def bwd_init_recvs(
     timers: Callable = None,
 ):
     if mpu.is_pipeline_last_stage():
-        recvs.append((None, [NOP_Wait]))
+        # Must insert to head because received tensors can precede otherwise
+        recvs.insert(0, (None, [NOP_Wait]))
     elif bid == mpu.get_spiral_backward_virtual_size() - 1 and mid == 0:
         recv, reqs = spiral_p2p.recv_next(
             tensor_shape,
@@ -256,4 +263,4 @@ def bwd_init_recvs(
             batch_p2p_comm=batch_p2p_comm,
             timers=timers,
         )
-        recvs.append((recv, reqs))
+        recvs.insert(0, (recv, reqs))
