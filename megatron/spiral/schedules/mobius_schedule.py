@@ -16,11 +16,15 @@ from megatron.core.utils import get_model_type, get_attr_wrapped_model
 from megatron.core.pipeline_parallel import forward_step, backward_step
 from megatron.spiral.initialize import get_thunder_cuda_manager
 from megatron.spiral.debug import spiral_print
-import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
 from megatron.spiral.generic import ContextManagers
 
-from .mobius_communication import comm_activation, comm_activation_grad, fwd_init_recvs, bwd_init_recvs
+from .mobius_communication import (
+    comm_activation,
+    comm_activation_grad,
+    fwd_init_recvs,
+    bwd_init_recvs,
+)
 
 
 # Types
@@ -318,6 +322,7 @@ def mobius_schedule(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
+            # sdrv activation
             comm_activation(
                 output_tensor,
                 recvs,
@@ -510,6 +515,7 @@ def mobius_schedule(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
+            # sdrv activation grad
             comm_activation_grad(
                 input_tensor_grad,
                 recvs,
