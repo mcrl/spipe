@@ -20,7 +20,7 @@ import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
 from megatron.spiral.generic import ContextManagers
 
-from .mobius_communication import comm_activation, comm_activation_grad
+from .mobius_communication import comm_activation, comm_activation_grad, fwd_init_recvs, bwd_init_recvs
 
 
 # Types
@@ -240,17 +240,17 @@ def mobius_schedule(
             torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{m_i}]")
 
             # set input tensor
-            if mpu.is_pipeline_first_stage():
-                input_tensor = None
-            elif fwd_stage_id == 0 and m_i == 0:
-                input_tensor, recv_reqs = spiral_p2p.recv_prev(
+            fwd_init_recvs(
+                recvs,
+                fwd_stage_id,
+                m_i,
+                num_microbatches,
+                dtype,
                     tensor_shape,
-                    dtype,
                     overlap_p2p_comm=overlap_p2p_comm,
                     batch_p2p_comm=batch_p2p_comm,
                     timers=timers,
                 )
-            else:
                 input_tensor, recv_reqs = recvs.pop(0)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
@@ -419,17 +419,17 @@ def mobius_schedule(
             torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{m_i}]")
 
             # set output tensor grad
-            if mpu.is_pipeline_last_stage():
-                output_tensor_grad = None
-            elif bwd_stage_id == mpu.get_spiral_backward_virtual_size() - 1 and m_i == 0:
-                output_tensor_grad, recv_reqs = spiral_p2p.recv_next(
+            bwd_init_recvs(
+                recvs,
+                bwd_stage_id,
+                m_i,
+                num_microbatches,
+                dtype,
                     tensor_shape,
-                    dtype,
                     overlap_p2p_comm=overlap_p2p_comm,
                     batch_p2p_comm=batch_p2p_comm,
                     timers=timers,
                 )
-            else:
                 output_tensor_grad, recv_reqs = recvs.pop(0)
 
             # set input tensor ckpt

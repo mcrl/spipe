@@ -12,6 +12,13 @@ import megatron.spiral.p2p_communication as spiral_p2p
 Shape = Union[List[int], torch.Size]
 
 
+# Handle for nop
+class NOP_Wait:
+    @staticmethod
+    def wait():
+        pass
+
+
 class CaseColor(Enum):
     LightGreen = 1
     Green = 2
@@ -202,3 +209,51 @@ def comm_activation_grad(
     else:
         assert case_color == CaseColor.Green, f"Invalid case_color: {case_color}"
         pass
+
+
+def fwd_init_recvs(
+    recvs: List[Tuple[torch.Tensor, List[Work]]],
+    fid: int,
+    mid: int,
+    nm: int,
+    dtype: torch.dtype,
+    tensor_shape: Shape,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = False,
+    timers: Callable = None,
+):
+    if mpu.is_pipeline_first_stage():
+        recvs.append((None, [NOP_Wait]))
+    elif fid == 0 and mid == 0:
+        recv, reqs = spiral_p2p.recv_prev(
+            tensor_shape,
+            dtype,
+            overlap_p2p_comm=overlap_p2p_comm,
+            batch_p2p_comm=batch_p2p_comm,
+            timers=timers,
+        )
+        recvs.append((recv, reqs))
+
+
+def bwd_init_recvs(
+    recvs: List[Tuple[torch.Tensor, List[Work]]],
+    bid: int,
+    mid: int,
+    nm: int,
+    dtype: torch.dtype,
+    tensor_shape: Shape,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = False,
+    timers: Callable = None,
+):
+    if mpu.is_pipeline_last_stage():
+        recvs.append((None, [NOP_Wait]))
+    elif bid == mpu.get_spiral_backward_virtual_size() - 1 and mid == 0:
+        recv, reqs = spiral_p2p.recv_next(
+            tensor_shape,
+            dtype,
+            overlap_p2p_comm=overlap_p2p_comm,
+            batch_p2p_comm=batch_p2p_comm,
+            timers=timers,
+        )
+        recvs.append((recv, reqs))
