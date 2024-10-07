@@ -127,11 +127,10 @@ def spipe_schedule(
         )
 
     offload_grad_after_bwd_stage = get_args().spiral_overlap_offload_grad
-    optimize_after_bwd_stage = False
-    if offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer:
+    optimize_after_bwd_stage = offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer
+    if get_args().spiral_stage_optimizer:
         assert "spiral_stage_optimizer" in kwargs
         assert "spiral_grad_scaler" in kwargs
-        optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
 
@@ -470,12 +469,13 @@ def spipe_schedule(
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
                 _wait_reqs(recv_reqs)
 
-                if optimize_after_bwd_stage:
+                if get_args().spiral_stage_optimizer:
                     # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
                     # (same as optimizer_list in SpiralStageOptimizer)
                     _grad_scaler = grad_scaler[bwd_stage_id]
                 else:
                     _grad_scaler = grad_scaler
+
                 input_tensor_grad = backward_step(
                     _grad_scaler,
                     input_tensor_ckpt,

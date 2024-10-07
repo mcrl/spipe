@@ -42,8 +42,10 @@ class SpiralStageOptimizer:
         return self.optimizer_list[opt_ty_idx].get_loss_scale()
 
     def step(self, idx, event_query, args, timers):
-        event = get_thunder_cuda_manager().get_event(event_query)
-        self.optimizer_list[idx].step(args, timers, event.cuda_event)
+        event_long = -1
+        if event_query != None:
+            event_long = get_thunder_cuda_manager().get_event(event_query).cuda_event
+        self.optimizer_list[idx].step(args, timers, event_long)
 
     def join_step(self):
         spiral_stage_optimizer_step_returns = deque()

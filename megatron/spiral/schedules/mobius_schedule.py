@@ -127,11 +127,10 @@ def mobius_schedule(
         )
 
     offload_grad_after_bwd_stage = get_args().spiral_overlap_offload_grad
-    optimize_after_bwd_stage = False
-    if offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer:
+    optimize_after_bwd_stage = offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer
+    if get_args().spiral_stage_optimizer:
         assert "spiral_stage_optimizer" in kwargs
         assert "spiral_grad_scaler" in kwargs
-        optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
         grad_scaler = kwargs["spiral_grad_scaler"]
 
@@ -465,7 +464,7 @@ def mobius_schedule(
                         assert isinstance(output_tensor, torch.Tensor) and output_tensor.numel() == 1
                     assert output_tensor.requires_grad
 
-                if optimize_after_bwd_stage:
+                if get_args().spiral_stage_optimizer:
                     # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
                     # (same as optimizer_list in SpiralStageOptimizer)
                     _grad_scaler = grad_scaler[bwd_stage_id]

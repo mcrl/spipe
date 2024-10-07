@@ -830,7 +830,7 @@ def train_step(forward_step_func, data_iterator,
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
 
     kwargs = {}
-    if args.spiral_overlap_offload_grad and args.spiral_stage_optimizer:
+    if args.spiral_stage_optimizer:
         # Performs grad offload and optimizer step overlapped with backward
         kwargs["spiral_stage_optimizer"] = optimizer
         kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
@@ -900,13 +900,7 @@ def train_step(forward_step_func, data_iterator,
         else:
             # Unoverlapped paramter update with SpiralStageOptimizer
             for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-                inner_step_kwargs = {} # empty without events
-                update_successful, grad_norm, num_zeros_in_grad = optimizer[
-                    bwd_stage_id
-                ].step(get_args(), get_timers(), **inner_step_kwargs)
-                kwargs["spiral_stage_optimizer_step_returns"].appendleft(
-                    (update_successful, grad_norm, num_zeros_in_grad)
-                )
+                optimizer.step(bwd_stage_id, None, get_args(), get_timers())
             # process step returns
             update_successful, grad_norm, num_zeros_in_grad = optimizer.join_step()
 
