@@ -833,7 +833,6 @@ def train_step(forward_step_func, data_iterator,
     if args.spiral_stage_optimizer:
         # Performs grad offload and optimizer step overlapped with backward
         kwargs["spiral_stage_optimizer"] = optimizer
-        kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
 
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,

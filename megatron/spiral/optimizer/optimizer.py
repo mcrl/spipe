@@ -105,7 +105,7 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
         if type(self.optimizer) != SpiralCPUAdam:
             return super().step(args, timers)
         else:
-            self.optimizer.set_grad_scaler(self.grad_scaler)
+            # self.optimizer.set_grad_scaler(self.grad_scaler)
             self.optimizer.set_event_long(offload_grad_ev_long)
             self.optimizer.step()
             return 0

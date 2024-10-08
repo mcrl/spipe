@@ -5,6 +5,7 @@ class SpiralStageOptimizer:
 
     def __init__(self, optimizers, *args, **kwargs):
         self.optimizer_list = optimizers  # do not change attr name
+        self.grad_scaler = optimizers[0].grad_scaler
 
     # Required for checkpointing
     def state_dict(self):
@@ -38,22 +39,29 @@ class SpiralStageOptimizer:
 
     param_groups = property(_get_param_groups)
 
-    def get_loss_scale(self, opt_ty_idx=0):
-        return self.optimizer_list[opt_ty_idx].get_loss_scale()
+    def get_loss_scale(self):
+        return self.grad_scaler.scale
+    
+    def scale_loss(self, loss):
+        """Simple scaling."""
+        return self.get_loss_scale() * loss
 
     def step(self, idx, event_query, args, timers):
         event_long = -1
         if event_query != None:
             event_long = get_thunder_cuda_manager().get_event(event_query).cuda_event
+        
+        self.optimizer_list[idx].optimizer.set_grad_scaler(self.grad_scaler)
         self.optimizer_list[idx].step(args, timers, event_long)
 
     def join_step(self):
         spiral_stage_optimizer_step_returns = deque()
         for optimizer in reversed(self.optimizer_list):
-            # TODO: need to grad_scaler update
             found_inf = optimizer.optimizer.sync()
-            spiral_stage_optimizer_step_returns.appendleft((True, None, None))
-            
+            if found_inf and self.grad_scaler != None:
+                self.grad_scaler.update(found_inf > 0)
+            spiral_stage_optimizer_step_returns.appendleft((found_inf == 0, None, None))
+
         return self._process_step_returns(spiral_stage_optimizer_step_returns)
 
     def _process_step_returns(self, step_rets: list):

@@ -130,9 +130,7 @@ def mobius_schedule(
     optimize_after_bwd_stage = offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer
     if get_args().spiral_stage_optimizer:
         assert "spiral_stage_optimizer" in kwargs
-        assert "spiral_grad_scaler" in kwargs
         optimizer = kwargs["spiral_stage_optimizer"]
-        grad_scaler = kwargs["spiral_grad_scaler"]
 
     def _cleanup():
         # cleanup checkpointed input tensors and output tensors
@@ -464,19 +462,12 @@ def mobius_schedule(
                         assert isinstance(output_tensor, torch.Tensor) and output_tensor.numel() == 1
                     assert output_tensor.requires_grad
 
-                if get_args().spiral_stage_optimizer:
-                    # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
-                    # (same as optimizer_list in SpiralStageOptimizer)
-                    _grad_scaler = grad_scaler[bwd_stage_id]
-                else:
-                    _grad_scaler = grad_scaler
-
                 # wait for recv output tensor grad
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
                 _wait_reqs(recv_reqs)
 
                 input_tensor_grad = backward_step(
-                    _grad_scaler,
+                    grad_scaler,
                     input_tensor_ckpt,
                     output_tensor,
                     output_tensor_grad,
