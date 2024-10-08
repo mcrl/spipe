@@ -167,18 +167,6 @@ def spipe_schedule(
 
     """ Start training """
 
-    # nop pre-pipeline non-compute timesteps
-    __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
-    for _ in range(__num_pre_pipeline_non_compute_ts):
-        if not forward_only:
-            comm_ckpt(
-                next(ckpt_send_recv_schedule),
-                model,
-                ckpt_recvs,
-                tensor_shape,
-                dtype,
-            )
-
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
         model[0].spiral_fetch(non_blocking=True)
@@ -193,6 +181,19 @@ def spipe_schedule(
         if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
             raise RuntimeError("record_event failed")
         prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
+
+    # nop pre-pipeline non-compute timesteps
+    __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
+    with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
+        for _ in range(__num_pre_pipeline_non_compute_ts):
+            if not forward_only:
+                comm_ckpt(
+                    next(ckpt_send_recv_schedule),
+                    model,
+                    ckpt_recvs,
+                    tensor_shape,
+                    dtype,
+                )
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
@@ -442,7 +443,6 @@ def spipe_schedule(
             output_tensor_grad, recv_reqs = recvs.pop(0)
 
             # set input tensor ckpt
-            # NOTE: Must be done in compute stream to avoid error
             assert len(ckpt_recvs[bwd_stage_id]) > 0, "Missing input tensor ckpt"
             input_tensor_ckpt, ckpt_reqs = ckpt_recvs[bwd_stage_id].pop(0)
 
