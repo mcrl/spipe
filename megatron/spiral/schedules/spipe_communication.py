@@ -37,6 +37,10 @@ def comm_activation(
     skip_recv = (
         mpu.is_pipeline_first_stage()
         and mid < mpu.get_pipeline_model_parallel_world_size() - 1
+    ) or (
+        mpu.get_pipeline_model_parallel_rank() == 0
+        and fid == mpu.get_spiral_forward_virtual_size() - 1
+        and mid >= mpu.get_pipeline_model_parallel_world_size() - 1
     )
     skip_send = mpu.is_pipeline_last_stage()
 
@@ -86,8 +90,15 @@ def comm_activation_grad(
 
     Enqueue received output activation gradients to `recvs`, if any.
     """
-    skip_send = mpu.is_pipeline_first_stage() and mid >= nm - mpu.get_pipeline_model_parallel_world_size()
-    skip_recv = (bid == 0 and mid == nm - 1) or (mpu.is_pipeline_last_stage() and mid < mpu.get_pipeline_model_parallel_world_size() - 1)
+    skip_send = mpu.is_pipeline_first_stage()
+    skip_recv = (bid == 0 and mid == nm - 1) or (
+        mpu.is_pipeline_last_stage()
+        and mid < mpu.get_pipeline_model_parallel_world_size() - 1
+    ) or (
+        mpu.get_pipeline_model_parallel_rank() == 0
+        and bid == 0
+        and mid >= mpu.get_pipeline_model_parallel_world_size() - 1
+    )
 
     if skip_send and skip_recv:
         pass
