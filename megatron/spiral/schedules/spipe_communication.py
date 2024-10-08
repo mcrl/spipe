@@ -37,15 +37,11 @@ def comm_activation(
     skip_recv = (
         mpu.is_pipeline_first_stage()
         and mid < mpu.get_pipeline_model_parallel_world_size() - 1
-    ) or (mpu.is_pipeline_last_stage() and mid == nm - 1)
+    )
     skip_send = mpu.is_pipeline_last_stage()
-    if skip_recv:
-        spiral_p2p.send_next(
-            output_tensor,
-            overlap_p2p_comm=overlap_p2p_comm,
-            batch_p2p_comm=batch_p2p_comm,
-            timers=timers,
-        )
+
+    if skip_send and skip_recv:
+        pass
     elif skip_send:
         recv, reqs = spiral_p2p.recv_prev(
             tensor_shape,
@@ -55,6 +51,13 @@ def comm_activation(
             timers=timers,
         )
         recvs.append((recv, reqs))
+    elif skip_recv:
+        spiral_p2p.send_next(
+            output_tensor,
+            overlap_p2p_comm=overlap_p2p_comm,
+            batch_p2p_comm=batch_p2p_comm,
+            timers=timers,
+        )
     else:
         recv, reqs = spiral_p2p.send_next_recv_prev(
             output_tensor,
