@@ -11,7 +11,7 @@ from megatron.core import mpu
 Shape = Union[List[int], torch.Size]
 
 # Constants
-_DEBUG_COMM = True
+_DEBUG_COMM = False
 
 if _DEBUG_COMM:
     from megatron.spiral.debug import spiral_print
@@ -174,6 +174,8 @@ def send_next_recv_prev(
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
+    if _DEBUG_COMM:
+        spiral_print("snrp")
     if timers is not None:
         timers("send_next_recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
@@ -200,6 +202,8 @@ def send_prev_recv_next(
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
+    if _DEBUG_COMM:
+        spiral_print("sprn")
     if timers is not None:
         timers("send_next_recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
@@ -224,6 +228,8 @@ def send_next(
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Optional[Work]:
+    if _DEBUG_COMM:
+        spiral_print("sn")
     if timers is not None:
         timers("send_next", log_level=2).start()
     _, reqs = _communicate(
@@ -249,6 +255,8 @@ def recv_prev(
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[Work]]:
+    if _DEBUG_COMM:
+        spiral_print("rp")
     if timers is not None:
         timers("recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
@@ -273,6 +281,8 @@ def send_prev(
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Optional[Work]:
+    if _DEBUG_COMM:
+        spiral_print("sp")
     if timers is not None:
         timers("send_next", log_level=2).start()
     _, reqs = _communicate(
@@ -298,6 +308,8 @@ def recv_next(
     batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[Work]]:
+    if _DEBUG_COMM:
+        spiral_print("rn")
     if timers is not None:
         timers("recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
