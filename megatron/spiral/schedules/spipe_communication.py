@@ -130,21 +130,15 @@ def comm_activation_grad(
         recvs.append((recv, reqs))
 
 
-def fwd_init_recvs(
+def fwd_pre_pipeline_init_recvs(
     recvs: List[Tuple[torch.Tensor, List[Work]]],
-    fid: int,
-    mid: int,
-    nm: int,
     dtype: torch.dtype,
     tensor_shape: Shape,
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = False,
     timers: Callable = None,
 ):
-    if mpu.is_pipeline_first_stage():
-        # Must insert to head because received tensors can precede otherwise
-        recvs.insert(0, (None, [NOP_Wait]))
-    elif fid == 0 and mid == 0:
+    if mpu.get_pipeline_model_parallel_rank() != 0:
         recv, reqs = spiral_p2p.recv_prev(
             tensor_shape,
             dtype,
@@ -155,17 +149,13 @@ def fwd_init_recvs(
         recvs.insert(0, (recv, reqs))
 
 
-def bwd_init_recvs(
-    recvs: List[Tuple[torch.Tensor, List[Work]]],
-    bid: int,
-    mid: int,
-    nm: int,
-    dtype: torch.dtype,
-    tensor_shape: Shape,
-    overlap_p2p_comm: bool = False,
-    batch_p2p_comm: bool = False,
-    timers: Callable = None,
-):
+def fwd_init_recvs(recvs: List[Tuple[torch.Tensor, List[Work]]]):
+    if mpu.is_pipeline_first_stage():
+        # Must insert to head because received tensors can precede otherwise
+        recvs.insert(0, (None, [NOP_Wait]))
+
+
+def bwd_init_recvs(recvs: List[Tuple[torch.Tensor, List[Work]]]):
     if mpu.is_pipeline_last_stage():
         # Must insert to head because received tensors can precede otherwise
         recvs.insert(0, (None, [NOP_Wait]))

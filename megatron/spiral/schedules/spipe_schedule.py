@@ -23,6 +23,7 @@ from .spipe_ckpt_schedule import CkptSendRecvSchedule
 from .spipe_communication import (
     comm_activation,
     comm_activation_grad,
+    fwd_pre_pipeline_init_recvs,
     fwd_init_recvs,
     bwd_init_recvs,
 )
@@ -182,18 +183,36 @@ def spipe_schedule(
             raise RuntimeError("record_event failed")
         prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
 
-    # nop pre-pipeline non-compute timesteps
+    # pre-pipeline non-compute timesteps
+    # NOTE fwd_pre_pipeline_init_recvs **MUST PRECEDE** pre-pipeline comm_ckpt to avoid deadlock
+    #   e.g., rank 0: a) comm_actv (isend) -> b) comm_ckpt (isend)
+    #         rank 1: b) pre-pipeline comm_ckpt (irecv) -> a) comm_actv (irecv)
+    # Above pattern deadlocks as a)s and b)s requires synchronization, respectively.
+    # Another solution can be to move fwd_pre_pipeline_init_recvs logic into fwd_init_recvs and reorder to
+    # comm_ckpt >> comm_actv/_actv_grad pattern. However, this stall activation sdrvs which are the
+    # critical path for the pipeline. So, we choose to keep comm_actv/_actv_grad >> comm_ckpt pattern and
+    # use current form.
+
+    # set the first input tensor of pprank != 0 ranks
+    fwd_pre_pipeline_init_recvs(
+        recvs,
+        dtype,
+        tensor_shape,
+        overlap_p2p_comm=overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        timers=timers,
+    )
+    # must succeed `fwd_pre_pipeline_init_recvs` to avoid deadlock
     __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
-    with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
-        for _ in range(__num_pre_pipeline_non_compute_ts):
-            if not forward_only:
-                comm_ckpt(
-                    next(ckpt_send_recv_schedule),
-                    model,
-                    ckpt_recvs,
-                    tensor_shape,
-                    dtype,
-                )
+    for _ in range(__num_pre_pipeline_non_compute_ts):
+        if not forward_only:
+            comm_ckpt(
+                next(ckpt_send_recv_schedule),
+                model,
+                ckpt_recvs,
+                tensor_shape,
+                dtype,
+            )
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
@@ -253,17 +272,7 @@ def spipe_schedule(
             torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{m_i}]")
 
             # set input tensor
-            fwd_init_recvs(
-                recvs,
-                fwd_stage_id,
-                m_i,
-                num_microbatches,
-                dtype,
-                    tensor_shape,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
+            fwd_init_recvs(recvs) # set input tensor of first pipeline stage
             input_tensor, recv_reqs = recvs.pop(0)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
@@ -429,17 +438,7 @@ def spipe_schedule(
             torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{m_i}]")
 
             # set output tensor grad
-            bwd_init_recvs(
-                recvs,
-                bwd_stage_id,
-                m_i,
-                num_microbatches,
-                dtype,
-                tensor_shape,
-                overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=batch_p2p_comm,
-                timers=timers,
-            )
+            bwd_init_recvs(recvs)
             output_tensor_grad, recv_reqs = recvs.pop(0)
 
             # set input tensor ckpt
