@@ -31,7 +31,7 @@ from .mobius_communication import (
 Shape = Union[List[int], torch.Size]
 
 # Constants
-_DEBUG_SCHEDULE = False
+_DEBUG_SCHEDULE = True
 
 
 def mobius_schedule(
@@ -275,9 +275,6 @@ def mobius_schedule(
                 if forward_only or recompute:
                     _ctx.append(torch.no_grad())
                 with ContextManagers(_ctx):
-                    ###
-                    spiral_print(f"[{fwd_stage_id}][{m_i}]input_tensor: {torch.mean(input_tensor) if input_tensor is not None else None}")
-                    ###
                     output_tensor = forward_step(
                         forward_step_func,
                         _data_iterator,
@@ -483,9 +480,6 @@ def mobius_schedule(
                     for req in recv_reqs:
                         req.wait()
 
-                ###
-                spiral_print(f"[{bwd_stage_id}][{m_i}]output_tensor_grad: {torch.mean(output_tensor_grad) if output_tensor_grad is not None else None}")
-                ###
                 input_tensor_grad = backward_step(
                     _grad_scaler,
                     input_tensor_ckpt,
@@ -522,12 +516,6 @@ def mobius_schedule(
             ):
                 raise RuntimeError("wait_event failed")
             # sdrv activation grad
-            ###
-            # if input_tensor_grad is not None:
-            #     _tmp = torch.randn_like(input_tensor_grad)
-            #     input_tensor_grad.data = _tmp.data
-            spiral_print(f"[{bwd_stage_id}][{m_i}]input_tensor_grad: {torch.mean(input_tensor_grad) if input_tensor_grad is not None else None}")
-            ###
             comm_activation_grad(
                 input_tensor_grad,
                 recvs,
