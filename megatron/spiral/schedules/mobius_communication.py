@@ -43,6 +43,7 @@ def comm_activation(
     """Communicate activation.
 
     Enqueue received input activation to `recvs`, if any.
+    Refer to sdrv_schedule.xlsx for detailed description.
     """
 
     case_color: CaseColor = None
@@ -220,7 +221,6 @@ def fwd_init_recvs(
     recvs: List[Tuple[torch.Tensor, List[Work]]],
     fid: int,
     mid: int,
-    nm: int,
     dtype: torch.dtype,
     tensor_shape: Shape,
     overlap_p2p_comm: bool = False,
@@ -245,7 +245,6 @@ def bwd_init_recvs(
     recvs: List[Tuple[torch.Tensor, List[Work]]],
     bid: int,
     mid: int,
-    nm: int,
     dtype: torch.dtype,
     tensor_shape: Shape,
     overlap_p2p_comm: bool = False,

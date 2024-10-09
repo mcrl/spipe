@@ -133,7 +133,7 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
             raise RuntimeError(f"Invalid comm type {op.comm_type}")
 
     if recvs and len(recvs) > 0:
-        # zip recv with corresponding req => append to ckpt_recvs
+        # zip only recv with corresponding req from same op => append to ckpt_recvs
         for recv, (req, op) in zip(
             recvs,
             filter(

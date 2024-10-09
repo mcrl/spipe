@@ -146,6 +146,11 @@ def spipe_schedule(
             )
             empty_input_tensors()
 
+    def _wait_reqs(reqs: List[Work]):
+        if reqs is not None:
+            for req in reqs:
+                req.wait()
+
     # Init input ckpt send recv schedule
     ckpt_send_recv_schedule = None  # placeholder
     if not forward_only:
@@ -278,9 +283,7 @@ def spipe_schedule(
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 # wait for recv input tensor
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if recv_reqs is not None:
-                    for req in recv_reqs:
-                        req.wait()
+                _wait_reqs(recv_reqs)
 
                 # NOTE (SpiralPipe) Original FWD should not create computation graph for two reasons
                 # 1. It will be recomputed in BWD
@@ -443,14 +446,12 @@ def spipe_schedule(
 
             # set input tensor ckpt
             assert len(ckpt_recvs[bwd_stage_id]) > 0, "Missing input tensor ckpt"
-            input_tensor_ckpt, ckpt_reqs = ckpt_recvs[bwd_stage_id].pop(0)
+            input_tensor_ckpt, ckpt_recv_reqs = ckpt_recvs[bwd_stage_id].pop(0)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 # wait for recv input tensor ckpt
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if ckpt_reqs is not None:
-                    for ckpt_req in ckpt_reqs:
-                        ckpt_req.wait()
+                _wait_reqs(ckpt_recv_reqs)
 
                 output_tensor = forward_step(
                     forward_step_func,
@@ -469,9 +470,7 @@ def spipe_schedule(
 
                 # wait for recv output tensor grad
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if recv_reqs is not None:
-                    for req in recv_reqs:
-                        req.wait()
+                _wait_reqs(recv_reqs)
 
                 if optimize_after_bwd_stage:
                     # grad_scaler is aligned (ascending) w.r.t bwd_stage_id

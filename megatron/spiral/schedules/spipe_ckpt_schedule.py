@@ -118,7 +118,6 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
                     curr_ts += 1
 
     def _set_send_schedule(self):
-        # TODO (SpiralPipe) sends of only self is required
         for j in range(self.total_ts):
             for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
                 for recv_comm in filter(
@@ -133,7 +132,6 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
                     self.global_schedule[_src_rank][j].append(_op)
 
     def _set_recv_schedule_async(self):
-        # TODO (SpiralPipe) recv of only self is required
         for j in range(self.total_ts):
             for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
                 for send_comm in filter(

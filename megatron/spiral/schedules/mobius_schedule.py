@@ -150,6 +150,11 @@ def mobius_schedule(
             empty_input_tensors()
             empty_output_tensors()
 
+    def _wait_reqs(reqs: List[Work]):
+        if reqs is not None:
+            for req in reqs:
+                req.wait()
+
     # Data structures for training
     forward_data_store = []
     recvs: List[Tuple[torch.Tensor, List[Work]]] = [] # for input actv/output actv grad recv from other ranks
@@ -248,7 +253,6 @@ def mobius_schedule(
                 recvs,
                 fwd_stage_id,
                 m_i,
-                num_microbatches,
                 dtype,
                     tensor_shape,
                     overlap_p2p_comm=overlap_p2p_comm,
@@ -267,9 +271,7 @@ def mobius_schedule(
 
                 # wait for recv input tensor
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if recv_reqs is not None:
-                    for req in recv_reqs:
-                        req.wait()
+                _wait_reqs(recv_reqs)
 
                 _ctx = []
                 if forward_only or recompute:
@@ -428,7 +430,6 @@ def mobius_schedule(
                 recvs,
                 bwd_stage_id,
                 m_i,
-                num_microbatches,
                 dtype,
                     tensor_shape,
                     overlap_p2p_comm=overlap_p2p_comm,
@@ -476,9 +477,7 @@ def mobius_schedule(
 
                 # wait for recv output tensor grad
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if recv_reqs is not None:
-                    for req in recv_reqs:
-                        req.wait()
+                _wait_reqs(recv_reqs)
 
                 input_tensor_grad = backward_step(
                     _grad_scaler,
