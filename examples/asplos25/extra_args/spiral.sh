@@ -28,3 +28,7 @@ fi
 if [ ${SPIRAL_CROSS_MAPPING} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-cross-mapping"
 fi
+
+if [ ${SPIRAL_SYNC_CKPT_COMMUNICATION} == "YES" ]; then
+    EXTRA_ARGS+=" --spiral-sync-ckpt-communication"
+fi

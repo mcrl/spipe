@@ -1115,6 +1115,9 @@ def _add_distributed_args(parser):
                        help='Enable SpiralPipe backend logging')
     group.add_argument('--spiral-cross-mapping', action='store_true',
                        help='Enable SpiralPipe cross-mapping')
+    group.add_argument('--spiral-sync-ckpt-communication', action='store_true',
+                        help='Disable SpiralPipe asynchronous checkpoint communication. Asynchronous '
+                        'checkpoint communication typically improves performance by overlapping transmission')
 
     return parser
 

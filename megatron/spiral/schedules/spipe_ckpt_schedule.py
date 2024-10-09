@@ -1,15 +1,10 @@
-import sys
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List
 from dataclasses import dataclass
 
 from megatron import get_num_microbatches
 from megatron.core import mpu
 import megatron.spiral.build_state as sbs
-
-
-# Constants
-_USE_ASYNC_CKPT_SDRV = True
 
 
 class CkptSendRecvType(Enum):
@@ -60,7 +55,7 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
 
     """
 
-    def __init__(self, num_microbatches = None):
+    def __init__(self, num_microbatches = None, use_sync = False):
         assert (
             num_microbatches >= mpu.get_pipeline_model_parallel_world_size()
         ), "CkptSendRecvSchedule requires num_microbatches >= pipeline model parallel world size"
@@ -77,23 +72,27 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
             for _ in range(mpu.get_pipeline_model_parallel_world_size())
         ]
 
-        if _USE_ASYNC_CKPT_SDRV:
-            # recv early but wait at the exact timestep to overlap transmission
-            self._set_send_schedule_async()
-            self._set_recv_schedule_async()
+        self.use_sync = use_sync # async ckpt comm. shows better performance due to overlapped transmission
+        if use_sync:
+            # recv and wait at the exact recomputation timestep for simplicity
+            self._set_recv_schedule_sync() # must precede _set_send_schedule_sync
+            self._set_send_schedule_sync()
             self._optimize_schedule()
             self._resolve_p2p_hang()
         else:
-            # recv and wait at the exact timestep for simplicity
-            self._set_recv_schedule()
-            self._set_send_schedule()
+            # recv early but wait at the exact recomputation timestep to overlap transmission
+            self._set_send_schedule_async() # must precede _set_recv_schedule_async
+            self._set_recv_schedule_async()
+            self._optimize_schedule()
+            self._resolve_p2p_hang()
 
-    def _set_recv_schedule(self):
+    def _set_recv_schedule_sync(self):
         for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
             num_pre_pipeline_non_compute_ts = pp_rank
             recv_start_ts = (
                 num_pre_pipeline_non_compute_ts
                 + mpu.get_spiral_forward_virtual_size() * self.num_microbatches
+                - 1
             )
             curr_ts = recv_start_ts
 
@@ -117,7 +116,7 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
                     self.global_schedule[pp_rank][curr_ts].append(_op)
                     curr_ts += 1
 
-    def _set_send_schedule(self):
+    def _set_send_schedule_sync(self):
         for j in range(self.total_ts):
             for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
                 for recv_comm in filter(

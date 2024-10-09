@@ -153,8 +153,9 @@ def spipe_schedule(
 
     # Init input ckpt send recv schedule
     ckpt_send_recv_schedule = None  # placeholder
+    sync_ckpt_comm = get_args().spiral_sync_ckpt_communication
     if not forward_only:
-        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches)
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm)
 
     # Data structures for training
     forward_data_store = []
@@ -622,6 +623,24 @@ def spipe_schedule(
 
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
+
+    # post-pipeline non-compute timesteps
+    if sync_ckpt_comm:
+        assert not forward_only, "Forward only mode should have returned already"
+        __num_post_pipeline_non_compute_ts = (
+            mpu.get_pipeline_model_parallel_world_size()
+            - mpu.get_pipeline_model_parallel_rank()
+            - 1
+        )
+        for _ in range(__num_post_pipeline_non_compute_ts):
+            if not forward_only:
+                comm_ckpt(
+                    next(ckpt_send_recv_schedule),
+                    model,
+                    ckpt_recvs,
+                    tensor_shape,
+                    dtype,
+                )
 
     # cleanup schedule events
     if (
