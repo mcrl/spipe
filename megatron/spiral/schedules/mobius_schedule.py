@@ -254,11 +254,11 @@ def mobius_schedule(
                 fwd_stage_id,
                 m_i,
                 dtype,
-                    tensor_shape,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
+                tensor_shape,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
             input_tensor, recv_reqs = recvs.pop(0)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
@@ -431,11 +431,11 @@ def mobius_schedule(
                 bwd_stage_id,
                 m_i,
                 dtype,
-                    tensor_shape,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    batch_p2p_comm=batch_p2p_comm,
-                    timers=timers,
-                )
+                tensor_shape,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
             output_tensor_grad, recv_reqs = recvs.pop(0)
 
             # set input tensor ckpt
