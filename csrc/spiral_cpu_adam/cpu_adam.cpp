@@ -23,6 +23,7 @@
 #include <mutex>
 #include <thread>
 #include <unistd.h>
+#include <nvToolsExt.h>
 
 #define _DEBUG_OPTIMIZER false // for debugging Tensor values
 
@@ -166,6 +167,9 @@ int _spiral_adam_step(int optimizer_id,
     CHECK_CUDA(cudaEventSynchronize(ev));
   }
 
+  std::string range_name = "Thread " + std::to_string(param_id);
+  nvtxRangePushA(range_name.c_str());
+
   torch::Tensor fp32_params;
   torch::Tensor fp32_grads;
   if (half_precision) {
@@ -245,6 +249,7 @@ int _spiral_adam_step(int optimizer_id,
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
   group_s_opt->SynchronizeStreams();
 #endif
+  nvtxRangePop();
   return 0;
 }
 

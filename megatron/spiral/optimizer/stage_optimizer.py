@@ -1,4 +1,6 @@
 from collections import deque
+import nvtx
+
 from megatron.spiral.initialize import get_thunder_cuda_manager
 
 class SpiralStageOptimizer:
@@ -52,6 +54,7 @@ class SpiralStageOptimizer:
         """Simple scaling."""
         return self.get_loss_scale() * loss
 
+    @nvtx.annotate("step", color="cyan")
     def step(self, idx, event_query, args, timers):
         event_long = -1
         if event_query != None:
@@ -61,6 +64,7 @@ class SpiralStageOptimizer:
         self.optimizer_list[idx].optimizer.set_event_long(event_long)
         self.optimizer_list[idx].step(args, timers)
 
+    @nvtx.annotate("join_step", color="red")
     def join_step(self):
         spiral_stage_optimizer_step_returns = deque()
         for optimizer in reversed(self.optimizer_list):
