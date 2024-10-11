@@ -11,23 +11,11 @@ from megatron.core import mpu
 Shape = Union[List[int], torch.Size]
 
 # Constants
-MINIMIZE_INTERNODE_COMM = False # TODO (SpiralPipe) further optimizer internode comm.
 _DEBUG_COMM = False
 
 if _DEBUG_COMM:
     from megatron.spiral.debug import spiral_print
 
-
-# Tensor stores to use for self send-recv
-# Only used when pipeline world size is 1
-# TODO (SpiralPipe) This is temporary solution to avoid breaking the code
-class NOP_Wait:
-    @staticmethod
-    def wait():
-        pass
-
-_self_send_recv_input_tensor_store = deque()
-_self_send_recv_output_tensor_grad_store = deque()
 
 def _batched_p2p_ops(
     *,
@@ -174,267 +162,166 @@ def _communicate(
     #     # To protect against race condition when using batch_isend_irecv().
     #     # User should assert that we have a modern enough PyTorch to not need this
     #     torch.cuda.synchronize()
-
     return tensor_recvs, reqs
 
 
-@nvtx.annotate("recv_input_tensor", color="red")
-def recv_input_tensor(
+@nvtx.annotate("snrp", color="cyan")
+def send_next_recv_prev(
+    tensor_send: torch.Tensor,
     tensor_shape: Shape,
     dtype: torch.dtype,
-    batch_p2p_comm: bool = True,
     overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
-
-    if timers is not None:
-        timers("recv_input_tensor", log_level=2).start()
-
-    recv_rank = None
-    if MINIMIZE_INTERNODE_COMM:
-        if mpu.get_spiral_forward_virtual_rank() == 0:
-            recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
-        else:
-            local_world_size = mpu.get_spiral_intra_size()
-            local_rank = mpu.get_spiral_intra_rank()
-            recv_rank = (
-                mpu.get_pipeline_model_parallel_rank()
-                // local_world_size
-                * local_world_size
-                + (local_rank - 1) % local_world_size
-            )
-    else:
-        recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
-
-    if recv_rank != mpu.get_pipeline_model_parallel_rank():
-        [input_tensor], reqs = _communicate(
-            tensor_sends=None,
-            send_ranks=None,
-            recv_ranks=[recv_rank],
-            tensor_shape=tensor_shape,
-            group=mpu.get_pipeline_model_parallel_group(),
-            batch_p2p_comm=batch_p2p_comm,
-            wait_on_reqs=not overlap_p2p_comm,
-            dtype=dtype,
-        )
-    else:
-        # If we are receiving from ourselves, just pop the tensor from the store
-        input_tensor = _self_send_recv_input_tensor_store.popleft()
-        reqs = [NOP_Wait]
-
-    if timers is not None:
-        timers("recv_input_tensor").stop()
-
     if _DEBUG_COMM:
-        if overlap_p2p_comm:
-            spiral_print(f"recv input_tensor(src={recv_rank})")
-        else:
-            spiral_print(f"recv input_tensor(src={recv_rank}, mean={torch.mean(input_tensor)})")
+        spiral_print("snrp")
+    if timers is not None:
+        timers("send_next_recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        recv_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("send_next_recv_prev").stop()
+    return recv, reqs
 
-    return input_tensor, reqs
 
-
-@nvtx.annotate("send_output_tensor", color="blue")
-def send_output_tensor(
-    output_tensor: torch.Tensor,
+@nvtx.annotate("sprn", color="cyan")
+def send_prev_recv_next(
+    tensor_send: torch.Tensor,
+    tensor_shape: Shape,
+    dtype: torch.dtype,
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = True,
     timers: Callable = None,
-) -> Optional[List[Work]]:
-
-    if timers is not None:
-        timers("send_output_tensor", log_level=2).start()
-
-    send_rank = None
-    if MINIMIZE_INTERNODE_COMM:
-        if (
-            mpu.get_spiral_forward_virtual_rank()
-            == mpu.get_spiral_forward_virtual_size() - 1
-        ):
-            send_rank = mpu.get_pipeline_model_parallel_next_rank()
-        else:
-            local_world_size = mpu.get_spiral_intra_size()
-            local_rank = mpu.get_spiral_intra_rank()
-            send_rank = (
-                mpu.get_pipeline_model_parallel_rank()
-                // local_world_size
-                * local_world_size
-                + (local_rank + 1) % local_world_size
-            )
-    else:
-        send_rank = mpu.get_pipeline_model_parallel_next_rank()
-
-    if send_rank != mpu.get_pipeline_model_parallel_rank():
-        _, reqs = _communicate(
-            tensor_sends=[output_tensor],
-            send_ranks=[send_rank],
-            recv_ranks=None,
-            tensor_shape=None,
-            group=mpu.get_pipeline_model_parallel_group(),
-            wait_on_reqs=not overlap_p2p_comm,
-            batch_p2p_comm=batch_p2p_comm,
-            dtype=None,
-        )
-    else:
-        # If we are sending to ourselves, just store the tensor for later
-        _self_send_recv_input_tensor_store.append(output_tensor.detach())
-        reqs = [NOP_Wait]
-
-    if timers is not None:
-        timers("send_output_tensor").stop()
-
+) -> Tuple[torch.Tensor, Optional[List[Work]]]:
     if _DEBUG_COMM:
-        spiral_print(f"send output_tensor(dst={send_rank}, mean={torch.mean(output_tensor)})")
+        spiral_print("sprn")
+    if timers is not None:
+        timers("send_next_recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        recv_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("send_next_recv_prev").stop()
+    return recv, reqs
 
+
+@nvtx.annotate("sn", color="cyan")
+def send_next(
+    tensor_send: torch.Tensor,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Optional[Work]:
+    if _DEBUG_COMM:
+        spiral_print("sn")
+    if timers is not None:
+        timers("send_next", log_level=2).start()
+    _, reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        recv_ranks=None,
+        tensor_shape=None,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=None,
+    )
+    if timers is not None:
+        timers("send_next").stop()
     return reqs
 
 
-@nvtx.annotate("recv_output_tensor_grad", color="purple")
-def recv_output_tensor_grad(
+@nvtx.annotate("rp", color="cyan")
+def recv_prev(
     tensor_shape: Shape,
     dtype: torch.dtype,
-    batch_p2p_comm: bool = True,
-    overlap_p2p_comm: bool = False,
-    timers: Callable = None,
-) -> Tuple[torch.Tensor, Optional[List[Work]]]:
-
-    if timers is not None:
-        timers("recv_output_tensor_grad", log_level=2).start()
-
-    recv_rank = None
-    if MINIMIZE_INTERNODE_COMM:
-        if (
-            mpu.get_spiral_backward_virtual_rank()
-            == mpu.get_spiral_backward_virtual_size() - 1
-        ):
-            if mpu.is_spiral_remap():
-                recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
-            elif mpu.is_spiral():
-                recv_rank = mpu.get_pipeline_model_parallel_next_rank()
-            else:
-                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-        else:
-            local_world_size = mpu.get_spiral_intra_size()
-            local_rank = mpu.get_spiral_intra_rank()
-            if mpu.is_spiral_remap():
-                recv_rank = (
-                    mpu.get_pipeline_model_parallel_rank()
-                    // local_world_size
-                    * local_world_size
-                    + (local_rank - 1) % local_world_size
-                )
-            elif mpu.is_spiral():
-                recv_rank = (
-                    mpu.get_pipeline_model_parallel_rank()
-                    // local_world_size
-                    * local_world_size
-                    + (local_rank + 1) % local_world_size
-                )
-            else:
-                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-    else:
-        if mpu.is_spiral_remap():
-            recv_rank = mpu.get_pipeline_model_parallel_prev_rank()
-        elif mpu.is_spiral():
-            recv_rank = mpu.get_pipeline_model_parallel_next_rank()
-        else:
-            raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-
-    if recv_rank != mpu.get_pipeline_model_parallel_rank():
-        [output_tensor_grad], reqs = _communicate(
-            tensor_sends=None,
-            send_ranks=None,
-            recv_ranks=[recv_rank],
-            tensor_shape=tensor_shape,
-            group=mpu.get_pipeline_model_parallel_group(),
-            batch_p2p_comm=batch_p2p_comm,
-            wait_on_reqs=not overlap_p2p_comm,
-            dtype=dtype,
-        )
-    else:
-        # If we are receiving from ourselves, just pop the tensor from the store
-        output_tensor_grad = _self_send_recv_output_tensor_grad_store.popleft()
-        reqs = [NOP_Wait]
-
-    if timers is not None:
-        timers("output_tensor_grad").stop()
-
-    if _DEBUG_COMM:
-        if overlap_p2p_comm:
-            spiral_print(f"recv output_tensor_grad(src={recv_rank})")
-        else:
-            spiral_print(f"recv output_tensor_grad(src={recv_rank}, mean={torch.mean(output_tensor_grad)})")
-
-    return output_tensor_grad, reqs
-
-
-@nvtx.annotate("send_input_tensor_grad", color="rapids")
-def send_input_tensor_grad(
-    input_tensor_grad: torch.Tensor,
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = True,
     timers: Callable = None,
-) -> Optional[List[Work]]:
-
-    if timers is not None:
-        timers("send_input_tensor_grad", log_level=2).start()
-
-    send_rank = None
-    if MINIMIZE_INTERNODE_COMM:
-        if mpu.get_spiral_backward_virtual_rank() == 0:
-            if mpu.is_spiral_remap():
-                send_rank = mpu.get_pipeline_model_parallel_next_rank()
-            elif mpu.is_spiral():
-                send_rank = mpu.get_pipeline_model_parallel_prev_rank()
-            else:
-                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-        else:
-            local_world_size = mpu.get_spiral_intra_size()
-            local_rank = mpu.get_spiral_intra_rank()
-            if mpu.is_spiral_remap():
-                send_rank = (
-                    mpu.get_pipeline_model_parallel_rank()
-                    // local_world_size
-                    * local_world_size
-                    + (local_rank + 1) % local_world_size
-                )
-            elif mpu.is_spiral():
-                send_rank = (
-                    mpu.get_pipeline_model_parallel_rank()
-                    // local_world_size
-                    * local_world_size
-                    + (local_rank - 1) % local_world_size
-                )
-            else:
-                raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-    else:
-        if mpu.is_spiral_remap():
-            send_rank = mpu.get_pipeline_model_parallel_next_rank()
-        elif mpu.is_spiral():
-            send_rank = mpu.get_pipeline_model_parallel_prev_rank()
-        else:
-            raise ValueError("Unknown pipeline parallelism type for spiral_p2p")
-
-    if send_rank != mpu.get_pipeline_model_parallel_rank():
-        _, reqs = _communicate(
-            tensor_sends=[input_tensor_grad],
-            send_ranks=[send_rank],
-            recv_ranks=None,
-            tensor_shape=None,
-            group=mpu.get_pipeline_model_parallel_group(),
-            wait_on_reqs=not overlap_p2p_comm,
-            batch_p2p_comm=batch_p2p_comm,
-            dtype=None,
-        )
-    else:
-        # If we are sending to ourselves, just store the tensor for later
-        _self_send_recv_output_tensor_grad_store.append(input_tensor_grad.detach())
-        reqs = [NOP_Wait]
-
-    if timers is not None:
-        timers("send_input_tensor_grad").stop()
-
+) -> Tuple[torch.Tensor, Optional[Work]]:
     if _DEBUG_COMM:
-        spiral_print(f"send input_tensor_grad(dst={send_rank}, mean={torch.mean(input_tensor_grad)})")
+        spiral_print("rp")
+    if timers is not None:
+        timers("recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=None,
+        send_ranks=None,
+        recv_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("recv_prev").stop()
+    return recv, reqs
 
+
+@nvtx.annotate("sp", color="cyan")
+def send_prev(
+    tensor_send: torch.Tensor,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Optional[Work]:
+    if _DEBUG_COMM:
+        spiral_print("sp")
+    if timers is not None:
+        timers("send_next", log_level=2).start()
+    _, reqs = _communicate(
+        tensor_sends=[tensor_send],
+        send_ranks=[mpu.get_pipeline_model_parallel_prev_rank()],
+        recv_ranks=None,
+        tensor_shape=None,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=None,
+    )
+    if timers is not None:
+        timers("send_next").stop()
     return reqs
+
+
+@nvtx.annotate("rn", color="cyan")
+def recv_next(
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    overlap_p2p_comm: bool = False,
+    batch_p2p_comm: bool = True,
+    timers: Callable = None,
+) -> Tuple[torch.Tensor, Optional[Work]]:
+    if _DEBUG_COMM:
+        spiral_print("rn")
+    if timers is not None:
+        timers("recv_prev", log_level=2).start()
+    [recv], reqs = _communicate(
+        tensor_sends=None,
+        send_ranks=None,
+        recv_ranks=[mpu.get_pipeline_model_parallel_next_rank()],
+        tensor_shape=tensor_shape,
+        group=mpu.get_pipeline_model_parallel_group(),
+        wait_on_reqs=not overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        dtype=dtype,
+    )
+    if timers is not None:
+        timers("recv_prev").stop()
+    return recv, reqs

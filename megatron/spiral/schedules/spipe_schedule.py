@@ -1,14 +1,13 @@
 import contextlib
 import warnings
-import nvtx
-import sys
-from typing import Callable, Iterator, List, Optional, Union
+from typing import Callable, Iterator, List, Optional, Union, Tuple
 from collections import deque
 from queue import Queue
 import threading
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
+from torch._C._distributed_c10d import Work
 
 from megatron import get_args, get_timers
 from megatron.core import mpu
@@ -17,13 +16,17 @@ from megatron.core.utils import get_model_type, get_attr_wrapped_model
 from megatron.core.pipeline_parallel import forward_step, backward_step
 from megatron.spiral.initialize import get_thunder_cuda_manager
 from megatron.spiral.debug import spiral_print
-import megatron.spiral.p2p_communication as spiral_p2p
 from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
-from megatron.spiral.utils import is_spiral_param
-from megatron.spiral.generic import ContextManagers
-import megatron.spiral.build_state as sbs
-from megatron.spiral.ckpt_communication import comm_input_ckpt
-from megatron.spiral.ckpt_schedule import CkptSendRecvType, CkptSendRecvSchedule, CkptSendRecvOp
+
+from .spipe_ckpt_communication import comm_ckpt
+from .spipe_ckpt_schedule import CkptSendRecvSchedule
+from .spipe_communication import (
+    comm_activation,
+    comm_activation_grad,
+    fwd_pre_pipeline_init_recvs,
+    fwd_init_recvs,
+    bwd_init_recvs,
+)
 
 
 # Types
@@ -143,25 +146,21 @@ def spipe_schedule(
             )
             empty_input_tensors()
 
+    def _wait_reqs(reqs: List[Work]):
+        if reqs is not None:
+            for req in reqs:
+                req.wait()
+
     # Init input ckpt send recv schedule
     ckpt_send_recv_schedule = None  # placeholder
+    sync_ckpt_comm = get_args().spiral_sync_ckpt_communication
     if not forward_only:
-        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches)
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm)
 
     # Data structures for training
     forward_data_store = []
-
-    # Data structures for delayed send
-    # Last pipeline worker will delay sending output tensors of non-last fwd stage
-    # Last pipeline worker will delay sending input tensor grads of non-first bwd stage
-    # TODO (SpiralPipe) Refactor for cleaner code
-    if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
-        NUM_DELAY_OUTPUT_TENSORS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
-        NUM_DELAY_INPUT_TENSOR_GRADS = num_microbatches - mpu.get_pipeline_model_parallel_world_size()
-        curr_delay_output_tensors = 0
-        curr_delay_input_tensor_grads = 0
-        delayed_output_tensors = []
-        delayed_input_tensor_grads = []
+    recvs: List[Tuple[torch.Tensor, List[Work]]] = []
+    ckpt_recvs: List[List[Tuple[torch.Tensor, Work]]] = [[] for _ in range(mpu.get_spiral_backward_virtual_size())]
 
     # Event dictionaries. Key is the event tag, thus an event necessarily requires it.
     prefetch_event_queries = {}
@@ -170,15 +169,10 @@ def spipe_schedule(
     free_event_queries = {}
 
     # Placeholders
-    recv_handles = None
+    recv_reqs: List[Work] = []
+    ckpt_recv_reqs: List[Work] = []
 
     """ Start training """
-
-    # nop pre-pipeline non-compute timesteps
-    __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
-    for _ in range(__num_pre_pipeline_non_compute_ts):
-        if not forward_only:
-            next(ckpt_send_recv_schedule)
 
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
@@ -194,6 +188,37 @@ def spipe_schedule(
         if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
             raise RuntimeError("record_event failed")
         prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
+
+    # pre-pipeline non-compute timesteps
+    # NOTE fwd_pre_pipeline_init_recvs **MUST PRECEDE** pre-pipeline comm_ckpt to avoid deadlock
+    #   e.g., rank 0: a) comm_actv (isend) -> b) comm_ckpt (isend)
+    #         rank 1: b) pre-pipeline comm_ckpt (irecv) -> a) comm_actv (irecv)
+    # Above pattern deadlocks as a)s and b)s requires synchronization, respectively.
+    # Another solution can be to move fwd_pre_pipeline_init_recvs logic into fwd_init_recvs and reorder to
+    # comm_ckpt >> comm_actv/_actv_grad pattern. However, this stall activation sdrvs which are the
+    # critical path for the pipeline. So, we choose to keep comm_actv/_actv_grad >> comm_ckpt pattern and
+    # use current form.
+
+    # set the first input tensor of pprank != 0 ranks
+    fwd_pre_pipeline_init_recvs(
+        recvs,
+        dtype,
+        tensor_shape,
+        overlap_p2p_comm=overlap_p2p_comm,
+        batch_p2p_comm=batch_p2p_comm,
+        timers=timers,
+    )
+    # must succeed `fwd_pre_pipeline_init_recvs` to avoid deadlock
+    __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
+    for _ in range(__num_pre_pipeline_non_compute_ts):
+        if not forward_only:
+            comm_ckpt(
+                next(ckpt_send_recv_schedule),
+                model,
+                ckpt_recvs,
+                tensor_shape,
+                dtype,
+            )
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
@@ -247,34 +272,19 @@ def spipe_schedule(
                 raise RuntimeError("wait_event failed")
 
         # fwd microbatches
-        for i in range(num_microbatches):
+        for m_i in range(num_microbatches):
             if _DEBUG_SCHEDULE:
-                spiral_print(f" microbatch {i}")
-            torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{i}]")
-
-            # send input tensor ckpt
-            if not forward_only:
-                comm_input_ckpt(next(ckpt_send_recv_schedule), model, tensor_shape, dtype)
+                spiral_print(f" microbatch {m_i}")
+            torch.cuda.nvtx.range_push(f"f[{fwd_stage_id}]m[{m_i}]")
 
             # set input tensor
-            if mpu.is_pipeline_first_stage():
-                input_tensor = None
-                recv_handles = None
-            else:
-                input_tensor, recv_handles = spiral_p2p.recv_input_tensor(
-                    tensor_shape,
-                    dtype,
-                    batch_p2p_comm=batch_p2p_comm,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    timers=timers,
-                )
+            fwd_init_recvs(recvs) # set input tensor of first pipeline stage
+            input_tensor, recv_reqs = recvs.pop(0)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 # wait for recv input tensor
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if recv_handles is not None:
-                    for req in recv_handles:
-                        req.wait()
+                _wait_reqs(recv_reqs)
 
                 # NOTE (SpiralPipe) Original FWD should not create computation graph for two reasons
                 # 1. It will be recomputed in BWD
@@ -296,13 +306,13 @@ def spipe_schedule(
                 compute_microbatch = get_thunder_cuda_manager().Event(
                     "compute",
                     None,
-                    tag=f"compute:f{fwd_stage_id}m{i}",
+                    tag=f"compute:f{fwd_stage_id}m{m_i}",
                 )
                 if get_thunder_cuda_manager().record_event(compute_microbatch) == -1:
                     raise RuntimeError("record_event failed")
                 compute_event_queries[compute_microbatch.tag] = compute_microbatch
 
-                if i == num_microbatches - 1:
+                if m_i == num_microbatches - 1:
                     # notify free stream to act
                     compute_microbatches_end = get_thunder_cuda_manager().Event(
                         "compute", "free", tag=f"compute:f{fwd_stage_id}end"
@@ -310,39 +320,37 @@ def spipe_schedule(
                     if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
                     compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
+            # end compute stream
 
-            # send output tensor
+            # sd/rv output/input tensor
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{i}"))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{m_i}"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-            if not mpu.is_pipeline_last_stage():
-                if not mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
-                    # send output tensor immediately
-                    _ = spiral_p2p.send_output_tensor(
-                        output_tensor,
-                        overlap_p2p_comm=overlap_p2p_comm,
-                        batch_p2p_comm=batch_p2p_comm,
-                        timers=timers,
-                    )
-                else:
-                    # control path for only last worker
-                    # delay output tensor
-                    delayed_output_tensors.append(output_tensor)
+            # sdrv activation
+            comm_activation(
+                output_tensor,
+                recvs,
+                fwd_stage_id,
+                m_i,
+                num_microbatches,
+                tensor_shape,
+                dtype,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
+            # sdrv ckpt
+            if not forward_only:
+                comm_ckpt(
+                    next(ckpt_send_recv_schedule),
+                    model,
+                    ckpt_recvs,
+                    tensor_shape,
+                    dtype,
+                )
 
-            if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
-                if (curr_delay_output_tensors >= NUM_DELAY_OUTPUT_TENSORS):
-                    # send delayed output tensor
-                    if (len(delayed_output_tensors) > 0):
-                        _ = spiral_p2p.send_output_tensor(
-                            delayed_output_tensors.pop(0),
-                            overlap_p2p_comm=overlap_p2p_comm,
-                            batch_p2p_comm=batch_p2p_comm,
-                            timers=timers,
-                        )
-                else:
-                    curr_delay_output_tensors += 1
             torch.cuda.nvtx.range_pop()
         # end fwd microbatches
 
@@ -428,46 +436,23 @@ def spipe_schedule(
                 raise RuntimeError("wait_event failed")
 
         # bwd microbatches
-        for i in range(num_microbatches):
+        for m_i in range(num_microbatches):
             if _DEBUG_SCHEDULE:
-                spiral_print(f" microbatch {i}")
-            torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{i}]")
-
-            # recv input tensor ckpt
-            recv_input_ckpts, recv_input_ckpt_handle = comm_input_ckpt(
-                next(ckpt_send_recv_schedule), model, tensor_shape, dtype
-            )
+                spiral_print(f" microbatch {m_i}")
+            torch.cuda.nvtx.range_push(f"b[{bwd_stage_id}]m[{m_i}]")
 
             # set output tensor grad
-            if mpu.is_pipeline_last_stage():
-                output_tensor_grad = None
-                recv_handles = None
-            else:
-                output_tensor_grad, recv_handles = spiral_p2p.recv_output_tensor_grad(
-                    tensor_shape,
-                    dtype,
-                    batch_p2p_comm=batch_p2p_comm,
-                    overlap_p2p_comm=overlap_p2p_comm,
-                    timers=timers,
-                )
+            bwd_init_recvs(recvs)
+            output_tensor_grad, recv_reqs = recvs.pop(0)
+
+            # set input tensor ckpt
+            assert len(ckpt_recvs[bwd_stage_id]) > 0, "Missing input tensor ckpt"
+            input_tensor_ckpt, ckpt_recv_reqs = ckpt_recvs[bwd_stage_id].pop(0)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 # wait for recv input tensor ckpt
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if recv_input_ckpt_handle is not None:
-                    for req in recv_input_ckpt_handle:
-                        req.wait()
-                if recv_input_ckpts is not None:
-                    assert (
-                        len(recv_input_ckpts) == 1
-                    ), f"Only 1 input tensor ckpt expected. Got {len(recv_input_ckpts)}"
-                    input_tensor_ckpt = recv_input_ckpts.pop(0)
-
-                # wait for recv output tensor grad
-                # NOTE (SpiralPipe) Must be done in compute stream to avoid error
-                if recv_handles is not None:
-                    for req in recv_handles:
-                        req.wait()
+                _wait_reqs(ckpt_recv_reqs)
 
                 output_tensor = forward_step(
                     forward_step_func,
@@ -483,6 +468,10 @@ def spipe_schedule(
                     dtype,
                     enable_autocast,
                 )
+
+                # wait for recv output tensor grad
+                # NOTE (SpiralPipe) Must be done in compute stream to avoid error
+                _wait_reqs(recv_reqs)
 
                 if optimize_after_bwd_stage:
                     # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
@@ -503,13 +492,13 @@ def spipe_schedule(
                 compute_microbatch = get_thunder_cuda_manager().Event(
                     "compute",
                     None,
-                    tag=f"compute:b{bwd_stage_id}m{i}",
+                    tag=f"compute:b{bwd_stage_id}m{m_i}",
                 )
                 if get_thunder_cuda_manager().record_event(compute_microbatch) == -1:
                     raise RuntimeError("record_event failed")
                 compute_event_queries[compute_microbatch.tag] = compute_microbatch
 
-                if i == num_microbatches - 1:
+                if m_i == num_microbatches - 1:
                     # notify free stream to act
                     compute_microbatches_end = get_thunder_cuda_manager().Event(
                         "compute", None, tag=f"compute:b{bwd_stage_id}end"
@@ -517,38 +506,35 @@ def spipe_schedule(
                     if get_thunder_cuda_manager().record_event(compute_microbatches_end) == -1:
                         raise RuntimeError("record_event failed")
                     compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
+            # end compute stream
 
-            # send input tensor grad
+            # sd/rv input/output tensor grad
             if (
-                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{i}"))
+                get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{m_i}"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-            if not mpu.is_pipeline_first_stage():
-                if not mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
-                    # send input tensor grad immediately
-                    _ = spiral_p2p.send_input_tensor_grad(
-                        input_tensor_grad,
-                        overlap_p2p_comm=overlap_p2p_comm,
-                        batch_p2p_comm=batch_p2p_comm,
-                        timers=timers,
-                    )
-                else:
-                    # control path for only last worker
-                    # delay input tensor grad
-                    delayed_input_tensor_grads.append(input_tensor_grad)
-
-            if mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1:
-                if (curr_delay_input_tensor_grads >= NUM_DELAY_INPUT_TENSOR_GRADS):
-                    if (len(delayed_input_tensor_grads) > 0):
-                        _ = spiral_p2p.send_input_tensor_grad(
-                            delayed_input_tensor_grads.pop(0),
-                            overlap_p2p_comm=overlap_p2p_comm,
-                            batch_p2p_comm=batch_p2p_comm,
-                            timers=timers,
-                        )
-                else:
-                    curr_delay_input_tensor_grads += 1
+            # sdrv activation grad
+            comm_activation_grad(
+                input_tensor_grad,
+                recvs,
+                bwd_stage_id,
+                m_i,
+                num_microbatches,
+                tensor_shape,
+                dtype,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
+            # sdrv ckpt
+            comm_ckpt(
+                next(ckpt_send_recv_schedule),
+                model,
+                ckpt_recvs,
+                tensor_shape,
+                dtype,
+            )
 
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
@@ -638,16 +624,23 @@ def spipe_schedule(
         mpu.set_spiral_backward_virtual_rank(None)
     # end bwd
 
-    # do post-pipeline non-compute timesteps
-    assert not forward_only, "Forward only mode should have returned already"
-    __num_post_pipeline_non_compute_ts = (
-        mpu.get_pipeline_model_parallel_world_size()
-        - mpu.get_pipeline_model_parallel_rank()
-        - 1
-    )
-    for _ in range(__num_post_pipeline_non_compute_ts):
-        if not forward_only:
-            comm_input_ckpt(next(ckpt_send_recv_schedule), model, tensor_shape, dtype)
+    # post-pipeline non-compute timesteps
+    if sync_ckpt_comm:
+        assert not forward_only, "Forward only mode should have returned already"
+        __num_post_pipeline_non_compute_ts = (
+            mpu.get_pipeline_model_parallel_world_size()
+            - mpu.get_pipeline_model_parallel_rank()
+            - 1
+        )
+        for _ in range(__num_post_pipeline_non_compute_ts):
+            if not forward_only:
+                comm_ckpt(
+                    next(ckpt_send_recv_schedule),
+                    model,
+                    ckpt_recvs,
+                    tensor_shape,
+                    dtype,
+                )
 
     # cleanup schedule events
     if (

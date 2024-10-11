@@ -1,15 +1,10 @@
-import sys
 from enum import Enum
-from typing import List, Optional, Tuple
+from typing import List
 from dataclasses import dataclass
 
 from megatron import get_num_microbatches
 from megatron.core import mpu
 import megatron.spiral.build_state as sbs
-
-
-# Constants
-_USE_ASYNC_CKPT_SDRV = False
 
 
 class CkptSendRecvType(Enum):
@@ -24,7 +19,21 @@ class CkptSendRecvOp:
     rank: int
 
 
-class CkptSendRecvSchedule:
+class CkptSendRecvScheduleMeta(type):
+    """CkptSendRecvSchedule cache with num_microbatches as key."""
+
+    _instances = {}
+
+    def __call__(cls, *args, **kwargs):
+        num_microbatches = kwargs.get("num_microbatches", get_num_microbatches())
+        if num_microbatches not in cls._instances:
+            cls._instances[num_microbatches] = super().__call__(*args, **kwargs)
+        _ins = cls._instances[num_microbatches]
+        setattr(_ins, "_schedule_generator", _ins._generator())
+        return _ins
+
+
+class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
     """A schedule for sending and receiving input tensor checkpoints.
 
     Construct global schedule for all timestep of all rank.
@@ -46,9 +55,7 @@ class CkptSendRecvSchedule:
 
     """
 
-    def __init__(self, num_microbatches: Optional[int]):
-        if num_microbatches is None:
-            num_microbatches = get_num_microbatches()
+    def __init__(self, num_microbatches = None, use_sync = False):
         assert (
             num_microbatches >= mpu.get_pipeline_model_parallel_world_size()
         ), "CkptSendRecvSchedule requires num_microbatches >= pipeline model parallel world size"
@@ -65,22 +72,27 @@ class CkptSendRecvSchedule:
             for _ in range(mpu.get_pipeline_model_parallel_world_size())
         ]
 
-        if _USE_ASYNC_CKPT_SDRV:
-            # recv early but wait at the exact timestep to overlap transmission
-            self._set_send_schedule_async()
-            self._set_recv_schedule_async()
+        self.use_sync = use_sync # async ckpt comm. shows better performance due to overlapped transmission
+        if use_sync:
+            # recv and wait at the exact recomputation timestep for simplicity
+            self._set_recv_schedule_sync() # must precede _set_send_schedule_sync
+            self._set_send_schedule_sync()
+            self._optimize_schedule()
+            self._resolve_p2p_hang()
         else:
-            # recv and wait at the exact timestep for simplicity
-            self._set_recv_schedule()
-            self._set_send_schedule()
-        self._schedule_generator = self._generator()
+            # recv early but wait at the exact recomputation timestep to overlap transmission
+            self._set_send_schedule_async() # must precede _set_recv_schedule_async
+            self._set_recv_schedule_async()
+            self._optimize_schedule()
+            self._resolve_p2p_hang()
 
-    def _set_recv_schedule(self):
+    def _set_recv_schedule_sync(self):
         for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
             num_pre_pipeline_non_compute_ts = pp_rank
             recv_start_ts = (
                 num_pre_pipeline_non_compute_ts
                 + mpu.get_spiral_forward_virtual_size() * self.num_microbatches
+                - 1
             )
             curr_ts = recv_start_ts
 
@@ -104,8 +116,7 @@ class CkptSendRecvSchedule:
                     self.global_schedule[pp_rank][curr_ts].append(_op)
                     curr_ts += 1
 
-    def _set_send_schedule(self):
-        # TODO (SpiralPipe) sends of only self is required
+    def _set_send_schedule_sync(self):
         for j in range(self.total_ts):
             for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
                 for recv_comm in filter(
@@ -120,7 +131,6 @@ class CkptSendRecvSchedule:
                     self.global_schedule[_src_rank][j].append(_op)
 
     def _set_recv_schedule_async(self):
-        # TODO (SpiralPipe) recv of only self is required
         for j in range(self.total_ts):
             for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
                 for send_comm in filter(
@@ -148,7 +158,6 @@ class CkptSendRecvSchedule:
                     + sbs.get_spiral_forward_stage_build_phase_size() * pp_rank
                 )
                 for _ in range(self.num_microbatches):
-                    curr_ts += 1
                     for send_phase in range(
                         fwd_phases_start,
                         fwd_phases_start
@@ -160,6 +169,54 @@ class CkptSendRecvSchedule:
                             sbs.get_pp_rank_for_bwd_phase(send_phase),
                         )
                         self.global_schedule[pp_rank][curr_ts].append(_op)
+                    # end for fwd phase
+                    curr_ts += 1
+                # end for microbatch
+
+    def _optimize_schedule(self):
+        """Optimize the schedule by dropping unnecessary send/recv ops.
+
+        e.g., if bwd stage i = [bp2, bp1, bp0], only send/recv ops for bp2 are required.
+        """
+        self.global_schedule = [
+            [
+                [op for op in ts_schedule if (op.phase_id + 1) % sbs.get_spiral_backward_stage_build_phase_size() == 0]
+                for ts_schedule in pprank_schedule
+            ]
+            for pprank_schedule in self.global_schedule
+        ]
+
+    def _resolve_p2p_hang(self):
+        """Resolve P2P hang (when using p2p_ops) by jointly sorting timestep schedule of ranks by isend-irecv pairs.
+
+        e.g., timestep 5 of gpu=3, #f=2, #b=3, #micro=3
+        Before) Hangs since irecvs of corresponding isends are not called
+          rank 0                      rank 1                      rank 2
+            isend->rank 1(phase 9)      isend->rank 2(phase 13)     isend->rank 1(phase 15)
+            irecv<-rank 2(phase 17)     irecv<-rank 0(phase 9)      isend->rank 0(phase 17)
+                                        irecv<-rank 2(phase 15)     irecv<-rank 1(phase 13)
+        After) Hangs resolved
+          rank 0                      rank 1                      rank 2
+            isend->rank 1(phase 9)      irecv<-rank 0(phase 9)
+                                        isend->rank 2(phase 13)     irecv<-rank 1(phase 13)
+                                        irecv<-rank 2(phase 15)     isend->rank 1(phase 15)
+            irecv<-rank 2(phase 17)                                 isend->rank 0(phase 17)
+        """
+        _unoptimized_schedule = self.global_schedule
+        self.global_schedule = [
+            [[] for _ in range(self.total_ts)]
+            for _ in range(mpu.get_pipeline_model_parallel_world_size())
+        ]
+
+        for ts, ts_schedules in enumerate(zip(*_unoptimized_schedule)):
+            _merged = [
+                (op, pp_rank)
+                for pp_rank, ts_schedule in enumerate(ts_schedules)
+                for op in ts_schedule
+            ]
+            _merged.sort(key=lambda tup: tup[0].phase_id)
+            for op, pp_rank in _merged:
+                self.global_schedule[pp_rank][ts].append(op)
 
     def __str__(self) -> str:
         _str = ""

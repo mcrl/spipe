@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:o:x:" opt
+while getopts "j:n:s:t:l:f:b:m:g:o:x:y:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -14,6 +14,7 @@ do
         g ) GBS="$OPTARG" ;;
         o ) OPTIMIZER="$OPTARG" ;;
         x ) CROSS_MAPPING="$OPTARG" ;;
+        y ) SYNC_CKPT_COMMUNICATION="$OPTARG" ;;
     esac
 done
 
@@ -91,6 +92,12 @@ else
     SPIRAL_CROSS_MAPPING=NO
 fi
 
+if [[ "$SYNC_CKPT_COMMUNICATION" == "1" ]]; then
+    SPIRAL_SYNC_CKPT_COMMUNICATION=YES
+else
+    SPIRAL_SYNC_CKPT_COMMUNICATION=NO
+fi
+
 # config for interleaving
 INTERLEAVE_VIRTUAL_SIZE=${FWD_STAGE:=2}
 
@@ -101,6 +108,7 @@ echo -e "MODEL_SIZE=${MODEL_SIZE}\nMBS=${MBS}\nGBS=${GBS}"
 echo -e "TRAIN_ITER=${TRAIN_ITER}\nLOG_ITER=${LOG_ITER}(skip0=${SKIP_TRAIN_ITER_ZERO_TIMING})\nEVAL_ITER=${EVAL_ITER}"
 echo -e "SPIRAL_STAGE_OPTIMIZER=${SPIRAL_STAGE_OPTIMIZER}"
 echo -e "SPIRAL_CROSS_MAPPING=${SPIRAL_CROSS_MAPPING}"
+echo -e "SPIRAL_SYNC_CKPT_COMMUNICATION=${SPIRAL_SYNC_CKPT_COMMUNICATION}"
 echo -e "SPIRAL_FWD=${SPIRAL_FWD}\nSPIRAL_BWD=${SPIRAL_BWD}"
 echo -e "INTERLEAVE_VIRTUAL_SIZE=${INTERLEAVE_VIRTUAL_SIZE}"
 echo "==========================================="
