@@ -1,7 +1,5 @@
-import amp_C
 import torch
 import warnings
-import nvtx
 
 from megatron.core import tensor_parallel
 from megatron.optimizer.optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
@@ -101,22 +99,17 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
         return found_inf_flag
 
     @torch.no_grad()
-    def step(self, args, timers, offload_grad_ev_long=-1):
+    def step(self, args, timers):
         if type(self.optimizer) != SpiralCPUAdam:
             return super().step(args, timers)
         else:
-            # self.optimizer.set_grad_scaler(self.grad_scaler)
-            self.optimizer.set_event_long(offload_grad_ev_long)
-            self.optimizer.step()
-            return 0
+            return self.optimizer.step()
 
 
 class SpiralFP32Optimizer(FP32Optimizer):
     @torch.no_grad()
-    def step(self, args, timers, offload_grad_ev_long=-1):
+    def step(self, args, timers):
         if type(self.optimizer) != SpiralCPUAdam:
             return super().step(args, timers)
         else:
-            self.optimizer.set_event_long(offload_grad_ev_long)
-            self.optimizer.step()
-            return 0
+            return self.optimizer.step()

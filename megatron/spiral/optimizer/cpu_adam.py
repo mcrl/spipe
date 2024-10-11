@@ -116,7 +116,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             adamw_mode,
             should_log_le("info"),
         )
-        self.grad_scaler = None
+        self.inv_scale = 0
         self.ev_long = -1
 
     def __del__(self):
@@ -149,7 +149,6 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         Returns:
             loss: if ``closure`` is provided. Otherwise ``None``.
         """
-        inv_scale = self.grad_scaler.inv_scale.cpu() if self.grad_scaler is not None else torch.FloatTensor([0.0])
 
         loss = None
         if closure is not None:
@@ -237,15 +236,15 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         p.grad.data,
                         state["exp_avg"],
                         state["exp_avg_sq"],
-                        inv_scale,
+                        self.inv_scale,
                         self.half_precision,
                         self.ev_long,
                     )
 
         return loss
 
-    def set_grad_scaler(self, grad_scaler):
-        self.grad_scaler = grad_scaler
+    def set_inv_scale(self, inv_scale):
+        self.inv_scale = inv_scale
 
     def set_event_long(self, ev_long):
         self.ev_long = ev_long

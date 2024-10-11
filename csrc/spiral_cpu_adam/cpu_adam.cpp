@@ -144,7 +144,7 @@ int _spiral_adam_step(int optimizer_id,
                       torch::Tensor& grads,
                       torch::Tensor& exp_avg,
                       torch::Tensor& exp_avg_sq,
-                      torch::Tensor& inv_scale,
+                      float inv_scale,
                       bool half_precision,
                       long ev_long)
 {
@@ -195,11 +195,12 @@ int _spiral_adam_step(int optimizer_id,
   // unscale-and-check-inf
   if (half_precision) {
     torch::Tensor found_inf = torch::tensor({0.0f}, torch::dtype(torch::kFloat32));
+    torch::Tensor inv_scale_tensor = torch::tensor({inv_scale}, torch::dtype(torch::kFloat32));
 
     std::vector<at::Tensor> scaled_grads;
     scaled_grads.push_back(fp32_grads);
 
-    at::_amp_foreach_non_finite_check_and_unscale_(scaled_grads, found_inf, inv_scale);
+    at::_amp_foreach_non_finite_check_and_unscale_(scaled_grads, found_inf, inv_scale_tensor);
 
     if (found_inf.item<float>() > 0) {
       return 1;
@@ -352,7 +353,7 @@ int spiral_adam_step(int optimizer_id,
                      torch::Tensor& grads,
                      torch::Tensor& exp_avg,
                      torch::Tensor& exp_avg_sq,
-                     torch::Tensor& inv_scale,
+                     float inv_scale,
                      bool half_precision,
                      long ev_long)
 {
