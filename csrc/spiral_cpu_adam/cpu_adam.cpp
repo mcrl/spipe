@@ -31,15 +31,17 @@ struct ThreadSafeOptimizer {
   std::mutex m;
   std::vector<std::shared_ptr<torch::Tensor>> fp32_param_list;
   std::vector<float> found_inf_list;
+  std::vector<int> excluded_cpus;
 
   ThreadSafeOptimizer(
       std::unordered_map<int, std::shared_ptr<void>> group_s_opts,
       const int nparams,
       const int pool_size,
       const bool half_precision,
-      const bool should_log)
+      const bool should_log,
+      const std::vector<int>& excluded_cpus)
     : group_s_opts(group_s_opts), pool(pool_size), nparams(nparams),
-      nparams_submitted(0), should_log(should_log)
+      nparams_submitted(0), should_log(should_log), excluded_cpus(excluded_cpus)
   {
     if (half_precision)
       fp32_param_list.resize(nparams);
@@ -79,8 +81,9 @@ int spiral_create_adam_optimizer(int optimizer_id,
   else if (pool_size < 0)
     throw std::runtime_error("Invalid thread pool size");
 
+  std::vector<int> excluded_cpus = get_affinity();
   s_optimizers[optimizer_id] = std::make_shared<ThreadSafeOptimizer>(
-      group_s_opts, nparams, pool_size, half_precision, should_log);
+      group_s_opts, nparams, pool_size, half_precision, should_log, excluded_cpus);
 
   if (should_log) {
     printf("[%ld] ThreadSafeOptimizer #%d is created with %d threads for %d "
@@ -145,6 +148,9 @@ int _spiral_adam_step(int optimizer_id,
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
+  
+  // Set thread cpu affinity to not use the main thread cpu
+  set_affinity(ts_opt->excluded_cpus);
 
   if (ev_long == 0) {
     throw std::runtime_error("Event is not recorded");
