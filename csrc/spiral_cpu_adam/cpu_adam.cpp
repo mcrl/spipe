@@ -38,6 +38,7 @@ struct ThreadSafeOptimizer {
   const bool should_log;
   std::mutex m;
   std::vector<std::shared_ptr<torch::Tensor>> fp32_param_list;
+  std::vector<float> found_inf_list;
 
   ThreadSafeOptimizer(
       std::unordered_map<int, std::shared_ptr<void>> group_s_opts,
@@ -50,6 +51,7 @@ struct ThreadSafeOptimizer {
   {
     if (half_precision)
       fp32_param_list.resize(nparams);
+      found_inf_list.resize(nparams);
   }
 };
 
@@ -207,7 +209,9 @@ int _spiral_adam_step(int optimizer_id,
     at::_amp_foreach_non_finite_check_and_unscale_(scaled_grads, found_inf, inv_scale_tensor);
 
     if (found_inf.item<float>() > 0) {
-      return 1;
+      assert(param_id < ts_opt->found_inf_list.size());
+      ts_opt->found_inf_list[param_id] = found_inf.item<float>();
+      return 0;
     }
   }
 
@@ -420,7 +424,7 @@ int spiral_adam_step_plus_copy(int optimizer_id,
   return 0;
 }
 
-int spiral_adam_synchronize(int optimizer_id)
+float spiral_adam_synchronize(int optimizer_id)
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
@@ -441,10 +445,10 @@ int spiral_adam_synchronize(int optimizer_id)
   }
 
   size_t fcnt = 0;
-  int found_inf = 0;
   for (auto& f : ts_opt->futures) {
     if (f.get() != 0) {
-      found_inf++;
+      // Non-zero future value indicates an error
+      throw std::runtime_error("Error produced during Adam step is detected");
     }
     fcnt++;
   }
@@ -462,6 +466,9 @@ int spiral_adam_synchronize(int optimizer_id)
            (long)getpid(), optimizer_id);
   }
 
+  // get found_inf and re-initialize
+  float found_inf = std::accumulate(ts_opt->found_inf_list.begin(), ts_opt->found_inf_list.end(), 0);
+  std::fill(ts_opt->found_inf_list.begin(), ts_opt->found_inf_list.end(), 0);
   return found_inf;
 }
 
