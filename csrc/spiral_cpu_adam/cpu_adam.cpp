@@ -211,6 +211,7 @@ int _spiral_adam_step(int optimizer_id,
     if (found_inf.item<float>() > 0) {
       assert(param_id < ts_opt->found_inf_list.size());
       ts_opt->found_inf_list[param_id] = found_inf.item<float>();
+      nvtxRangePop();
       return 0;
     }
   }
