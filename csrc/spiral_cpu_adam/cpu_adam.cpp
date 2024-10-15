@@ -70,7 +70,8 @@ int spiral_create_adam_optimizer(int optimizer_id,
                                  float eps,
                                  float weight_decay,
                                  bool adamw_mode,
-                                 bool should_log)
+                                 bool should_log,
+                                 std::vector<int> excluded_cpus)
 {
   /*
    * Each backward stage has a ThreadSafeOptimizer and a ThreadPool.
@@ -89,7 +90,10 @@ int spiral_create_adam_optimizer(int optimizer_id,
   else if (pool_size < 0)
     throw std::runtime_error("Invalid thread pool size");
 
-  std::vector<int> excluded_cpus = get_affinity();
+  if (excluded_cpus.empty()) {
+    // If excludede_cpus is not set, assign the CPU affinity of the main thread
+    excluded_cpus = get_affinity();
+  }
   s_optimizers[optimizer_id] = std::make_shared<ThreadSafeOptimizer>(
       group_s_opts, nparams, pool_size, half_precision, should_log, excluded_cpus);
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import atexit
 
 import torch
+import torch.distributed as dist
 
 import spiral_helper
 
@@ -31,6 +32,7 @@ class SpiralBackend:
             alignment,
         )
         self.thunder_cuda_manager = SpiralCUDAManager()
+        self.node_cpu_affinity = init_node_cpu_affinity()
         global SPIRAL_BACKEND
         SPIRAL_BACKEND = self
 
@@ -53,6 +55,31 @@ def get_thunder_cuda_manager():
     global SPIRAL_BACKEND
     assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
     return SPIRAL_BACKEND.thunder_cuda_manager
+
+
+def get_node_cpu_affinity():
+    global SPIRAL_BACKEND
+    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
+    return SPIRAL_BACKEND.node_cpu_affinity
+
+
+def init_node_cpu_affinity():
+    """Share CPU affinity only with ranks on the same node."""
+    import os, socket
+    hostname = socket.gethostname()
+    world_size = dist.get_world_size()
+    gathered_hostnames = [None] * world_size
+    dist.all_gather_object(gathered_hostnames, hostname)
+    same_node_ranks = [i for i, h in enumerate(gathered_hostnames) if h == hostname]
+
+    node_group = dist.new_group(same_node_ranks)
+
+    affinity = os.sched_getaffinity(0)
+    node_affinity = torch.tensor([1 if i in affinity else 0 for i in range(os.cpu_count())], dtype=torch.int32, device='cuda')
+
+    dist.all_reduce(node_affinity, op=dist.ReduceOp.SUM, group=node_group)
+
+    return [i for i, value in enumerate(node_affinity) if value != 0]
 
 
 @dataclass(frozen=True)
