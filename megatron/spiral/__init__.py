@@ -18,12 +18,12 @@ from .schedule import (
     forward_backward_pipelining_with_spiral_remap,
     forward_backward_pipelining_with_spiral,
 )
-from .optimizer import (
+from .optimizer.stage_optimizer import (
     SpiralStageOptimizer,
     SpiralStageOptimizerParamScheduler,
 )
 from .module import SpiralPhaseList
-from .cpu_adam import SpiralCPUAdam
+from .optimizer.cpu_adam import SpiralCPUAdam
 
 from .build_state import (
     reset_spiral_forward_stage_build_phase_num_spiral_params_allocated,

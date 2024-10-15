@@ -12,7 +12,8 @@ from megatron.spiral.utils import is_spiral_param
 from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
 from .optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
-from megatron.spiral.optimizer import SpiralStageOptimizer
+from megatron.spiral.optimizer.stage_optimizer import SpiralStageOptimizer
+from megatron.spiral.optimizer.optimizer import SpiralFloat16Optimizer, SpiralFP32Optimizer
 
 
 def get_param_groups(modules,
@@ -147,7 +148,7 @@ def get_megatron_optimizer(model,
 
         # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
         if args.spiral_stage_optimizer:
-            from megatron.spiral.cpu_adam import SpiralCPUAdam
+            from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
             inner_opt_ty = SpiralCPUAdam
         else:
             from deepspeed.ops.adam import DeepSpeedCPUAdam
@@ -210,9 +211,13 @@ def get_megatron_optimizer(model,
                     hysteresis=args.hysteresis)
 
         # Megatron optimizer.
-        opt_ty = DistributedOptimizer \
-            if args.use_distributed_optimizer else \
-            Float16OptimizerWithFloat16Params
+        if args.use_distributed_optimizer:
+            opt_ty = DistributedOptimizer
+        elif args.spiral:
+            opt_ty = SpiralFloat16Optimizer
+        else:
+            opt_ty = Float16OptimizerWithFloat16Params
+        
         return opt_ty(optimizer,
                     args.clip_grad,
                     args.log_num_zeros_in_grad,
@@ -225,7 +230,8 @@ def get_megatron_optimizer(model,
                     model)
 
     # FP32.
-    return FP32Optimizer(optimizer, args.clip_grad,
+    opt_ty = SpiralFP32Optimizer if args.spiral else FP32Optimizer
+    return opt_ty(optimizer, args.clip_grad,
                          args.log_num_zeros_in_grad,
                          params_have_main_grad,
                          args.use_contiguous_buffers_in_local_ddp,

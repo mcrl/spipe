@@ -5,7 +5,7 @@ from megatron import get_args
 from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
 
-from .op_builder.cpu_adam import SpiralCPUAdamBuilder
+from .cpu_adam_builder import SpiralCPUAdamBuilder
 
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
@@ -100,12 +100,14 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         self.fp32_optimizer_states = fp32_optimizer_states
         self.nparams = sum(len(pg["params"]) for pg in self.param_groups)
         self.pool_size = get_args().spiral_stage_optimizer_pool_size
+        self.half_precision = get_args().fp16
         self.ds_opt_adam = SpiralCPUAdamBuilder().load()
         self.ds_opt_adam.create_adam(
             self.opt_id,
             len(self.param_groups),
             self.nparams,
             self.pool_size,
+            self.half_precision,
             lr,
             betas[0],
             betas[1],
@@ -114,6 +116,8 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             adamw_mode,
             should_log_le("info"),
         )
+        self.inv_scale = 0
+        self.ev_long = -1
 
     def __del__(self):
         # need to destroy the C++ object explicitly to avoid a memory leak when deepspeed.initialize
@@ -126,7 +130,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             group.setdefault("amsgrad", False)
 
     @torch.no_grad()
-    def step(self, closure=None, fp16_param_groups=None, **kwargs):
+    def step(self, closure=None, fp16_param_groups=None):
         """Update the model parameters.
 
         .. note::
@@ -161,11 +165,10 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         elif fp16_param_groups is not None:
             fp16_param_groups = [[fp16_param_groups]]
 
-        # get spiral kwargs
-        ev_long = kwargs.get("spiral_offload_grad_ev_long", -1)
-
+        param_idx = -1
         for group_id, group in enumerate(self.param_groups):
             for param_id, p in enumerate(group["params"]):
+                param_idx += 1
 
                 if p.grad is None:
                     print(f"[Warning] Optimizer#{self.opt_id} skipped grp#{group_id} param#{param_id} step due to grad={p.grad}")
@@ -215,12 +218,13 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         state["exp_avg"],
                         state["exp_avg_sq"],
                         fp16_param_groups[group_id][param_id].data,
-                        ev_long,
+                        self.ev_long,
                     )
                 else:
                     self.ds_opt_adam.adam_update(
                         self.opt_id,
                         group_id,
+                        param_idx,
                         state["step"],
                         group["lr"],
                         beta1,
@@ -232,9 +236,21 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                         p.grad.data,
                         state["exp_avg"],
                         state["exp_avg_sq"],
-                        ev_long,
+                        self.inv_scale,
+                        self.half_precision,
+                        self.ev_long,
                     )
+
         return loss
 
-    def sync(self):
-        self.ds_opt_adam.adam_sync(self.opt_id)
+    def set_inv_scale(self, inv_scale):
+        self.inv_scale = inv_scale
+
+    def set_event_long(self, ev_long):
+        self.ev_long = ev_long
+
+    def sync(self, found_inf=None):
+        # Need to sync until all thread optimizer completed
+        if found_inf is None:
+            found_inf = torch.FloatTensor([0])
+        self.ds_opt_adam.adam_sync(self.opt_id, found_inf)

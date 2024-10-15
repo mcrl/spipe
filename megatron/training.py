@@ -52,7 +52,6 @@ from megatron.spiral import (
 )
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
-from megatron.spiral.optimizer import SpiralStageOptimizer
 from megatron.spiral.utils import is_spiral_param
 from megatron.spiral.debug import (
     spiral_print,
@@ -61,7 +60,7 @@ from megatron.spiral.debug import (
     debug_param2name_id,
 )
 from megatron.spiral.init_context import patch_extra_repr
-from megatron.spiral.optimizer import (
+from megatron.spiral.optimizer.stage_optimizer import (
     SpiralStageOptimizer,
     SpiralStageOptimizerParamScheduler
 )
@@ -831,11 +830,9 @@ def train_step(forward_step_func, data_iterator,
     fwd_bwd_timers = timers if args.timing_log_level > 1 else None
 
     kwargs = {}
-    if args.spiral_overlap_offload_grad and args.spiral_stage_optimizer:
+    if args.spiral_stage_optimizer:
         # Performs grad offload and optimizer step overlapped with backward
         kwargs["spiral_stage_optimizer"] = optimizer
-        kwargs["spiral_grad_scaler"] = [opt_ty.scale_loss for opt_ty in getattr(optimizer, "optimizer_list")]
-        kwargs["spiral_stage_optimizer_step_returns"] = deque() # placeholder to store step() return values
 
     losses_reduced = forward_backward_func(
         forward_step_func=forward_step_func,
@@ -898,23 +895,13 @@ def train_step(forward_step_func, data_iterator,
         timers('optimizer').stop()
     else:
         if optimize_after_bwd_stage:
-            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+            update_successful, grad_norm, num_zeros_in_grad = optimizer.join_step()
         else:
             # Unoverlapped paramter update with SpiralStageOptimizer
             for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-                inner_step_kwargs = {} # empty without events
-                update_successful, grad_norm, num_zeros_in_grad = optimizer[
-                    bwd_stage_id
-                ].step(get_args(), get_timers(), **inner_step_kwargs)
-                kwargs["spiral_stage_optimizer_step_returns"].appendleft(
-                    (update_successful, grad_norm, num_zeros_in_grad)
-                )
-            # join optimizer
-            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-                assert hasattr(getattr(optimizer[bwd_stage_id], "optimizer"), "sync"), "bwd_stage_optimizer.optimizer should be SpiralCPUAdam and have sync method"
-                optimizer[bwd_stage_id].optimizer.sync()
+                optimizer.step(bwd_stage_id, None, get_args(), get_timers())
             # process step returns
-            update_successful, grad_norm, num_zeros_in_grad = SpiralStageOptimizer.process_step_returns(kwargs["spiral_stage_optimizer_step_returns"])
+            update_successful, grad_norm, num_zeros_in_grad = optimizer.join_step()
 
     # TODO (SpiralPipe) Need to remove when async option was enabled
     torch.distributed.barrier(group=mpu.get_pipeline_model_parallel_group())

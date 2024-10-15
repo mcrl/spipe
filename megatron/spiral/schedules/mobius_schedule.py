@@ -127,16 +127,10 @@ def mobius_schedule(
         )
 
     offload_grad_after_bwd_stage = get_args().spiral_overlap_offload_grad
-    optimize_after_bwd_stage = False
-    if offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer:
+    optimize_after_bwd_stage = offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer
+    if get_args().spiral_stage_optimizer:
         assert "spiral_stage_optimizer" in kwargs
-        assert "spiral_grad_scaler" in kwargs
-        assert "spiral_stage_optimizer_step_returns" in kwargs and isinstance(kwargs["spiral_stage_optimizer_step_returns"], deque)
-        optimize_after_bwd_stage = True
         optimizer = kwargs["spiral_stage_optimizer"]
-        grad_scaler = kwargs["spiral_grad_scaler"]
-    if optimize_after_bwd_stage:
-        optimizer_threads = [] # (thread, queue, ev)
 
     def _cleanup():
         # cleanup checkpointed input tensors and output tensors
@@ -468,19 +462,12 @@ def mobius_schedule(
                         assert isinstance(output_tensor, torch.Tensor) and output_tensor.numel() == 1
                     assert output_tensor.requires_grad
 
-                if optimize_after_bwd_stage:
-                    # grad_scaler is aligned (ascending) w.r.t bwd_stage_id
-                    # (same as optimizer_list in SpiralStageOptimizer)
-                    _grad_scaler = grad_scaler[bwd_stage_id]
-                else:
-                    _grad_scaler = grad_scaler
-
                 # wait for recv output tensor grad
                 # NOTE (SpiralPipe) Must be done in compute stream to avoid error
                 _wait_reqs(recv_reqs)
 
                 input_tensor_grad = backward_step(
-                    _grad_scaler,
+                    grad_scaler,
                     input_tensor_ckpt,
                     output_tensor,
                     output_tensor_grad,
@@ -570,30 +557,13 @@ def mobius_schedule(
                     "free",
                     tag=f"offload_grad:b{bwd_stage_id}"
                 )
-                offload_grad_ev_long = get_thunder_cuda_manager().record_event(offload_grad_curr)
-                if offload_grad_ev_long == -1:
+                if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
                     raise RuntimeError("record_event failed")
                 offload_event_queries[offload_grad_curr.tag] = offload_grad_curr
 
                 # if not spiral stage optimizer, then optimizer will be executed after iteration
                 if optimize_after_bwd_stage:
-                    _offload_grad_ev_cpu = torch.cuda.Event() # event to synchronize at cpu
-                    _optimizer_thread_queue = Queue()
-                    _offload_grad_ev_cpu.record()
-
-                    inner_step_kwargs = {}
-                    inner_step_kwargs["spiral_offload_grad_ev"] = _offload_grad_ev_cpu
-                    inner_step_kwargs["spiral_optimizer_thread_queue"] = _optimizer_thread_queue
-                    inner_step_kwargs["spiral_offload_grad_ev_long"] = _offload_grad_ev_cpu.cuda_event
-
-                    # TODO (SpiralPipe) timers is None. Fix it
-                    op = threading.Thread(
-                        target=optimizer[bwd_stage_id].step,
-                        args=(get_args(), get_timers()),
-                        kwargs=inner_step_kwargs,
-                    )
-                    op.start()
-                    optimizer_threads.append((op, _optimizer_thread_queue))
+                    optimizer.step(bwd_stage_id, offload_grad_curr, get_args(), get_timers())
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
                 if (
@@ -634,12 +604,6 @@ def mobius_schedule(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-
-    # join optimizer
-    if optimize_after_bwd_stage:
-        for op, q in optimizer_threads:
-            op.join()
-            kwargs["spiral_stage_optimizer_step_returns"].appendleft(q.get())
 
     _cleanup()
     return forward_data_store

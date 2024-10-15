@@ -4,16 +4,13 @@
 
 from abc import ABC
 from abc import abstractmethod
-import warnings
-import nvtx
-
 from apex.multi_tensor_apply import multi_tensor_applier
 import amp_C
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
 from torch._utils import _flatten_dense_tensors, _unflatten_dense_tensors
 
-from megatron import get_timers, get_args
+from megatron import get_timers
 from megatron import print_rank_0
 from megatron.core import mpu, tensor_parallel
 from megatron.model import DistributedDataParallel as LocalDDP
@@ -265,7 +262,7 @@ class MegatronOptimizer(ABC):
                 args.sequence_parallel:
             grads = []
             for model_module in self.models:
-                unwrapped_model = unwrap_model(
+                unwrapped_model = unwrap_model( 
                     model_module, (torchDDP, LocalDDP, Float16Module))
                 for param in unwrapped_model.parameters():
                     if getattr(param, 'sequence_parallel', False):
@@ -358,10 +355,7 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         # Note that we keep this for the cases that grad scaler is none.
         # We still record nan/inf if we have a bfloat16 with a grad scaler.
         if self.grad_scaler:
-            if get_args().spiral:
-                self.found_inf = torch.FloatTensor([0.0])
-            else:
-                self.found_inf = torch.cuda.FloatTensor([0.0])
+            self.found_inf = torch.cuda.FloatTensor([0.0])
 
         # Dummy tensor needed for apex multi-apply tensor.
         # For bfloat, we don't have multi-tensor apply and for now
@@ -369,10 +363,7 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         if bf16:
             self._dummy_overflow_buf = None
         else:
-            if get_args().spiral:
-                self._dummy_overflow_buf = torch.IntTensor([0])
-            else:
-                self._dummy_overflow_buf = torch.cuda.IntTensor([0])
+            self._dummy_overflow_buf = torch.cuda.IntTensor([0])
 
         # In case grad scaler is not passed, define the unity scale.
         if self.grad_scaler is None:
@@ -388,7 +379,7 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
     def reload_model_params(self):
         self._copy_model_params_to_main_params()
 
-    @nvtx.annotate("_unscale_main_grads_and_check_for_nan")
+
     def _unscale_main_grads_and_check_for_nan(self):
 
         # Collect main grads.
@@ -398,48 +389,22 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         self.found_inf.fill_(0.0)
 
         # Unscale and set found inf/nan
-        if get_args().spiral:
-            # for main_grad in main_grads:
-            #     main_grad.mul_(self.grad_scaler.inv_scale.cpu())
-            #     self.found_inf.add_(self._has_inf_or_nan(main_grad))
-            torch._amp_foreach_non_finite_check_and_unscale_(
-                main_grads, self.found_inf, self.grad_scaler.inv_scale.cpu())
-        else:
-            torch._amp_foreach_non_finite_check_and_unscale_(
-                main_grads, self.found_inf, self.grad_scaler.inv_scale)
+        torch._amp_foreach_non_finite_check_and_unscale_(
+            main_grads, self.found_inf, self.grad_scaler.inv_scale)
 
         # Update across all model parallel instances.
-        if get_args().spiral:
-            # TODO (SpiralPipe) Implement all_reduce for found_inf
-            warnings.warn("SpiralPipe currently does not implement all_reduce for found_inf. This is a critical bug when using TP or DP with SpiralPipe. We must implement this later on.")
-        else:
-            torch.distributed.all_reduce(self.found_inf,
-                                        op=torch.distributed.ReduceOp.MAX,
-                                        group=self.get_model_parallel_group())
+        torch.distributed.all_reduce(self.found_inf,
+                                     op=torch.distributed.ReduceOp.MAX,
+                                     group=self.get_model_parallel_group())
 
         # Check for nan.
         found_inf_flag = (self.found_inf.item() > 0)
 
         return found_inf_flag
 
-    # `x` is a torch.Tensor
-    @staticmethod
-    def _has_inf_or_nan(x, j=None):
-        float_x = x.float()
-        nan = float_x.isnan()
-        inf = float_x.isinf()
-        inf_or_nan = nan.logical_or(inf)
-        return inf_or_nan.float().max()
 
     @torch.no_grad()
-    def step(self, args, timers, **inner_step_kwargs):
-
-        spiral_optimizer_thread_queue = None
-        if get_args().spiral:
-            spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
-            spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
-            if spiral_offload_grad_ev is not None:
-                spiral_offload_grad_ev.synchronize()
+    def step(self, args, timers):
 
         # Copy gradients from model params to main params.
         timers('optimizer-copy-to-main-grad', log_level=1).start(
@@ -463,8 +428,6 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
 
             # If we found inf/nan, skip the update.
             if found_inf_flag:
-                if spiral_optimizer_thread_queue is not None:
-                    spiral_optimizer_thread_queue.put((False, None, None))
                 return False, None, None
 
         # Clip the main gradients.
@@ -485,9 +448,7 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         # Step the optimizer.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
-        self.optimizer.step(**inner_step_kwargs)
-        if hasattr(self.optimizer, "sync"):
-            self.optimizer.sync()
+        self.optimizer.step()
         timers('optimizer-inner-step').stop()
 
         # Update params from main params.
@@ -497,8 +458,6 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         timers('optimizer-copy-main-to-model-params').stop()
 
         # Successful update.
-        if spiral_optimizer_thread_queue is not None:
-            spiral_optimizer_thread_queue.put((True, grad_norm, num_zeros_in_grad))
         return True, grad_norm, num_zeros_in_grad
 
 
@@ -560,18 +519,17 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
             fp32_from_float16_params_this_group = []
             # For all the parameters in this group:
             for i, param in enumerate(param_group['params']):
-                if get_args().spiral:
-                    # NOTE (SpiralPipe) cpu params do not need to require grad
+                if param.requires_grad:
 
                     # float16 params:
-                    if param.type() in ['torch.HalfTensor',
-                                        'torch.BFloat16Tensor']:
+                    if param.type() in ['torch.cuda.HalfTensor',
+                                        'torch.cuda.BFloat16Tensor']:
                         float16_params_this_group.append(param)
                         # Create a copy
                         main_param = param.detach().clone().float()
                         # Copy tensor model parallel attributes.
                         tensor_parallel.copy_tensor_model_parallel_attributes(main_param,
-                                                                            param)
+                                                                              param)
                         if hasattr(param, 'shared'):
                             main_param.shared = param.shared
                         # Replace the optimizer params with the new fp32 copy.
@@ -583,48 +541,16 @@ class Float16OptimizerWithFloat16Params(MixedPrecisionOptimizer):
                             self.optimizer.state[main_param] \
                                 = self.optimizer.state.pop(param)
                     # fp32 params.
-                    elif param.type() == 'torch.FloatTensor':
+                    elif param.type() == 'torch.cuda.FloatTensor':
                         fp32_params_this_group.append(param)
                         param_group['params'][i] = param
 
                     else:
                         raise TypeError('Wrapped parameters must be one of '
-                                        'torch.FloatTensor,  '
-                                        'torch.HalfTensor, or '
-                                        'torch.BFloat16Tensor. '
+                                        'torch.cuda.FloatTensor,  '
+                                        'torch.cuda.HalfTensor, or '
+                                        'torch.cuda.BFloat16Tensor. '
                                         'Received {}'.format(param.type()))
-                else:
-                    if param.requires_grad:
-                        # float16 params:
-                        if param.type() in ['torch.cuda.HalfTensor',
-                                            'torch.cuda.BFloat16Tensor']:
-                            float16_params_this_group.append(param)
-                            # Create a copy
-                            main_param = param.detach().clone().float()
-                            # Copy tensor model parallel attributes.
-                            tensor_parallel.copy_tensor_model_parallel_attributes(main_param,
-                                                                                param)
-                            if hasattr(param, 'shared'):
-                                main_param.shared = param.shared
-                            # Replace the optimizer params with the new fp32 copy.
-                            param_group['params'][i] = main_param
-
-                            fp32_from_float16_params_this_group.append(main_param)
-                            # Reset existing state dict key to the new main param.
-                            if param in self.optimizer.state:
-                                self.optimizer.state[main_param] \
-                                    = self.optimizer.state.pop(param)
-                        # fp32 params.
-                        elif param.type() == 'torch.cuda.FloatTensor':
-                            fp32_params_this_group.append(param)
-                            param_group['params'][i] = param
-
-                        else:
-                            raise TypeError('Wrapped parameters must be one of '
-                                            'torch.cuda.FloatTensor,  '
-                                            'torch.cuda.HalfTensor, or '
-                                            'torch.cuda.BFloat16Tensor. '
-                                            'Received {}'.format(param.type()))
 
             self.float16_groups.append(float16_params_this_group)
             self.fp32_from_float16_groups.append(
@@ -792,15 +718,7 @@ class FP32Optimizer(MegatronOptimizer):
 
 
     @torch.no_grad()
-    def step(self, args, timers, **inner_step_kwargs):
-
-        spiral_optimizer_thread_queue = None
-        if get_args().spiral:
-            spiral_offload_grad_ev = inner_step_kwargs.get("spiral_offload_grad_ev", None)
-            spiral_optimizer_thread_queue = inner_step_kwargs.get("spiral_optimizer_thread_queue", None)
-            if spiral_offload_grad_ev is not None:
-                spiral_offload_grad_ev.synchronize()
-
+    def step(self, args, timers):
         """Clip gradients (if needed) and step the base optimizer.
         Always return successful since there is no overflow."""
 
@@ -837,14 +755,10 @@ class FP32Optimizer(MegatronOptimizer):
         # Update parameters.
         timers('optimizer-inner-step', log_level=1).start(
             barrier=args.barrier_with_L1_time)
-        self.optimizer.step(**inner_step_kwargs)
-        if hasattr(self.optimizer, "sync"):
-            self.optimizer.sync()
+        self.optimizer.step()
         timers('optimizer-inner-step').stop()
 
         # No overflow for FP32 optimizer.
-        if spiral_optimizer_thread_queue is not None:
-            spiral_optimizer_thread_queue.put((True, grad_norm, num_zeros_in_grad))
         return True, grad_norm, num_zeros_in_grad
 
 

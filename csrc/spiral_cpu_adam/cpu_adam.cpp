@@ -23,6 +23,7 @@
 #include <mutex>
 #include <thread>
 #include <unistd.h>
+#include <nvToolsExt.h>
 
 #define _DEBUG_OPTIMIZER false // for debugging Tensor values
 
@@ -36,15 +37,22 @@ struct ThreadSafeOptimizer {
   int nparams_submitted; // Number of parameters submitted to pool
   const bool should_log;
   std::mutex m;
+  std::vector<std::shared_ptr<torch::Tensor>> fp32_param_list;
+  std::vector<float> found_inf_list;
 
   ThreadSafeOptimizer(
       std::unordered_map<int, std::shared_ptr<void>> group_s_opts,
       const int nparams,
       const int pool_size,
+      const bool half_precision,
       const bool should_log)
     : group_s_opts(group_s_opts), pool(pool_size), nparams(nparams),
       nparams_submitted(0), should_log(should_log)
-  {}
+  {
+    if (half_precision)
+      fp32_param_list.resize(nparams);
+      found_inf_list.resize(nparams);
+  }
 };
 
 static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
@@ -53,6 +61,7 @@ int spiral_create_adam_optimizer(int optimizer_id,
                                  int ngroups,
                                  int nparams,
                                  int pool_size,
+                                 bool half_precision,
                                  float alpha,
                                  float betta1,
                                  float betta2,
@@ -79,7 +88,7 @@ int spiral_create_adam_optimizer(int optimizer_id,
     throw std::runtime_error("Invalid thread pool size");
 
   s_optimizers[optimizer_id] = std::make_shared<ThreadSafeOptimizer>(
-      group_s_opts, nparams, pool_size, should_log);
+      group_s_opts, nparams, pool_size, half_precision, should_log);
 
   if (should_log) {
     printf("[%ld] ThreadSafeOptimizer #%d is created with %d threads for %d "
@@ -126,6 +135,7 @@ int spiral_destroy_adam_optimizer(int optimizer_id)
 
 int _spiral_adam_step(int optimizer_id,
                       int group_id,
+                      int param_id,
                       size_t step,
                       float lr,
                       float beta1,
@@ -137,6 +147,8 @@ int _spiral_adam_step(int optimizer_id,
                       torch::Tensor& grads,
                       torch::Tensor& exp_avg,
                       torch::Tensor& exp_avg_sq,
+                      float inv_scale,
+                      bool half_precision,
                       long ev_long)
 {
   auto ts_opt =
@@ -157,8 +169,25 @@ int _spiral_adam_step(int optimizer_id,
     CHECK_CUDA(cudaEventSynchronize(ev));
   }
 
-  auto params_c = params.contiguous();
-  auto grads_c = grads.contiguous();
+  std::string range_name = "Thread " + std::to_string(param_id);
+  nvtxRangePushA(range_name.c_str());
+
+  torch::Tensor fp32_params;
+  torch::Tensor fp32_grads;
+  if (half_precision) {
+    assert(param_id < ts_opt->fp32_param_list.size());
+    if(!ts_opt->fp32_param_list[param_id]) {
+      ts_opt->fp32_param_list[param_id] = std::make_shared<torch::Tensor>(params.to(torch::kFloat));
+    }
+    fp32_params = *ts_opt->fp32_param_list[param_id];
+    fp32_grads = grads.to(torch::kFloat);
+  } else {
+    fp32_params = params;
+    fp32_grads = grads;
+  }
+
+  auto params_c = fp32_params.contiguous();
+  auto grads_c = fp32_grads.contiguous();
   auto exp_avg_c = exp_avg.contiguous();
   auto exp_avg_sq_c = exp_avg_sq.contiguous();
 
@@ -169,11 +198,29 @@ int _spiral_adam_step(int optimizer_id,
   float* exp_avg_ptr = (float*)exp_avg_c.data_ptr();
   float* exp_avg_sq_ptr = (float*)exp_avg_sq_c.data_ptr();
 
+  // unscale-and-check-inf
+  if (half_precision) {
+    torch::Tensor found_inf = torch::tensor({0.0f}, torch::dtype(torch::kFloat32));
+    torch::Tensor inv_scale_tensor = torch::tensor({inv_scale}, torch::dtype(torch::kFloat32));
+
+    std::vector<at::Tensor> scaled_grads;
+    scaled_grads.push_back(fp32_grads);
+
+    at::_amp_foreach_non_finite_check_and_unscale_(scaled_grads, found_inf, inv_scale_tensor);
+
+    if (found_inf.item<float>() > 0) {
+      assert(param_id < ts_opt->found_inf_list.size());
+      ts_opt->found_inf_list[param_id] = found_inf.item<float>();
+      nvtxRangePop();
+      return 0;
+    }
+  }
+
   if (_DEBUG_OPTIMIZER) {
     printf("Updating param=(%p,%f,%zu) with grad=(%p,%f,%zu), "
            "momentum=(%p,%f,%zu), variance=(%p,%f,%zu)\n",
-           params_ptr, at::mean(params).item().toFloat(), params_c.numel(),
-           grads_ptr, at::mean(grads).item().toFloat(), grads_c.numel(),
+           params_ptr, at::mean(fp32_params).item().toFloat(), params_c.numel(),
+           grads_ptr, at::mean(fp32_grads).item().toFloat(), grads_c.numel(),
            exp_avg_ptr, at::mean(exp_avg).item().toFloat(), exp_avg_c.numel(),
            exp_avg_sq_ptr, at::mean(exp_avg_sq).item().toFloat(),
            exp_avg_sq_c.numel());
@@ -188,14 +235,17 @@ int _spiral_adam_step(int optimizer_id,
   group_s_opt->update_state(lr, epsilon, weight_decay, bias_correction);
 
   group_s_opt->Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr,
-                      params_c.numel(), nullptr,
-                      (params.options().dtype() == at::kHalf));
+                      params_c.numel(), nullptr, false);
+
+  if (half_precision) {
+    params.copy_(fp32_params.to(params.options().dtype()));
+  }
 
   if (_DEBUG_OPTIMIZER) {
     printf("Updated param=(%p,%f,%zu) with grad=(%p,%f,%zu), "
            "momentum=(%p,%f,%zu), variance=(%p,%f,%zu)\n",
-           params_ptr, at::mean(params).item().toFloat(), params_c.numel(),
-           grads_ptr, at::mean(grads).item().toFloat(), grads_c.numel(),
+           params_ptr, at::mean(fp32_params).item().toFloat(), params_c.numel(),
+           grads_ptr, at::mean(fp32_grads).item().toFloat(), grads_c.numel(),
            exp_avg_ptr, at::mean(exp_avg).item().toFloat(), exp_avg_c.numel(),
            exp_avg_sq_ptr, at::mean(exp_avg_sq).item().toFloat(),
            exp_avg_sq_c.numel());
@@ -204,6 +254,7 @@ int _spiral_adam_step(int optimizer_id,
 #if defined(__ENABLE_CUDA__) or defined(__ENABLE_CANN__)
   group_s_opt->SynchronizeStreams();
 #endif
+  nvtxRangePop();
   return 0;
 }
 
@@ -300,6 +351,7 @@ int _spiral_adam_step_plus_copy(int optimizer_id,
 
 int spiral_adam_step(int optimizer_id,
                      int group_id,
+                     int param_id,
                      size_t step,
                      float lr,
                      float beta1,
@@ -311,6 +363,8 @@ int spiral_adam_step(int optimizer_id,
                      torch::Tensor& grads,
                      torch::Tensor& exp_avg,
                      torch::Tensor& exp_avg_sq,
+                     float inv_scale,
+                     bool half_precision,
                      long ev_long)
 {
   auto ts_opt =
@@ -326,9 +380,9 @@ int spiral_adam_step(int optimizer_id,
   }
 
   ts_opt->futures.emplace_back(
-      ts_opt->pool.submit(_spiral_adam_step, optimizer_id, group_id, step, lr,
+      ts_opt->pool.submit(_spiral_adam_step, optimizer_id, group_id, param_id, step, lr,
                           beta1, beta2, epsilon, weight_decay, bias_correction,
-                          params, grads, exp_avg, exp_avg_sq, ev_long));
+                          params, grads, exp_avg, exp_avg_sq, inv_scale, half_precision, ev_long));
   ts_opt->nparams_submitted++;
 
   return 0;
@@ -371,7 +425,7 @@ int spiral_adam_step_plus_copy(int optimizer_id,
   return 0;
 }
 
-void spiral_adam_synchronize(int optimizer_id)
+void spiral_adam_synchronize(int optimizer_id, torch::Tensor& found_inf)
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
@@ -412,6 +466,10 @@ void spiral_adam_synchronize(int optimizer_id)
     printf("(pid:%ld) ThreadSafeOptimizer #%d post-sync param update\n",
            (long)getpid(), optimizer_id);
   }
+
+  // get found_inf and re-initialize
+  found_inf.fill_(std::accumulate(ts_opt->found_inf_list.begin(), ts_opt->found_inf_list.end(), 0));
+  std::fill(ts_opt->found_inf_list.begin(), ts_opt->found_inf_list.end(), 0);
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
