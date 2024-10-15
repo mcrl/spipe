@@ -425,7 +425,7 @@ int spiral_adam_step_plus_copy(int optimizer_id,
   return 0;
 }
 
-float spiral_adam_synchronize(int optimizer_id)
+void spiral_adam_synchronize(int optimizer_id, torch::Tensor& found_inf)
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
@@ -468,9 +468,8 @@ float spiral_adam_synchronize(int optimizer_id)
   }
 
   // get found_inf and re-initialize
-  float found_inf = std::accumulate(ts_opt->found_inf_list.begin(), ts_opt->found_inf_list.end(), 0);
+  found_inf.fill_(std::accumulate(ts_opt->found_inf_list.begin(), ts_opt->found_inf_list.end(), 0));
   std::fill(ts_opt->found_inf_list.begin(), ts_opt->found_inf_list.end(), 0);
-  return found_inf;
 }
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)

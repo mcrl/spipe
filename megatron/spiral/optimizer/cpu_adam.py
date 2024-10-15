@@ -249,7 +249,8 @@ class SpiralCPUAdam(torch.optim.Optimizer):
     def set_event_long(self, ev_long):
         self.ev_long = ev_long
 
-    def sync(self):
+    def sync(self, found_inf=None):
         # Need to sync until all thread optimizer completed
-        found_inf = self.ds_opt_adam.adam_sync(self.opt_id)
-        return found_inf
+        if found_inf is None:
+            found_inf = torch.FloatTensor([0])
+        self.ds_opt_adam.adam_sync(self.opt_id, found_inf)

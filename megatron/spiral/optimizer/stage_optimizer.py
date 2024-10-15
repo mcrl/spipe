@@ -1,5 +1,6 @@
 from collections import deque
 import nvtx
+import torch
 
 from megatron.spiral.initialize import get_thunder_cuda_manager
 
@@ -68,9 +69,10 @@ class SpiralStageOptimizer:
     def join_step(self):
         spiral_stage_optimizer_step_returns = deque()
         for optimizer in reversed(self.optimizer_list):
-            found_inf = optimizer.optimizer.sync()
-            self.update_grad_scaler(found_inf > 0)
-            spiral_stage_optimizer_step_returns.appendleft((found_inf == 0, None, None))
+            found_inf = torch.FloatTensor([0])
+            optimizer.optimizer.sync(found_inf)
+            self.update_grad_scaler(found_inf.item() > 0)
+            spiral_stage_optimizer_step_returns.appendleft((found_inf.item() == 0, None, None))
 
         return self._process_step_returns(spiral_stage_optimizer_step_returns)
 
