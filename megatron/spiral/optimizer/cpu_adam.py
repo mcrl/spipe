@@ -254,3 +254,51 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         if found_inf is None:
             found_inf = torch.FloatTensor([0])
         self.ds_opt_adam.adam_sync(self.opt_id, found_inf)
+
+    @torch.no_grad()
+    def rollback(self):
+        """Rollback the model parameters."""
+
+        # intended device for step
+        device = torch.device("cpu")
+
+        param_idx = -1
+        for group_id, group in enumerate(self.param_groups):
+            for param_id, p in enumerate(group["params"]):
+                param_idx += 1
+
+                if p.grad is None:
+                    print(f"[Warning] Optimizer#{self.opt_id} skipped grp#{group_id} param#{param_id} step due to grad={p.grad}")
+                    continue
+
+                assert p.device == device, (
+                    f"CPUAdam param is on {p.device} and must be 'cpu', make "
+                    "sure you enabled 'offload_optimizer': 'cpu' in your ZeRO config."
+                )
+
+                state = self.state[p]
+                assert len(state) != 0, "Rollback should be call after run optimizer.step"
+
+                beta1, beta2 = group["betas"]
+
+                self.ds_opt_adam.adam_rollback(
+                    self.opt_id,
+                    group_id,
+                    param_idx,
+                    state["step"],
+                    group["lr"],
+                    beta1,
+                    beta2,
+                    group["eps"],
+                    group["weight_decay"],
+                    group["bias_correction"],
+                    p.data,
+                    p.grad.data,
+                    state["exp_avg"],
+                    state["exp_avg_sq"],
+                    self.inv_scale,
+                    self.half_precision,
+                    -1
+                )
+
+                state["step"] -= 1

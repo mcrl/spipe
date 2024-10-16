@@ -50,6 +50,11 @@ public:
   STEP(1)
   STEP(4)
   STEP(8)
+  void Rollback(float* _params,
+                float* grads,
+                float* _exp_avg,
+                float* _exp_avg_sq,
+                size_t _param_size);
   inline void IncrementStep(size_t step, float beta1, float beta2)
   {
     if (beta1 != _betta1 || beta2 != _betta2) {
@@ -298,4 +303,54 @@ void SpiralAdamOptimizer::Step_8(float* _params,
            (_param_size - rounded_size),
            (dev_params != nullptr ? (dev_params + rounded_size) : dev_params),
            half_precision);
+}
+
+void SpiralAdamOptimizer::Rollback(float* _params,
+                                   float* grads,
+                                   float* _exp_avg,
+                                   float* _exp_avg_sq,
+                                   size_t _param_size)
+{
+  size_t rounded_size = 0;
+
+  float betta1_minus1 = 1 - _betta1;
+  float betta2_minus1 = 1 - _betta2;
+
+  float step_size = -1 * _alpha / _bias_correction1;
+  float w_decay = -1 * _alpha * _weight_decay;
+
+  for (size_t t = rounded_size; t < _param_size; t += TILE) {
+    size_t copy_size = TILE;
+    if ((t + TILE) > _param_size)
+      copy_size = _param_size - t;
+    size_t offset = copy_size + t;
+
+    for (size_t k = t; k < offset; k++) {
+      float grad = grads[k];
+      float param = _params[k];
+      float momentum = _exp_avg[k];
+      float variance = _exp_avg_sq[k];
+
+      float aaa = momentum / (sqrt(variance) * _bias_correction2 + _eps);
+      param = param - aaa * step_size;
+      if (_weight_decay > 0 && _adamw_mode) {
+        param = param / (1 + w_decay);
+      }
+
+      if (_weight_decay > 0 && !_adamw_mode) {
+        grad = param * _weight_decay + grad;
+      }
+
+      momentum = momentum - grad * betta1_minus1;
+      momentum = momentum / _betta1;
+
+      grad = grad * grad;
+      variance = variance - grad * betta2_minus1;
+      variance = variance / _betta2;
+      
+      _params[k] = param;
+      _exp_avg[k] = momentum;
+      _exp_avg_sq[k] = variance;
+    }
+  }
 }

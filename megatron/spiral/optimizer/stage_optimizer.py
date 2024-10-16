@@ -84,6 +84,11 @@ class SpiralStageOptimizer:
             self.grad_scaler.update(found_inf_flag)
             self.inv_scale_val = self.grad_scaler.inv_scale.item()
 
+        # rollback
+        if found_inf_flag:
+            for optimizer in self.optimizer_list:
+                optimizer.optimizer.rollback()
+
         spiral_stage_optimizer_step_returns.appendleft((not found_inf_flag, None, None))
 
         return self._process_step_returns(spiral_stage_optimizer_step_returns)
