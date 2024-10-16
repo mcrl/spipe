@@ -2,6 +2,7 @@ from collections import deque
 import nvtx
 import torch
 
+from megatron.core import mpu
 from megatron.spiral.initialize import get_thunder_cuda_manager
 
 class SpiralStageOptimizer:
@@ -43,11 +44,6 @@ class SpiralStageOptimizer:
 
     param_groups = property(_get_param_groups)
 
-    def update_grad_scaler(self, found_inf):
-        if self.grad_scaler != None:
-            self.grad_scaler.update(found_inf)
-            self.inv_scale_val = self.grad_scaler.inv_scale.item()
-
     def get_loss_scale(self):
         return self.grad_scaler.scale
     
@@ -68,11 +64,27 @@ class SpiralStageOptimizer:
     @nvtx.annotate("join_step", color="red")
     def join_step(self):
         spiral_stage_optimizer_step_returns = deque()
+        local_found_inf = 0
+        found_inf_flag = False
+
+        # sync all optimizers
         for optimizer in reversed(self.optimizer_list):
             found_inf = torch.FloatTensor([0])
             optimizer.optimizer.sync(found_inf)
-            self.update_grad_scaler(found_inf.item() > 0)
-            spiral_stage_optimizer_step_returns.appendleft((found_inf.item() == 0, None, None))
+            local_found_inf += found_inf.item()
+
+        # update grad scaler
+        if self.grad_scaler:
+            found_inf = torch.cuda.FloatTensor([local_found_inf])
+            torch.distributed.all_reduce(found_inf,
+                                         op=torch.distributed.ReduceOp.MAX,
+                                         group=mpu.get_model_parallel_group())
+            found_inf_flag = (found_inf.item() > 0)
+
+            self.grad_scaler.update(found_inf_flag)
+            self.inv_scale_val = self.grad_scaler.inv_scale.item()
+
+        spiral_stage_optimizer_step_returns.appendleft((not found_inf_flag, None, None))
 
         return self._process_step_returns(spiral_stage_optimizer_step_returns)
 
