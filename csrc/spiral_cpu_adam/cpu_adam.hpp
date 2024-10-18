@@ -348,6 +348,11 @@ void SpiralAdamOptimizer::Rollback(float* _params,
       variance = variance - grad * betta2_minus1;
       variance = variance / _betta2;
       
+      // If the fp32 precision error is negative, the sqrt operation will result in nan
+      if (variance < 0) {
+        variance = 0;
+      }
+
       _params[k] = param;
       _exp_avg[k] = momentum;
       _exp_avg_sq[k] = variance;
