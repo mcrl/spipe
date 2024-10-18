@@ -374,7 +374,7 @@ int spiral_adam_rollback(int optimizer_id,
   // same state value refer to megatron/spiral/cpu_adam.py step()
   group_s_opt->IncrementStep(step, beta1, beta2);
   group_s_opt->update_state(lr, epsilon, weight_decay, bias_correction);
-  group_s_opt->Rollback(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr, params_c.numel());
+  group_s_opt->Rollback_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr, params_c.numel());
 
   if (half_precision) {
     params.copy_(fp32_params.to(params.options().dtype()));

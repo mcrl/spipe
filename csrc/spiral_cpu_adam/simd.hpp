@@ -24,6 +24,8 @@
 #define SIMD_FMA(x, y, c) _mm512_fmadd_ps(x, y, c)
 #define SIMD_SQRT(x) _mm512_sqrt_ps(x)
 #define SIMD_DIV(x, y) _mm512_div_ps(x, y)
+#define SIMD_AND(x, y) _mm512_and_ps(x, y)
+#define SIMD_CMP_LT(x, y) _mm512_cmp_ps(x, y, _CMP_LT_OQ)
 #define SIMD_WIDTH 16
 
 #define SIMD_LOAD2(x, h) \
@@ -42,7 +44,10 @@
 #define SIMD_FMA(x, y, c) _mm256_fmadd_ps(x, y, c)
 #define SIMD_SQRT(x) _mm256_sqrt_ps(x)
 #define SIMD_DIV(x, y) _mm256_div_ps(x, y)
+#define SIMD_AND(x, y) _mm256_and_ps(x, y)
+#define SIMD_CMP_LT(x, y) _mm256_cmp_ps(x, y, _CMP_LT_OQ)
 #define SIMD_WIDTH 8
+
 #define SIMD_LOAD2(x, h) \
     ((h) ? _mm256_cvtph_ps(_mm_loadu_si128((const __m128i*)x)) : _mm256_loadu_ps(x))
 
@@ -131,10 +136,28 @@ inline void simd_mul(AVX_Data* dst, AVX_Data* src_a_l, AVX_Data* src_a_r)
     for (size_t i = 0; i < span; ++i) { dst[i].data = SIMD_MUL(src_a_l[i].data, src_a_r[i].data); }
 }
 template <int span>
+inline void simd_div(AVX_Data* dst, AVX_Data* src_a_l, AVX_Data src_a_r)
+{
+#pragma unroll
+    for (size_t i = 0; i < span; ++i) { dst[i].data = SIMD_DIV(src_a_l[i].data, src_a_r.data); }
+}
+template <int span>
 inline void simd_div(AVX_Data* dst, AVX_Data* src_a_l, AVX_Data* src_a_r)
 {
 #pragma unroll
     for (size_t i = 0; i < span; ++i) { dst[i].data = SIMD_DIV(src_a_l[i].data, src_a_r[i].data); }
+}
+template <int span>
+inline void simd_negative_to_zero(AVX_Data* src)
+{
+#pragma unroll
+    for (size_t i = 0; i < span; ++i) {
+        AVX_Data _zero;
+        _zero.data = SIMD_SET(0.0);
+        AVX_Data _positive_mask;
+        _positive_mask.data = SIMD_CMP_LT(_zero.data, src[i].data);
+        src[i].data = SIMD_AND(src[i].data, _positive_mask.data);
+    }
 }
 
 #endif
