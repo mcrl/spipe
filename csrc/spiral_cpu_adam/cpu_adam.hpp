@@ -376,12 +376,12 @@ void SpiralAdamOptimizer::Rollback_AVX(size_t* rounded_size,
       AVX_Data param_4[span];
       simd_load<span>(param_4, _params + (i >> rshft), false);
 
-      AVX_Data aaa_4[span];
-      simd_sqrt<span>(aaa_4, variance_4);
-      simd_fma<span>(aaa_4, aaa_4, bias2_sqrt, eps_4);
-      simd_div<span>(aaa_4, momentum_4, aaa_4);
+      AVX_Data buf_4[span];
+      simd_sqrt<span>(buf_4, variance_4);
+      simd_fma<span>(buf_4, buf_4, bias2_sqrt, eps_4);
+      simd_div<span>(buf_4, momentum_4, buf_4);
 
-      simd_fma<span>(param_4, aaa_4, minus_step_size_4, param_4);
+      simd_fma<span>(param_4, buf_4, minus_step_size_4, param_4);
 
       if (_weight_decay > 0 && _adamw_mode) {
         simd_div<span>(param_4, param_4, weight_decay4);
@@ -440,8 +440,8 @@ void SpiralAdamOptimizer::Rollback_1(float* _params,
         float momentum = _exp_avg[k];
         float variance = _exp_avg_sq[k];
 
-        float aaa = momentum / (sqrt(variance) * _bias_correction2 + _eps);
-        param = param - aaa * step_size;
+        float buf = momentum / (sqrt(variance) * _bias_correction2 + _eps);
+        param = param - buf * step_size;
         if (_weight_decay > 0 && _adamw_mode) {
           param = param / (1 + w_decay);
         }
