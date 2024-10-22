@@ -9,8 +9,12 @@ class SpiralStageOptimizer:
 
     def __init__(self, optimizers, *args, **kwargs):
         self.optimizer_list = optimizers  # do not change attr name
-        self.grad_scaler = self.optimizer_list[0].grad_scaler if len(self.optimizer_list) > 0 else None
+
+        self.grad_scaler = None
+        if len(self.optimizer_list) > 0 and hasattr(self.optimizer_list[0], 'grad_scaler'):
+            self.grad_scaler = self.optimizer_list[0].grad_scaler
         self.inv_scale_val = self.grad_scaler.inv_scale.item() if self.grad_scaler != None else 0.0
+        self.default_scale = torch.cuda.FloatTensor([1.0])
 
     # Required for checkpointing
     def state_dict(self):
@@ -45,7 +49,10 @@ class SpiralStageOptimizer:
     param_groups = property(_get_param_groups)
 
     def get_loss_scale(self):
-        return self.grad_scaler.scale
+        if self.grad_scaler:
+            return self.grad_scaler.scale
+        else:
+            return self.default_scale
     
     def scale_loss(self, loss):
         """Simple scaling."""
