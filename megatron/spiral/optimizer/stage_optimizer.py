@@ -94,7 +94,7 @@ class SpiralStageOptimizer:
         # rollback
         if found_inf_flag:
             for optimizer in self.optimizer_list:
-                optimizer.optimizer.rollback()
+                optimizer.optimizer.rollback(sync=True)
 
         spiral_stage_optimizer_step_returns.appendleft((not found_inf_flag, None, None))
 

@@ -284,23 +284,23 @@ int spiral_adam_step(int optimizer_id,
   return 0;
 }
 
-int spiral_adam_rollback(int optimizer_id,
-                         int group_id,
-                         int param_id,
-                         size_t step,
-                         float lr,
-                         float beta1,
-                         float beta2,
-                         float epsilon,
-                         float weight_decay,
-                         bool bias_correction,
-                         torch::Tensor& params,
-                         torch::Tensor& grads,
-                         torch::Tensor& exp_avg,
-                         torch::Tensor& exp_avg_sq,
-                         float inv_scale,
-                         bool half_precision,
-                         long ev_long)
+int _spiral_adam_rollback(int optimizer_id,
+                          int group_id,
+                          int param_id,
+                          size_t step,
+                          float lr,
+                          float beta1,
+                          float beta2,
+                          float epsilon,
+                          float weight_decay,
+                          bool bias_correction,
+                          torch::Tensor& params,
+                          torch::Tensor& grads,
+                          torch::Tensor& exp_avg,
+                          torch::Tensor& exp_avg_sq,
+                          float inv_scale,
+                          bool half_precision,
+                          long ev_long)
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
@@ -379,6 +379,45 @@ int spiral_adam_rollback(int optimizer_id,
   }
 
   nvtxRangePop();
+  return 0;
+}
+
+int spiral_adam_rollback(int optimizer_id,
+                         int group_id,
+                         int param_id,
+                         size_t step,
+                         float lr,
+                         float beta1,
+                         float beta2,
+                         float epsilon,
+                         float weight_decay,
+                         bool bias_correction,
+                         torch::Tensor& params,
+                         torch::Tensor& grads,
+                         torch::Tensor& exp_avg,
+                         torch::Tensor& exp_avg_sq,
+                         float inv_scale,
+                         bool half_precision,
+                         long ev_long)
+{
+  auto ts_opt =
+      std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
+
+  std::lock_guard<std::mutex> lck(ts_opt->m);
+
+  if (ts_opt->should_log) {
+    printf("(pid:%ld) ThreadSafeOptimizer #%d param #%d rollback called with "
+           "param.ptr=%p, grad.ptr=%p\n",
+           (long)getpid(), optimizer_id, ts_opt->nparams_submitted,
+           params.data_ptr(), grads.data_ptr());
+  }
+
+  ts_opt->futures.emplace_back(
+      ts_opt->pool.submit(_spiral_adam_rollback, optimizer_id, group_id, param_id, step, lr,
+                          beta1, beta2, epsilon, weight_decay, bias_correction,
+                          params, grads, exp_avg, exp_avg_sq, inv_scale, half_precision, ev_long));
+  ts_opt->nparams_submitted++;
+
   return 0;
 }
 
