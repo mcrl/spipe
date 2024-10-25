@@ -48,7 +48,8 @@ def get_param_groups(modules,
             if not param.requires_grad:
                 continue
 
-            if args.spiral:
+            # TODO: This is for DeepSpeedCPUOptimizer which will be deprecated.
+            if args.spiral and not args.spiral_stage_optimizer:
                 # Only params converted to spiral param and currently placed on local CPU memory should enter,
                 # as it is the necessary condition for backward stages
                 assert (is_spiral_param(param))
@@ -62,7 +63,8 @@ def get_param_groups(modules,
                 no_wd = no_weight_decay_cond(name, param)
             else:
                 # do not regularize biases nor Norm parameters
-                no_wd = name.endswith(".bias") or len(param.shape) == 1
+                shape = param.spiral_shape if args.spiral else param.shape
+                no_wd = name.endswith(".bias") or len(shape) == 1
 
             if scale_lr_cond is not None:
                 if args.spiral:
