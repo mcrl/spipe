@@ -439,6 +439,9 @@ def validate_args(args, defaults={}):
         if args.use_distributed_optimizer:
             raise RuntimeError(
                 "SpiralPipe currently does not support distributed optimizer")
+        if args.spiral_heterogeneous_optimizer:
+            assert args.spiral_stage_optimizer, "spiral-stage-optimizer should be enabled with spiral-heterogeneous-optimizer"
+        
 
     # GQA
     if args.num_key_value_heads is None:
@@ -1111,6 +1114,9 @@ def _add_distributed_args(parser):
     group.add_argument('--spiral-stage-optimizer-pool-size', type=int, default=0,
                         help='Thread pool size per spiral stage optimizer when --spiral-stage-optimizer is enabled'
                         'Default value (0) enables dynamic thread pool sizing')
+    group.add_argument('--spiral-heterogeneous-optimizer', action='store_true',
+                        help='Enable cpu-gpu heterogeneous optimizer per each stage. '
+                        'Use gpu optimizer for the first stage and cpu optimizer for the others')
     group.add_argument('--spiral-debug-backend', action='store_true',
                        help='Enable SpiralPipe backend logging')
     group.add_argument('--spiral-cross-mapping', action='store_true',

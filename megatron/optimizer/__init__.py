@@ -148,10 +148,18 @@ def get_megatron_optimizer(model,
     if args.spiral:
         assert args.optimizer == 'adam', 'SpiralPipe only support Adam'
 
-        # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
         if args.spiral_stage_optimizer:
-            from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
-            inner_opt_ty = SpiralCPUAdam
+            _unwrapped_model = model[0]
+            assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
+            delattr(_unwrapped_model, "_spiral_optimizer_entered")
+
+            # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
+            # If --spiral-heterogeneous-optimizer is enabled, apply gpu optimizer to first stage.
+            if args.spiral_heterogeneous_optimizer and _unwrapped_model.spiral_backward_stage_id == 0:
+                inner_opt_ty = Adam
+            else:
+                from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
+                inner_opt_ty = SpiralCPUAdam
         else:
             from deepspeed.ops.adam import DeepSpeedCPUAdam
             inner_opt_ty = DeepSpeedCPUAdam
@@ -163,11 +171,6 @@ def get_megatron_optimizer(model,
             betas=(args.adam_beta1, args.adam_beta2),
             eps=args.adam_eps,
         )
-
-        if args.spiral_stage_optimizer:
-            _unwrapped_model = model[0]
-            assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
-            delattr(_unwrapped_model, "_spiral_optimizer_entered")
     else:
         if args.optimizer == 'adam':
             optimizer = Adam(param_groups,
