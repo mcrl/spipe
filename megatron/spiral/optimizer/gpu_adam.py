@@ -1,41 +1,14 @@
+# Most of the code here has been copied from:
+#   https://github.com/NVIDIA/apex/blob/741bdf50825a97664db08574981962d66436d16a/apex/optimizers/fused_adam.py
+#   https://github.com/sail-sg/zero-bubble-pipeline-parallelism
+# with some modifications.
+   
 import torch
 from apex.multi_tensor_apply import multi_tensor_applier
 
-class FusedAdam(torch.optim.Optimizer):
+class SpiralGPUAdam(torch.optim.Optimizer):
 
     """Implements Adam algorithm.
-
-    Currently GPU-only.  Requires Apex to be installed via
-    ``pip install -v --no-cache-dir --global-option="--cpp_ext" --global-option="--cuda_ext" ./``.
-
-    This version of fused Adam implements 2 fusions.
-
-      * Fusion of the Adam update's elementwise operations
-      * A multi-tensor apply launch that batches the elementwise updates applied to all the model's parameters into one or a few kernel launches.
-
-    :class:`apex.optimizers.FusedAdam` may be used as a drop-in replacement for ``torch.optim.AdamW``,
-    or ``torch.optim.Adam`` with ``adam_w_mode=False``::
-
-        opt = apex.optimizers.FusedAdam(model.parameters(), lr = ....)
-        ...
-        opt.step()
-
-    :class:`apex.optimizers.FusedAdam` may be used with or without Amp.  If you wish to use :class:`FusedAdam` with Amp,
-    you may choose any ``opt_level``::
-
-        opt = apex.optimizers.FusedAdam(model.parameters(), lr = ....)
-        model, opt = amp.initialize(model, opt, opt_level="O0" or "O1 or "O2")
-        ...
-        opt.step()
-
-    In general, ``opt_level="O1"`` is recommended.
-
-
-    .. warning::
-        A previous version of :class:`FusedAdam` allowed a number of additional arguments to ``step``.  These additional arguments
-        are now deprecated and unnecessary.
-
-    Adam was been proposed in `Adam: A Method for Stochastic Optimization`_.
 
     Arguments:
         params (iterable): iterable of parameters to optimize or dicts defining
@@ -58,11 +31,6 @@ class FusedAdam(torch.optim.Optimizer):
         master_weights (bool, optional): whether to maintain FP32 master weights
            in the optimizer with FP16 mixed precision training, currently can
            only be used with capturable set to True. (default: False)
-
-    .. _Adam - A Method for Stochastic Optimization:
-        https://arxiv.org/abs/1412.6980
-    .. _On the Convergence of Adam and Beyond:
-        https://openreview.net/forum?id=ryQu7f-RZ
     """
 
     def __init__(self, params, lr=1e-3, bias_correction=True,
@@ -71,14 +39,14 @@ class FusedAdam(torch.optim.Optimizer):
                  capturable=False, master_weights=False):
 
         if amsgrad:
-            raise RuntimeError('FusedAdam does not support the AMSGrad variant.')
+            raise RuntimeError('SpiralGPUAdam does not support the AMSGrad variant.')
         if master_weights and not capturable:
             raise RuntimeError('Master weights is currently only supported with the capturable version.')
         # If the optimizer is capturable then LR should be a tensor (on GPU)
         lr = torch.tensor(lr, dtype=torch.float32) if capturable else lr
         defaults = dict(lr=lr, bias_correction=bias_correction,
                         betas=betas, eps=eps, weight_decay=weight_decay)
-        super(FusedAdam, self).__init__(params, defaults)
+        super(SpiralGPUAdam, self).__init__(params, defaults)
         self.adam_w_mode = 1 if adam_w_mode else 0
         self.set_grad_none = set_grad_none
 
@@ -114,7 +82,7 @@ class FusedAdam(torch.optim.Optimizer):
             self.multi_tensor_adam_capturable = amp_C.multi_tensor_adam_capturable
             self.multi_tensor_adam_capturable_master = amp_C.multi_tensor_adam_capturable_master
         else:
-            raise RuntimeError('apex.optimizers.FusedAdam requires cuda extensions')
+            raise RuntimeError('SpiralGPUAdam requires cuda extensions')
 
     def zero_grad(self):
         if self.set_grad_none:
@@ -122,7 +90,7 @@ class FusedAdam(torch.optim.Optimizer):
                 for p in group['params']:
                     p.grad = None
         else:
-            super(FusedAdam, self).zero_grad()
+            super(SpiralGPUAdam, self).zero_grad()
 
     def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
         """Performs a single optimization step.
@@ -134,7 +102,7 @@ class FusedAdam(torch.optim.Optimizer):
         The remaining arguments are deprecated, and are only retained (for the moment) for error-checking purposes.
         """
         if any(p is not None for p in [grads, output_params, scale, grad_norms]):
-            raise RuntimeError('FusedAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
+            raise RuntimeError('SpiralGPUAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
         loss = None
         if closure is not None:
             loss = closure()
@@ -164,7 +132,7 @@ class FusedAdam(torch.optim.Optimizer):
                 if p.grad is None:
                     continue
                 if p.grad.data.is_sparse:
-                    raise RuntimeError('FusedAdam does not support sparse gradients, please consider SparseAdam instead')
+                    raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
 
                 state = self.state[p]
                 # State initialization
@@ -194,7 +162,7 @@ class FusedAdam(torch.optim.Optimizer):
                     m_32.append(state['exp_avg'])
                     v_32.append(state['exp_avg_sq'])
                 else:
-                    raise RuntimeError('FusedAdam only support fp16 and fp32.')
+                    raise RuntimeError('SpiralGPUAdam only support fp16 and fp32.')
 
             # If the optimizer is capturable, then if there's a grad scaler it works
             # on the GPU + a different multi_tensor_applier should be called
@@ -303,3 +271,135 @@ class FusedAdam(torch.optim.Optimizer):
                             group['weight_decay'])
 
         return loss
+
+    def rollback(self):
+        if self.capturable:
+            raise ValueError("Not supported")
+        if not self.adam_w_mode:
+            raise ValueError("Not supported")
+        loss = None
+
+        for group, group_master in zip(self.param_groups, self.param_groups_master):
+            if len(group['params']) == 0:
+                continue
+
+            bias_correction = 1 if group['bias_correction'] else 0
+            beta1, beta2 = group['betas']
+
+            # create lists for multi-tensor apply
+            g_16, p_16, m_16, v_16 = [], [], [], []
+            g_bf, p_bf, m_bf, v_bf = [], [], [], []
+            g_32, p_32, m_32, v_32 = [], [], [], []
+            p_16_master = []
+            p_32_master = []
+
+            for p, p_master in zip(group['params'], group_master['params']):
+                if p.grad is None:
+                    continue
+                if p.grad.data.is_sparse:
+                    raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
+
+                state = self.state[p]
+                assert len(state) != 0, "Rollback should be call after run optimizer.step"
+
+                if p.dtype == torch.float16:
+                    if self.master_weights:
+                        p_16_master.append(p_master.data)
+                    g_16.append(p.grad.data)
+                    p_16.append(p.data)
+                    m_16.append(state['exp_avg'])
+                    v_16.append(state['exp_avg_sq'])
+                elif p.dtype == torch.bfloat16:
+                    g_bf.append(p.grad)
+                    p_bf.append(p)
+                    m_bf.append(state['exp_avg'])
+                    v_bf.append(state['exp_avg_sq'])
+                elif p.dtype == torch.float32:
+                    if self.master_weights:
+                        p_32_master.append(p_master.data)
+                    g_32.append(p.grad.data)
+                    p_32.append(p.data)
+                    m_32.append(state['exp_avg'])
+                    v_32.append(state['exp_avg_sq'])
+                else:
+                    raise RuntimeError('SpiralGPUAdam only support fp16 and fp32.')
+
+            if len(g_16) > 0:
+                multi_tensor_rollback_adamw(
+                    g_16, p_16, m_16, v_16,
+                    group['lr'],
+                    beta1,
+                    beta2,
+                    group['eps'],
+                    group['step'],
+                    bias_correction,
+                    group['weight_decay'])
+
+            if len(g_bf) > 0:
+                multi_tensor_rollback_adamw(
+                    g_bf, p_bf, m_bf, v_bf,
+                    group['lr'],
+                    beta1,
+                    beta2,
+                    group['eps'],
+                    group['step'],
+                    bias_correction,
+                    group['weight_decay'])
+
+            if len(g_32) > 0:
+                multi_tensor_rollback_adamw(
+                    g_32, p_32, m_32, v_32,
+                    group['lr'],
+                    beta1,
+                    beta2,
+                    group['eps'],
+                    group['step'],
+                    bias_correction,
+                    group['weight_decay'])
+            group['step'] -= 1
+
+        return loss
+
+
+def multi_tensor_rollback_adamw(
+    g_list, p_list, m_list, v_list,
+    lr,
+    beta1,
+    beta2,
+    eps,
+    step,
+    bias_correction,
+    weight_decay,
+):
+    beta1_correction, beta2_correction = 1.0, 1.0
+    if bias_correction == 1:
+        beta1_correction = 1 - beta1 ** step
+        beta2_correction = 1 - beta2 ** step
+    for i, p in enumerate(p_list):
+        rollback_adamw(
+            g_list[i], p_list[i], m_list[i], v_list[i],
+            lr,
+            beta1,
+            beta2,
+            beta1_correction,
+            beta2_correction,
+            eps,
+            weight_decay,
+        )
+
+
+def rollback_adamw(
+    g: torch.Tensor, p: torch.Tensor, m: torch.Tensor, v: torch.Tensor,
+    lr,
+    beta1,
+    beta2,
+    beta1_correction,
+    beta2_correction,
+    eps,
+    decay,
+):
+    update = (m / beta1_correction) / ((v / beta2_correction).sqrt() + eps)
+    update.mul_(lr)
+    p.add_(update).div_(1 - lr * decay)
+    v.addcmul_(g, g, value=beta2 - 1).div_(beta2)
+    m.add_(g, alpha=beta1 - 1).div_(beta1)
