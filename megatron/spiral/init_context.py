@@ -469,11 +469,13 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             if params_have_main_grad:
                 assert hasattr(param, "main_grad")
                 # Ensure the tensor memory is not reused for another tensor until all work queued on stream is complete
-                param.main_grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
+                if param.main_grad is not None:
+                    param.main_grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
                 param.main_grad = None
             if hasattr(param, "grad"):
                 # Ensure the tensor memory is not reused for another tensor until all work queued on stream is complete
-                param.grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
+                if param.grad is not None:
+                    param.grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
                 param.grad = None
 
         def _assert_free_grad(param: Parameter) -> None:

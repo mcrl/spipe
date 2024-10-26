@@ -88,7 +88,7 @@ class SpiralStageOptimizer:
         # sync all optimizers
         for optimizer in reversed(self.optimizer_list):
             found_inf = torch.FloatTensor([0])
-            optimizer.optimizer.sync(found_inf)
+            optimizer.sync(found_inf)
             local_found_inf += found_inf.item()
 
         # update grad scaler
@@ -105,7 +105,7 @@ class SpiralStageOptimizer:
         # rollback
         if found_inf_flag:
             for optimizer in self.optimizer_list:
-                optimizer.optimizer.rollback(sync=True)
+                optimizer.rollback(sync=True)
 
         spiral_stage_optimizer_step_returns.appendleft((not found_inf_flag, None, None))
 

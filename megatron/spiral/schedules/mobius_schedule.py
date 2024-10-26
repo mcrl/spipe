@@ -566,8 +566,7 @@ def mobius_schedule(
                     optimizer.step(bwd_stage_id, offload_grad_curr, get_args(), get_timers())
 
                 # free bwd stage grads (spiral_free_grad is cpu job with tensor.record_stream)
-                if optimizer.is_cpu_optimizer(bwd_stage_id):
-                    model[bwd_stage_id].spiral_free_grad()
+                model[bwd_stage_id].spiral_free_grad()
         # end offload & free grad
 
         mpu.set_spiral_backward_virtual_rank(None)
