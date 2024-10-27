@@ -68,13 +68,13 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
                         p.fetch(non_blocking=False)
 
             super().step(args, timers)
-        
+
             for group in self.float16_groups:
                 for p in group:
                     if is_spiral_param(p):
                         p.offload()
                         p.free()
-                        
+
     def sync(self, found_inf=None):
         if is_cpu_optimizer(self.optimizer):
             self.optimizer.sync(found_inf)
@@ -86,8 +86,21 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
         if is_cpu_optimizer(self.optimizer):
             self.optimizer.rollback(sync)
         else:
-            # TODO: need to make rollback in FusedAdam
-            pass
+            if self.found_inf.item() == 0:
+                # TODO: don't need to free in schedule
+                for group in self.float16_groups:
+                    for p in group:
+                        if is_spiral_param(p):
+                            p.fetch(non_blocking=False)
+
+                self.optimizer.rollback()
+                self._copy_main_params_to_model_params()
+
+                for group in self.float16_groups:
+                    for p in group:
+                        if is_spiral_param(p):
+                            p.offload()
+                            p.free()
 
 
 class SpiralFP32Optimizer(FP32Optimizer):
@@ -104,7 +117,7 @@ class SpiralFP32Optimizer(FP32Optimizer):
                         p.fetch(non_blocking=False)
 
             super().step(args, timers)
-            
+
             for group in self.optimizer.param_groups:
                 for p in group["params"]:
                     if is_spiral_param(p):
@@ -119,8 +132,5 @@ class SpiralFP32Optimizer(FP32Optimizer):
             pass
 
     def rollback(self, sync=False):
-        if is_cpu_optimizer(self.optimizer):
-            self.optimizer.rollback(sync)
-        else:
-            # TODO: need to make rollback in FusedAdam
-            pass
+        # No need to rollback for fp32 param
+        pass

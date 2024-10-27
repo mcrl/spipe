@@ -424,7 +424,8 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
 
             # We are done with scaling gradients
             # so we can update the loss scale.
-            self.grad_scaler.update(found_inf_flag)
+            # TODO: need to rollback this comment
+            # self.grad_scaler.update(found_inf_flag)
 
             # If we found inf/nan, skip the update.
             if found_inf_flag:

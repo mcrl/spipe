@@ -63,7 +63,7 @@ def get_param_groups(modules,
                 no_wd = no_weight_decay_cond(name, param)
             else:
                 # do not regularize biases nor Norm parameters
-                shape = param.spiral_shape if args.spiral else param.shape
+                shape = param.spiral_shape if args.spiral and args.spiral_stage_optimizer else param.shape
                 no_wd = name.endswith(".bias") or len(shape) == 1
 
             if scale_lr_cond is not None:
@@ -156,7 +156,8 @@ def get_megatron_optimizer(model,
             # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
             # If --spiral-heterogeneous-optimizer is enabled, apply gpu optimizer to first stage.
             if args.spiral_heterogeneous_optimizer and _unwrapped_model.spiral_backward_stage_id == 0:
-                inner_opt_ty = Adam
+                from megatron.spiral.optimizer.gpu_adam import SpiralGPUAdam
+                inner_opt_ty = SpiralGPUAdam
             else:
                 from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
                 inner_opt_ty = SpiralCPUAdam
