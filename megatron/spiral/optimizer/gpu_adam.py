@@ -2,7 +2,7 @@
 #   https://github.com/NVIDIA/apex/blob/741bdf50825a97664db08574981962d66436d16a/apex/optimizers/fused_adam.py
 #   https://github.com/sail-sg/zero-bubble-pipeline-parallelism
 # with some modifications.
-   
+
 import torch
 from apex.multi_tensor_apply import multi_tensor_applier
 
@@ -40,8 +40,8 @@ class SpiralGPUAdam(torch.optim.Optimizer):
 
         if amsgrad:
             raise RuntimeError('SpiralGPUAdam does not support the AMSGrad variant.')
-        if master_weights and not capturable:
-            raise RuntimeError('Master weights is currently only supported with the capturable version.')
+        if capturable or master_weights:
+            raise RuntimeError('SpiralGPUAdam does not support catureable or master_weights.')
         # If the optimizer is capturable then LR should be a tensor (on GPU)
         lr = torch.tensor(lr, dtype=torch.float32) if capturable else lr
         defaults = dict(lr=lr, bias_correction=bias_correction,
@@ -49,30 +49,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         super(SpiralGPUAdam, self).__init__(params, defaults)
         self.adam_w_mode = 1 if adam_w_mode else 0
         self.set_grad_none = set_grad_none
-
-        self.capturable = capturable
-        self.master_weights = master_weights
-
-        # Create full precision master weights
-        self.param_groups_master = []
-        for i, pg in enumerate(self.param_groups):
-            param_list = pg['params']
-            self.param_groups_master.append({
-                'params': [
-                    p.clone().detach().float() if self.master_weights else None
-                    for p in param_list
-                ],
-            })
-
-        if capturable:
-            for idx, group in enumerate(self.param_groups):
-                if len(group['params']) == 0:
-                    continue
-                device = group['params'][0].device
-                for item in ['lr']:
-                    self.param_groups[idx][item] = group[item].to(device=device)
-
-            self._step_supports_amp_scaling = True
 
         if multi_tensor_applier.available:
             import amp_C
@@ -107,7 +83,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         if closure is not None:
             loss = closure()
 
-        for group, group_master in zip(self.param_groups, self.param_groups_master):
+        for group in self.param_groups:
             if len(group['params']) == 0:
                 continue
             device = group['params'][0].device
@@ -117,18 +93,16 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             # assume same step across group now to simplify things
             # per parameter step can be easily support by making it tensor, or pass list into kernel
             if 'step' in group:
-                group['step'] += 1 if not self.capturable else (self._dummy_overflow_buf != 1).to(torch.int)
+                group['step'] += 1
             else:
-                group['step'] = 1 if not self.capturable else torch.tensor([1], dtype=torch.int, device=device)
+                group['step'] = 1
 
             # create lists for multi-tensor apply
             g_16, p_16, m_16, v_16 = [], [], [], []
             g_bf, p_bf, m_bf, v_bf = [], [], [], []
             g_32, p_32, m_32, v_32 = [], [], [], []
-            p_16_master = []
-            p_32_master = []
 
-            for p, p_master in zip(group['params'], group_master['params']):
+            for p in group['params']:
                 if p.grad is None:
                     continue
                 if p.grad.data.is_sparse:
@@ -143,8 +117,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     state['exp_avg_sq'] = torch.zeros_like(p.data).float()
 
                 if p.dtype == torch.float16:
-                    if self.master_weights:
-                        p_16_master.append(p_master.data)
                     g_16.append(p.grad.data)
                     p_16.append(p.data)
                     m_16.append(state['exp_avg'])
@@ -155,8 +127,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     m_bf.append(state['exp_avg'])
                     v_bf.append(state['exp_avg_sq'])
                 elif p.dtype == torch.float32:
-                    if self.master_weights:
-                        p_32_master.append(p_master.data)
                     g_32.append(p.grad.data)
                     p_32.append(p.data)
                     m_32.append(state['exp_avg'])
@@ -164,122 +134,54 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                 else:
                     raise RuntimeError('SpiralGPUAdam only support fp16 and fp32.')
 
-            # If the optimizer is capturable, then if there's a grad scaler it works
-            # on the GPU + a different multi_tensor_applier should be called
-            if self.capturable:
-                # overflow check of gradients
-                found_inf = (
-                    grad_scaler._check_inf_per_device(self)[device]
-                    if grad_scaler is not None else torch.zeros((1,), device=device)
-                )
-                self._dummy_overflow_buf.copy_(found_inf)
+            if len(g_16) > 0:
+                multi_tensor_applier(self.multi_tensor_adam,
+                        self._dummy_overflow_buf,
+                        [g_16, p_16, m_16, v_16],
+                        group['lr'],
+                        beta1,
+                        beta2,
+                        group['eps'],
+                        group['step'],
+                        self.adam_w_mode,
+                        bias_correction,
+                        group['weight_decay'])
 
-                # get unscale scale factor
-                scale, inv_scale = None, None
-                if grad_scaler:
-                    scale = grad_scaler._get_scale_async()
-                    inv_scale = scale.double().reciprocal().float()
-                else:
-                    scale = torch.ones((1,), device=device)
-                    inv_scale = torch.ones((1,), device=device)
+            if len(g_bf) > 0:
+                multi_tensor_applier(
+                        self.multi_tensor_adam,
+                        self._dummy_overflow_buf,
+                        [g_bf, p_bf, m_bf, v_bf],
+                        group['lr'],
+                        beta1,
+                        beta2,
+                        group['eps'],
+                        group['step'],
+                        self.adam_w_mode,
+                        bias_correction,
+                        group['weight_decay'])
 
-                if len(g_16) > 0:
-                    multi_tensor_applier(self.multi_tensor_adam_capturable_master if self.master_weights
-                            else self.multi_tensor_adam_capturable,
-                            self._dummy_overflow_buf,
-                            [g_16, p_16, m_16, v_16, p_16_master] if self.master_weights
-                            else [g_16, p_16, m_16, v_16],
-                            group['lr'],
-                            beta1,
-                            beta2,
-                            group['eps'],
-                            group['step'],
-                            self.adam_w_mode,
-                            bias_correction,
-                            group['weight_decay'],
-                            inv_scale)
-
-                if len(g_bf) > 0:
-                    multi_tensor_applier(
-                            self.multi_tensor_adam_capturable,
-                            self._dummy_overflow_buf,
-                            [g_bf, p_bf, m_bf, v_bf],
-                            group['lr'],
-                            beta1,
-                            beta2,
-                            group['eps'],
-                            group['step'],
-                            self.adam_w_mode,
-                            bias_correction,
-                            group['weight_decay'],
-                            inv_scale)
-
-                if len(g_32) > 0:
-                    multi_tensor_applier(self.multi_tensor_adam_capturable_master if self.master_weights
-                            else self.multi_tensor_adam_capturable,
-                            self._dummy_overflow_buf,
-                            [g_32, p_32, m_32, v_32, p_32_master] if self.master_weights
-                            else [g_32, p_32, m_32, v_32],
-                            group['lr'],
-                            beta1,
-                            beta2,
-                            group['eps'],
-                            group['step'],
-                            self.adam_w_mode,
-                            bias_correction,
-                            group['weight_decay'],
-                            inv_scale)
-            else:
-                if len(g_16) > 0:
-                    multi_tensor_applier(self.multi_tensor_adam,
-                            self._dummy_overflow_buf,
-                            [g_16, p_16, m_16, v_16],
-                            group['lr'],
-                            beta1,
-                            beta2,
-                            group['eps'],
-                            group['step'],
-                            self.adam_w_mode,
-                            bias_correction,
-                            group['weight_decay'])
-
-                if len(g_bf) > 0:
-                    multi_tensor_applier(
-                            self.multi_tensor_adam,
-                            self._dummy_overflow_buf,
-                            [g_bf, p_bf, m_bf, v_bf],
-                            group['lr'],
-                            beta1,
-                            beta2,
-                            group['eps'],
-                            group['step'],
-                            self.adam_w_mode,
-                            bias_correction,
-                            group['weight_decay'])
-
-                if len(g_32) > 0:
-                    multi_tensor_applier(self.multi_tensor_adam,
-                            self._dummy_overflow_buf,
-                            [g_32, p_32, m_32, v_32],
-                            group['lr'],
-                            beta1,
-                            beta2,
-                            group['eps'],
-                            group['step'],
-                            self.adam_w_mode,
-                            bias_correction,
-                            group['weight_decay'])
+            if len(g_32) > 0:
+                multi_tensor_applier(self.multi_tensor_adam,
+                        self._dummy_overflow_buf,
+                        [g_32, p_32, m_32, v_32],
+                        group['lr'],
+                        beta1,
+                        beta2,
+                        group['eps'],
+                        group['step'],
+                        self.adam_w_mode,
+                        bias_correction,
+                        group['weight_decay'])
 
         return loss
 
     def rollback(self):
-        if self.capturable:
-            raise ValueError("Not supported")
         if not self.adam_w_mode:
-            raise ValueError("Not supported")
+            raise RuntimeError("SpiralGPUAdam only supports rollback for adam_w_mode.")
         loss = None
 
-        for group, group_master in zip(self.param_groups, self.param_groups_master):
+        for group in self.param_groups:
             if len(group['params']) == 0:
                 continue
 
@@ -290,10 +192,8 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             g_16, p_16, m_16, v_16 = [], [], [], []
             g_bf, p_bf, m_bf, v_bf = [], [], [], []
             g_32, p_32, m_32, v_32 = [], [], [], []
-            p_16_master = []
-            p_32_master = []
 
-            for p, p_master in zip(group['params'], group_master['params']):
+            for p in group['params']:
                 if p.grad is None:
                     continue
                 if p.grad.data.is_sparse:
@@ -303,8 +203,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                 assert len(state) != 0, "Rollback should be call after run optimizer.step"
 
                 if p.dtype == torch.float16:
-                    if self.master_weights:
-                        p_16_master.append(p_master.data)
                     g_16.append(p.grad.data)
                     p_16.append(p.data)
                     m_16.append(state['exp_avg'])
@@ -315,8 +213,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     m_bf.append(state['exp_avg'])
                     v_bf.append(state['exp_avg_sq'])
                 elif p.dtype == torch.float32:
-                    if self.master_weights:
-                        p_32_master.append(p_master.data)
                     g_32.append(p.grad.data)
                     p_32.append(p.data)
                     m_32.append(state['exp_avg'])
