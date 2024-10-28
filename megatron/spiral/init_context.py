@@ -370,12 +370,12 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     param.spiral_tensor.shape == param.data.shape
                 ), f"Offload tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
                 param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
-            if not non_blocking:
-                # NOTE: for non-blocking offload, spiral_status should be changed after waiting in the caller
-                param.spiral_status = SpiralParamStatus.CPU
 
         def _fetch_data(param, non_blocking=False):
-            assert param.spiral_status == SpiralParamStatus.CPU
+            # if parameter is already in gpu memory, skip fetch
+            if param.spiral_status == SpiralParamStatus.GPU:
+                return
+
             assert param.spiral_tensor is not None, "Fetch tensor is None"
 
             if param.numel() == 0:

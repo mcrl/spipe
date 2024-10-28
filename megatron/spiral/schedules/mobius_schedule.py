@@ -523,7 +523,8 @@ def mobius_schedule(
                 raise RuntimeError("wait_event failed")
 
             # free bwd stage
-            model[bwd_stage_id].spiral_free()
+            if optimizer.is_cpu_optimizer(bwd_stage_id):
+                model[bwd_stage_id].spiral_free()
             free_curr = get_thunder_cuda_manager().Event(
                 "free",
                 None if bwd_stage_id == 0 else "prefetch",
