@@ -13,7 +13,7 @@ from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
 from .optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
 from megatron.spiral.optimizer.stage_optimizer import SpiralStageOptimizer
-from megatron.spiral.optimizer.optimizer import SpiralFloat16Optimizer, SpiralFP32Optimizer
+from megatron.spiral.optimizer.optimizer import SpiralFloat16Optimizer, DeepSpeedFloat16Optimizer, SpiralFP32Optimizer
 
 
 def get_param_groups(modules,
@@ -102,12 +102,8 @@ def get_megatron_optimizer(model,
 
     # Determine whether the params have main-grad field.
     params_have_main_grad = False
-    if args.spiral:
-        # NOTE (SpiralPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training. For SpiralPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field. Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary.
-        params_have_main_grad = False
-    else:
-        if args.DDP_impl == 'local':
-            params_have_main_grad = True
+    if args.DDP_impl == 'local':
+        params_have_main_grad = True
 
     if (
         args.spiral
@@ -161,9 +157,11 @@ def get_megatron_optimizer(model,
             else:
                 from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
                 inner_opt_ty = SpiralCPUAdam
+                params_have_main_grad = False
         else:
             from deepspeed.ops.adam import DeepSpeedCPUAdam
             inner_opt_ty = DeepSpeedCPUAdam
+            params_have_main_grad = False
 
         optimizer = inner_opt_ty(
             param_groups,
@@ -221,6 +219,8 @@ def get_megatron_optimizer(model,
             opt_ty = DistributedOptimizer
         elif args.spiral:
             opt_ty = SpiralFloat16Optimizer
+            if not args.spiral_stage_optimizer:
+                opt_ty = DeepSpeedFloat16Optimizer
         else:
             opt_ty = Float16OptimizerWithFloat16Params
         
@@ -236,7 +236,7 @@ def get_megatron_optimizer(model,
                     model)
 
     # FP32.
-    opt_ty = SpiralFP32Optimizer if args.spiral else FP32Optimizer
+    opt_ty = SpiralFP32Optimizer if args.spiral and args.spiral_stage_optimizer else FP32Optimizer
     return opt_ty(optimizer, args.clip_grad,
                          args.log_num_zeros_in_grad,
                          params_have_main_grad,

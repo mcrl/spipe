@@ -523,7 +523,7 @@ def mobius_schedule(
                 raise RuntimeError("wait_event failed")
 
             # free bwd stage
-            if optimizer.is_cpu_optimizer(bwd_stage_id):
+            if not optimize_after_bwd_stage or optimizer.is_cpu_optimizer(bwd_stage_id):
                 model[bwd_stage_id].spiral_free()
             free_curr = get_thunder_cuda_manager().Event(
                 "free",
@@ -551,7 +551,7 @@ def mobius_schedule(
                     model[bwd_stage_id].allreduce_gradients()
 
                 # offload grads
-                if optimizer.is_cpu_optimizer(bwd_stage_id):
+                if not optimize_after_bwd_stage or optimizer.is_cpu_optimizer(bwd_stage_id):
                     model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
