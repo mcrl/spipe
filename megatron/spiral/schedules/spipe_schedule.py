@@ -600,7 +600,8 @@ def spipe_schedule(
 
     # cleanup schedule events
     if (
-        get_thunder_cuda_manager().wait_event(free_event_queries.pop(f"free:b0"))
+        get_thunder_cuda_manager().wait_event(free_event_queries.pop(f"free:b0"),
+                                              sync=True)
         == -1
     ):
         raise RuntimeError("wait_event failed")
@@ -610,7 +611,8 @@ def spipe_schedule(
             # flush free grad event queries
             if (
                 get_thunder_cuda_manager().wait_event(
-                    offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}")
+                    offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"),
+                    sync=True
                 )
                 == -1
             ):

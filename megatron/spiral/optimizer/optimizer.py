@@ -74,7 +74,7 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
         else:
             # TODO: check whether wait offload_event or only step_event
             if self.offload_event is not None:
-                if get_thunder_cuda_manager().wait_event(self.offload_event) == -1:
+                if get_thunder_cuda_manager().wait_event(self.offload_event, sync=True) == -1:
                     raise RuntimeError("wait_event failed")
                 self.offload_event = None
 
@@ -122,7 +122,7 @@ class SpiralFP32Optimizer(FP32Optimizer):
         else:
             # TODO: check whether wait offload_event or only step_event
             if self.offload_event is not None:
-                if get_thunder_cuda_manager().wait_event(self.offload_event) == -1:
+                if get_thunder_cuda_manager().wait_event(self.offload_event, sync=True) == -1:
                     raise RuntimeError("wait_event failed")
                 self.offload_event = None
 
