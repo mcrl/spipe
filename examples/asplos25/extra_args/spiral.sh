@@ -25,6 +25,10 @@ if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
     "
 fi
 
+if [ ${SPIRAL_HETERO_OPTIMIZER} == "YES" ]; then
+    EXTRA_ARGS+=" --spiral-heterogeneous-optimizer"
+fi
+
 if [ ${SPIRAL_CROSS_MAPPING} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-cross-mapping"
 fi

@@ -532,7 +532,8 @@ def spipe_schedule(
                 raise RuntimeError("wait_event failed")
 
             # free bwd stage
-            model[-bwd_stage_id - 1].spiral_free()
+            if not optimize_after_bwd_stage or optimizer.is_cpu_optimizer(bwd_stage_id):
+                model[-bwd_stage_id - 1].spiral_free()
             free_curr = get_thunder_cuda_manager().Event(
                 "free",
                 None if bwd_stage_id == 0 else "prefetch",
@@ -559,7 +560,8 @@ def spipe_schedule(
                     model[-bwd_stage_id - 1].allreduce_gradients()
 
                 # offload grads
-                model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
+                if not optimize_after_bwd_stage or optimizer.is_cpu_optimizer(bwd_stage_id):
+                    model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
                     None,
