@@ -595,7 +595,7 @@ def mobius_schedule(
 
     if offload_grad_after_bwd_stage:
         for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-            # flush free grad event queries
+            # flush offload grad event queries
             if (
                 get_thunder_cuda_manager().wait_event(
                     offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"),
@@ -605,18 +605,18 @@ def mobius_schedule(
             ):
                 raise RuntimeError("wait_event failed")
 
-    if optimize_after_bwd_stage:
-        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-            if not optimizer.is_cpu_optimizer(bwd_stage_id):
-                # flush free grad event queries
-                if (
-                    get_thunder_cuda_manager().wait_event(
-                        offload_event_queries.pop(f"offload_param:b{bwd_stage_id}"),
-                        sync=True
-                    )
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
+        if optimize_after_bwd_stage:
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                if not optimizer.is_cpu_optimizer(bwd_stage_id):
+                    # flush offload param event queries
+                    if (
+                        get_thunder_cuda_manager().wait_event(
+                            offload_event_queries.pop(f"offload_param:b{bwd_stage_id}"),
+                            sync=True
+                        )
+                        == -1
+                    ):
+                        raise RuntimeError("wait_event failed")
 
     _cleanup()
     return forward_data_store

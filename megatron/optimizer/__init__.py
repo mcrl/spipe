@@ -157,6 +157,9 @@ def get_megatron_optimizer(model,
             else:
                 from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
                 inner_opt_ty = SpiralCPUAdam
+                # NOTE (SpiralPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training.
+                # For SpiralPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field.
+                # Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary.
                 params_have_main_grad = False
         else:
             from deepspeed.ops.adam import DeepSpeedCPUAdam

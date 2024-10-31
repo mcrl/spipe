@@ -440,7 +440,7 @@ def validate_args(args, defaults={}):
             raise RuntimeError(
                 "SpiralPipe currently does not support distributed optimizer")
         if args.spiral_heterogeneous_optimizer:
-            assert args.spiral_stage_optimizer, "spiral-stage-optimizer should be enabled with spiral-heterogeneous-optimizer"
+            assert args.spiral_stage_optimizer, "spiral-heterogeneous-optimizer should be enabled with spiral-stage-optimizer"
         
 
     # GQA
