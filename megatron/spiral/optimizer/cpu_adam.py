@@ -304,9 +304,3 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             found_inf = torch.FloatTensor([0])
         self.ds_opt_adam.adam_sync(self.opt_id, found_inf)
         self.optimizer_locked = False
-
-    def set_inv_scale(self, inv_scale):
-        self.inv_scale = inv_scale
-
-    def set_event_long(self, ev_long):
-        self.ev_long = ev_long

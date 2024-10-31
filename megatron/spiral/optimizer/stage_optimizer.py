@@ -74,8 +74,8 @@ class SpiralStageOptimizer:
         
         if self.is_cpu_optimizer(idx):
             inner_opt = self.optimizer_list[idx].optimizer
-            inner_opt.set_inv_scale(self.inv_scale_val)
-            inner_opt.set_event_long(event_long)
+            inner_opt.inv_scale = self.inv_scale_val
+            inner_opt.ev_long = event_long
 
         self.optimizer_list[idx].step(args, timers)
 
