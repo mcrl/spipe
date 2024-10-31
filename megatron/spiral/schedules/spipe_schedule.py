@@ -575,6 +575,19 @@ def spipe_schedule(
                 if optimize_after_bwd_stage:
                     optimizer.step(bwd_stage_id, offload_grad_curr, get_args(), get_timers())
 
+                    # for gpu optimizer, need to offload/free parameter
+                    if not optimizer.is_cpu_optimizer(bwd_stage_id):
+                        model[-bwd_stage_id - 1].spiral_offload(non_blocking=True)
+                        model[-bwd_stage_id - 1].spiral_free()
+                        offload_param_curr = get_thunder_cuda_manager().Event(
+                            "offload",
+                            None,
+                            tag=f"offload_param:b{bwd_stage_id}"
+                        )
+                        if get_thunder_cuda_manager().record_event(offload_param_curr) == -1:
+                            raise RuntimeError("record_event failed")
+                        offload_event_queries[offload_param_curr.tag] = offload_param_curr
+
                 # free bwd stage grads (spiral_free_grad is cpu job with tensor.record_stream)
                 model[-bwd_stage_id - 1].spiral_free_grad()
         # end offload & free grad
@@ -619,6 +632,19 @@ def spipe_schedule(
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
+
+    if optimize_after_bwd_stage:
+        for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+            if not optimizer.is_cpu_optimizer(bwd_stage_id):
+                # flush free grad event queries
+                if (
+                    get_thunder_cuda_manager().wait_event(
+                        offload_event_queries.pop(f"offload_param:b{bwd_stage_id}"),
+                        sync=True
+                    )
+                    == -1
+                ):
+                    raise RuntimeError("wait_event failed")
 
     _cleanup()
     return forward_data_store

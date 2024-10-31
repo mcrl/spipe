@@ -54,31 +54,18 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
             return self.optimizer.step()
         else:
             result = super().step(args, timers)
-
-            for group in self.float16_groups:
-                for p in group:
-                    if is_spiral_param(p):
-                        p.offload(non_blocking=True)
-                        
-            self.offload_event = get_thunder_cuda_manager().Event(
-                "offload", None, tag="offload"
-            )
-            if get_thunder_cuda_manager().record_event(self.offload_event) == -1:
-                raise RuntimeError("record_event failed")
-
+            self.step_event = torch.cuda.Event()
+            self.step_event.record()
             return result
 
     def sync(self, found_inf=None):
         if type(self.optimizer) == SpiralCPUAdam:
             self.optimizer.sync(found_inf)
         else:
-            # TODO: check whether wait offload_event or only step_event
-            if self.offload_event is not None:
-                if get_thunder_cuda_manager().wait_event(self.offload_event, sync=True) == -1:
-                    raise RuntimeError("wait_event failed")
-                self.offload_event = None
-
             found_inf.data = self.found_inf.to(device = found_inf.device, non_blocking=False)
+            if self.step_event is not None:
+                self.step_event.synchronize()
+                self.step_event = None
 
     @torch.no_grad()
     def rollback(self, sync=False):
@@ -86,6 +73,11 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
             self.optimizer.rollback(sync)
         else:
             if self.found_inf.item() == 0:
+                for group in self.float16_groups:
+                    for p in group:
+                        if is_spiral_param(p):
+                            p.fetch(non_blocking=not sync)
+
                 self.optimizer.rollback()
                 self._copy_main_params_to_model_params()
 
@@ -102,29 +94,17 @@ class SpiralFP32Optimizer(FP32Optimizer):
             return self.optimizer.step()
         else:
             result = super().step(args, timers)
-
-            for group in self.optimizer.param_groups:
-                for p in group["params"]:
-                    if is_spiral_param(p):
-                        p.offload(non_blocking=True)
-                        
-            self.offload_event = get_thunder_cuda_manager().Event(
-                "offload", None, tag="offload"
-            )
-            if get_thunder_cuda_manager().record_event(self.offload_event) == -1:
-                raise RuntimeError("record_event failed")
-
+            self.step_event = torch.cuda.Event()
+            self.step_event.record()
             return result
 
     def sync(self, found_inf=None):
         if type(self.optimizer) == SpiralCPUAdam:
             self.optimizer.sync(found_inf)
         else:
-            # TODO: check whether wait offload_event or only step_event
-            if self.offload_event is not None:
-                if get_thunder_cuda_manager().wait_event(self.offload_event, sync=True) == -1:
-                    raise RuntimeError("wait_event failed")
-                self.offload_event = None
+            if self.step_event is not None:
+                self.step_event.synchronize()
+                self.step_event = None
 
     def rollback(self, sync=False):
         # No need to rollback for fp32 param
