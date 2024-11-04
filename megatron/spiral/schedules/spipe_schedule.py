@@ -129,6 +129,13 @@ def spipe_schedule(
         assert "spiral_stage_optimizer" in kwargs
         optimizer = kwargs["spiral_stage_optimizer"]
 
+    def _is_cpu_optimizer(bwd_stage_id):
+        if get_args().spiral_stage_optimizer:
+            return optimizer.is_cpu_optimizer(bwd_stage_id)
+        else:
+            # If the stage optimizer is not enabled, the optimizer should always be the CPU optimizer.
+            return True
+
     def _cleanup():
         # cleanup checkpointed input tensors
         for module in model:
@@ -532,7 +539,7 @@ def spipe_schedule(
                 raise RuntimeError("wait_event failed")
 
             # free bwd stage
-            if not optimize_after_bwd_stage or optimizer.is_cpu_optimizer(bwd_stage_id):
+            if _is_cpu_optimizer(bwd_stage_id):
                 model[-bwd_stage_id - 1].spiral_free()
             free_curr = get_thunder_cuda_manager().Event(
                 "free",
@@ -560,7 +567,7 @@ def spipe_schedule(
                     model[-bwd_stage_id - 1].allreduce_gradients()
 
                 # offload grads
-                if not optimize_after_bwd_stage or optimizer.is_cpu_optimizer(bwd_stage_id):
+                if _is_cpu_optimizer(bwd_stage_id):
                     model[-bwd_stage_id - 1].spiral_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
