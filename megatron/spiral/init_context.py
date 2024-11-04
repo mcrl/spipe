@@ -372,7 +372,8 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                 param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
 
         def _fetch_data(param, non_blocking=False):
-            # if parameter is already in gpu memory, skip fetch
+            # If parameter is already in gpu memory, skip fetch.
+            # NOTE: Most cases should naturally fetch from CPU in spiral case.
             if param.spiral_status == SpiralParamStatus.GPU:
                 return
 
