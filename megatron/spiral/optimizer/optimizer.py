@@ -1,59 +1,21 @@
 import torch
 
 from megatron.core import tensor_parallel
-from megatron.optimizer.optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
+from megatron.optimizer.optimizer import MixedPrecisionOptimizer, Float16OptimizerWithFloat16Params, FP32Optimizer
+from megatron.optimizer.optimizer import _zero_grad_group_helper
 from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
-from megatron.spiral.initialize import get_thunder_cuda_manager
 from megatron.spiral.utils import is_spiral_param
 
 
-class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
-    def __init__(self, optimizer, clip_grad, log_num_zeros_in_grad,
-                 params_have_main_grad, use_contiguous_buffers_in_local_ddp,
-                 fp16, bf16, params_dtype, grad_scaler, models):
-
-        for group in optimizer.param_groups:
-            for p in group["params"]:
-                if is_spiral_param(p):
-                    p.fetch(non_blocking=False)
-
-        super().__init__(
-            optimizer, clip_grad, log_num_zeros_in_grad,
-            params_have_main_grad, use_contiguous_buffers_in_local_ddp,
-            fp16, bf16, params_dtype, grad_scaler, models)
-
-        for group in self.float16_groups:
-            for p in group:
-                if is_spiral_param(p):
-                    p.free()
-
-        # dummy flag for temp
-        self.use_global_grad_scaler = True
-
-    def _unscale_main_grads_and_check_for_nan(self):
-
-        # Collect main grads.
-        main_grads = self._collect_main_grad_data_for_unscaling()
-
-        # Reset found inf.
-        self.found_inf.fill_(0.0)
-
-        # Unscale and set found inf/nan
-        # TODO: need to use inv_scale of SpiralStageOptimizer
-        torch._amp_foreach_non_finite_check_and_unscale_(
-            main_grads, self.found_inf, self.grad_scaler.inv_scale)
-
-        # Check for nan.
-        found_inf_flag = (self.found_inf.item() > 0)
-
-        return found_inf_flag
+class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
 
     @torch.no_grad()
     def step(self, args, timers):
         if type(self.optimizer) == SpiralCPUAdam:
             return self.optimizer.step()
         else:
-            result = super().step(args, timers)
+            result = self.optimizer.step()
+            self.found_inf.fill_(0.0 if result else 1.0)
             self.step_event = torch.cuda.Event()
             self.step_event.record()
             return result
@@ -62,29 +24,37 @@ class SpiralFloat16Optimizer(Float16OptimizerWithFloat16Params):
         if type(self.optimizer) == SpiralCPUAdam:
             self.optimizer.sync(found_inf)
         else:
-            found_inf.data = self.found_inf.to(device = found_inf.device, non_blocking=False)
             if self.step_event is not None:
                 self.step_event.synchronize()
                 self.step_event = None
+            found_inf.data = self.found_inf.to(device = found_inf.device, non_blocking=False)
 
     @torch.no_grad()
     def rollback(self, sync=False):
         if type(self.optimizer) == SpiralCPUAdam:
             self.optimizer.rollback(sync)
         else:
-            if self.found_inf.item() == 0:
-                for group in self.float16_groups:
-                    for p in group:
-                        if is_spiral_param(p):
-                            p.fetch(non_blocking=not sync)
+            for group in self.optimizer.param_groups:
+                for p in group['params']:
+                    if is_spiral_param(p):
+                        p.fetch(non_blocking=not sync)
 
-                self.optimizer.rollback()
-                self._copy_main_params_to_model_params()
+            self.optimizer.rollback()
 
-                for group in self.float16_groups:
-                    for p in group:
-                        if is_spiral_param(p):
-                            p.offload(non_blocking=not sync)
+            for group in self.optimizer.param_groups:
+                for p in group['params']:
+                    if is_spiral_param(p):
+                        p.offload(non_blocking=not sync)
+
+    def zero_grad(self, set_to_none=True):
+        for group in self.optimizer.param_groups:
+            _zero_grad_group_helper(group['params'], set_to_none)
+    
+    def state_dict(self):
+        return self.optimizer.state_dict()
+
+    def load_state_dict(self, state_dict):
+        self.optimizer.load_state_dict(state_dict)
 
 
 class SpiralFP32Optimizer(FP32Optimizer):
@@ -93,7 +63,7 @@ class SpiralFP32Optimizer(FP32Optimizer):
         if type(self.optimizer) == SpiralCPUAdam:
             return self.optimizer.step()
         else:
-            result = super().step(args, timers)
+            result = self.optimizer.step()
             self.step_event = torch.cuda.Event()
             self.step_event.record()
             return result
