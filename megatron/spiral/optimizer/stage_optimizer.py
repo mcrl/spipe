@@ -4,6 +4,7 @@ import torch
 
 from megatron.core import mpu
 from megatron.spiral.initialize import get_thunder_cuda_manager
+from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
 
 class SpiralStageOptimizer:
 
@@ -58,14 +59,24 @@ class SpiralStageOptimizer:
         """Simple scaling."""
         return self.get_loss_scale() * loss
 
+    def zero_grad(self, set_to_none=True):
+        for optimizer in self.optimizer_list:
+            optimizer.zero_grad(set_to_none)
+
+    def is_cpu_optimizer(self, idx):
+        return isinstance(self.optimizer_list[idx].optimizer, SpiralCPUAdam)
+
     @nvtx.annotate("step", color="cyan")
     def step(self, idx, event_query, args, timers):
         event_long = -1
         if event_query != None:
             event_long = get_thunder_cuda_manager().get_event(event_query).cuda_event
         
-        self.optimizer_list[idx].optimizer.set_inv_scale(self.inv_scale_val)
-        self.optimizer_list[idx].optimizer.set_event_long(event_long)
+        if self.is_cpu_optimizer(idx):
+            inner_opt = self.optimizer_list[idx].optimizer
+            inner_opt.inv_scale = self.inv_scale_val
+            inner_opt.ev_long = event_long
+
         self.optimizer_list[idx].step(args, timers)
 
     @nvtx.annotate("join_step", color="red")
@@ -77,7 +88,7 @@ class SpiralStageOptimizer:
         # sync all optimizers
         for optimizer in reversed(self.optimizer_list):
             found_inf = torch.FloatTensor([0])
-            optimizer.optimizer.sync(found_inf)
+            optimizer.sync(found_inf)
             local_found_inf += found_inf.item()
 
         # update grad scaler
@@ -94,7 +105,7 @@ class SpiralStageOptimizer:
         # rollback
         if found_inf_flag:
             for optimizer in self.optimizer_list:
-                optimizer.optimizer.rollback(sync=True)
+                optimizer.rollback(sync=True)
 
         spiral_stage_optimizer_step_returns.appendleft((not found_inf_flag, None, None))
 

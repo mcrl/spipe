@@ -13,7 +13,7 @@ from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
 from .optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
 from megatron.spiral.optimizer.stage_optimizer import SpiralStageOptimizer
-from megatron.spiral.optimizer.optimizer import SpiralFloat16Optimizer, SpiralFP32Optimizer
+from megatron.spiral.optimizer.optimizer import SpiralFloat16Optimizer, DeepSpeedFloat16Optimizer, SpiralFP32Optimizer
 
 
 def get_param_groups(modules,
@@ -48,7 +48,8 @@ def get_param_groups(modules,
             if not param.requires_grad:
                 continue
 
-            if args.spiral:
+            # TODO: This is for DeepSpeedCPUOptimizer which will be deprecated.
+            if args.spiral and not args.spiral_stage_optimizer:
                 # Only params converted to spiral param and currently placed on local CPU memory should enter,
                 # as it is the necessary condition for backward stages
                 assert (is_spiral_param(param))
@@ -62,7 +63,8 @@ def get_param_groups(modules,
                 no_wd = no_weight_decay_cond(name, param)
             else:
                 # do not regularize biases nor Norm parameters
-                no_wd = name.endswith(".bias") or len(param.shape) == 1
+                shape = param.spiral_shape if args.spiral and args.spiral_stage_optimizer else param.shape
+                no_wd = name.endswith(".bias") or len(shape) == 1
 
             if scale_lr_cond is not None:
                 if args.spiral:
@@ -100,12 +102,8 @@ def get_megatron_optimizer(model,
 
     # Determine whether the params have main-grad field.
     params_have_main_grad = False
-    if args.spiral:
-        # NOTE (SpiralPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training. For SpiralPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field. Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary.
-        params_have_main_grad = False
-    else:
-        if args.DDP_impl == 'local':
-            params_have_main_grad = True
+    if args.DDP_impl == 'local':
+        params_have_main_grad = True
 
     if (
         args.spiral
@@ -146,13 +144,27 @@ def get_megatron_optimizer(model,
     if args.spiral:
         assert args.optimizer == 'adam', 'SpiralPipe only support Adam'
 
-        # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
         if args.spiral_stage_optimizer:
-            from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
-            inner_opt_ty = SpiralCPUAdam
+            _unwrapped_model = model[0]
+            assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
+            delattr(_unwrapped_model, "_spiral_optimizer_entered")
+
+            # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
+            # If --spiral-heterogeneous-optimizer is enabled, apply gpu optimizer to first stage.
+            if args.spiral_heterogeneous_optimizer and _unwrapped_model.spiral_backward_stage_id == 0:
+                from megatron.spiral.optimizer.gpu_adam import SpiralGPUAdam
+                inner_opt_ty = SpiralGPUAdam
+            else:
+                from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
+                inner_opt_ty = SpiralCPUAdam
+                # NOTE (SpiralPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training.
+                # For SpiralPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field.
+                # Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary.
+                params_have_main_grad = False
         else:
             from deepspeed.ops.adam import DeepSpeedCPUAdam
             inner_opt_ty = DeepSpeedCPUAdam
+            params_have_main_grad = False
 
         optimizer = inner_opt_ty(
             param_groups,
@@ -161,11 +173,6 @@ def get_megatron_optimizer(model,
             betas=(args.adam_beta1, args.adam_beta2),
             eps=args.adam_eps,
         )
-
-        if args.spiral_stage_optimizer:
-            _unwrapped_model = model[0]
-            assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
-            delattr(_unwrapped_model, "_spiral_optimizer_entered")
     else:
         if args.optimizer == 'adam':
             optimizer = Adam(param_groups,
@@ -215,6 +222,8 @@ def get_megatron_optimizer(model,
             opt_ty = DistributedOptimizer
         elif args.spiral:
             opt_ty = SpiralFloat16Optimizer
+            if not args.spiral_stage_optimizer:
+                opt_ty = DeepSpeedFloat16Optimizer
         else:
             opt_ty = Float16OptimizerWithFloat16Params
         
@@ -230,7 +239,7 @@ def get_megatron_optimizer(model,
                     model)
 
     # FP32.
-    opt_ty = SpiralFP32Optimizer if args.spiral else FP32Optimizer
+    opt_ty = SpiralFP32Optimizer if args.spiral and args.spiral_stage_optimizer else FP32Optimizer
     return opt_ty(optimizer, args.clip_grad,
                          args.log_num_zeros_in_grad,
                          params_have_main_grad,

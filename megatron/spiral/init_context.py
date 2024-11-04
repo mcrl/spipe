@@ -370,12 +370,13 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
                     param.spiral_tensor.shape == param.data.shape
                 ), f"Offload tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
                 param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
-            if not non_blocking:
-                # NOTE: for non-blocking offload, spiral_status should be changed after waiting in the caller
-                param.spiral_status = SpiralParamStatus.CPU
 
         def _fetch_data(param, non_blocking=False):
-            assert param.spiral_status == SpiralParamStatus.CPU
+            # If parameter is already in gpu memory, skip fetch.
+            # NOTE: Most cases should naturally fetch from CPU in spiral case.
+            if param.spiral_status == SpiralParamStatus.GPU:
+                return
+
             assert param.spiral_tensor is not None, "Fetch tensor is None"
 
             if param.numel() == 0:
@@ -469,11 +470,13 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             if params_have_main_grad:
                 assert hasattr(param, "main_grad")
                 # Ensure the tensor memory is not reused for another tensor until all work queued on stream is complete
-                param.main_grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
+                if param.main_grad is not None:
+                    param.main_grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
                 param.main_grad = None
             if hasattr(param, "grad"):
                 # Ensure the tensor memory is not reused for another tensor until all work queued on stream is complete
-                param.grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
+                if param.grad is not None:
+                    param.grad.record_stream(get_thunder_cuda_manager().Stream('offload'))
                 param.grad = None
 
         def _assert_free_grad(param: Parameter) -> None:

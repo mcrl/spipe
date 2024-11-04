@@ -47,6 +47,6 @@ if [ ${NSYS_ENABLE} == "YES" ]; then
 fi
 
 # Run script
-${MPIRUN} -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS ${EXEC_CMD}
+${MPIRUN} --bind-to none --report-bindings -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS ${EXEC_CMD}
 
 exit 0

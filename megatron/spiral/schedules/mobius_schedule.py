@@ -1,9 +1,6 @@
 import contextlib
 import warnings
 from typing import Callable, Iterator, List, Optional, Union, Tuple
-from collections import deque
-from queue import Queue
-import threading
 
 import torch
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
@@ -131,6 +128,13 @@ def mobius_schedule(
     if get_args().spiral_stage_optimizer:
         assert "spiral_stage_optimizer" in kwargs
         optimizer = kwargs["spiral_stage_optimizer"]
+
+    def _is_cpu_optimizer(bwd_stage_id):
+        if get_args().spiral_stage_optimizer:
+            return optimizer.is_cpu_optimizer(bwd_stage_id)
+        else:
+            # If the stage optimizer is not enabled, the optimizer should always be the CPU optimizer.
+            return True
 
     def _cleanup():
         # cleanup checkpointed input tensors and output tensors
@@ -526,7 +530,8 @@ def mobius_schedule(
                 raise RuntimeError("wait_event failed")
 
             # free bwd stage
-            model[bwd_stage_id].spiral_free()
+            if _is_cpu_optimizer(bwd_stage_id):
+                model[bwd_stage_id].spiral_free()
             free_curr = get_thunder_cuda_manager().Event(
                 "free",
                 None if bwd_stage_id == 0 else "prefetch",
@@ -545,16 +550,19 @@ def mobius_schedule(
                     == -1
                 ):
                     raise RuntimeError("wait_event failed")
+
                 # if not spiral stage optimizer, then gradient should be manually reduced
                 if optimize_after_bwd_stage:
                     optimizer[bwd_stage_id].reduce_model_grads(get_args(), get_timers())
                 else:
                     model[bwd_stage_id].allreduce_gradients()
+
                 # offload grads
-                model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
+                if _is_cpu_optimizer(bwd_stage_id):
+                    model[bwd_stage_id].spiral_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
-                    "free",
+                    None,
                     tag=f"offload_grad:b{bwd_stage_id}"
                 )
                 if get_thunder_cuda_manager().record_event(offload_grad_curr) == -1:
@@ -565,23 +573,20 @@ def mobius_schedule(
                 if optimize_after_bwd_stage:
                     optimizer.step(bwd_stage_id, offload_grad_curr, get_args(), get_timers())
 
-            with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
-                if (
-                    get_thunder_cuda_manager().wait_event(offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"))
-                    == -1
-                ):
-                    raise RuntimeError("wait_event failed")
+                    # for gpu optimizer, need to offload parameter (not free to reuse in next iteration)
+                    if not optimizer.is_cpu_optimizer(bwd_stage_id):
+                        model[bwd_stage_id].spiral_offload(non_blocking=True)
+                        offload_param_curr = get_thunder_cuda_manager().Event(
+                            "offload",
+                            None,
+                            tag=f"offload_param:b{bwd_stage_id}"
+                        )
+                        if get_thunder_cuda_manager().record_event(offload_param_curr) == -1:
+                            raise RuntimeError("record_event failed")
+                        offload_event_queries[offload_param_curr.tag] = offload_param_curr
 
-                # free bwd stage grads
+                # free bwd stage grads (spiral_free_grad is cpu job with tensor.record_stream)
                 model[bwd_stage_id].spiral_free_grad()
-                free_grad_curr = get_thunder_cuda_manager().Event(
-                    "free",
-                    None,
-                    tag=f"free_grad:b{bwd_stage_id}",
-                )
-                if get_thunder_cuda_manager().record_event(free_grad_curr) == -1:
-                    raise RuntimeError("record_event failed")
-                free_event_queries[free_grad_curr.tag] = free_grad_curr
         # end offload & free grad
 
         mpu.set_spiral_backward_virtual_rank(None)
@@ -589,21 +594,36 @@ def mobius_schedule(
 
     # cleanup schedule events
     if (
-        get_thunder_cuda_manager().wait_event(free_event_queries.pop(f"free:b0"))
+        get_thunder_cuda_manager().wait_event(free_event_queries.pop(f"free:b0"),
+                                              sync=True)
         == -1
     ):
         raise RuntimeError("wait_event failed")
 
     if offload_grad_after_bwd_stage:
         for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
-            # flush free grad event queries
+            # flush offload grad event queries
             if (
                 get_thunder_cuda_manager().wait_event(
-                    free_event_queries.pop(f"free_grad:b{bwd_stage_id}")
+                    offload_event_queries.pop(f"offload_grad:b{bwd_stage_id}"),
+                    sync=True
                 )
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
+
+        if optimize_after_bwd_stage:
+            for bwd_stage_id in range(mpu.get_spiral_backward_virtual_size() - 1, -1, -1):
+                if not optimizer.is_cpu_optimizer(bwd_stage_id):
+                    # flush offload param event queries
+                    if (
+                        get_thunder_cuda_manager().wait_event(
+                            offload_event_queries.pop(f"offload_param:b{bwd_stage_id}"),
+                            sync=True
+                        )
+                        == -1
+                    ):
+                        raise RuntimeError("wait_event failed")
 
     _cleanup()
     return forward_data_store

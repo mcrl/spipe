@@ -7,6 +7,9 @@ from deepspeed.utils.logging import should_log_le
 
 from .cpu_adam_builder import SpiralCPUAdamBuilder
 
+from megatron.spiral.init_context import SpiralParamStatus
+from megatron.spiral.utils import is_spiral_param
+
 class SpiralCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
 
@@ -74,6 +77,15 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             bias_correction=bias_correction,
             amsgrad=amsgrad,
         )
+
+        # set spiral_tensor as param_groups
+        for group in model_params:
+            for param_id, p in enumerate(group["params"]):
+                assert (is_spiral_param(p))
+                assert (p.spiral_status == SpiralParamStatus.CPU)
+                assert (p.spiral_tensor.numel() == p.spiral_numel)
+                group["params"][param_id] = p.spiral_tensor
+
         super(SpiralCPUAdam, self).__init__(model_params, default_args)
 
         cpu_info = get_cpu_info()
@@ -292,9 +304,3 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             found_inf = torch.FloatTensor([0])
         self.ds_opt_adam.adam_sync(self.opt_id, found_inf)
         self.optimizer_locked = False
-
-    def set_inv_scale(self, inv_scale):
-        self.inv_scale = inv_scale
-
-    def set_event_long(self, ev_long):
-        self.ev_long = ev_long

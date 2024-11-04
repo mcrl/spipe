@@ -20,3 +20,7 @@ if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
     --spiral-stage-optimizer-pool-size 0
     "
 fi
+
+if [ ${SPIRAL_HETERO_OPTIMIZER} == "YES" ]; then
+    EXTRA_ARGS+=" --spiral-heterogeneous-optimizer"
+fi

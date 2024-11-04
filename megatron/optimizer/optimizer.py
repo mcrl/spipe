@@ -345,6 +345,7 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
         self.bf16 = bf16
         self.params_dtype = params_dtype
         self.grad_scaler = grad_scaler
+        self.use_global_grad_scaler = False
 
         # None grad scaler is only supported for bf16.
         if self.grad_scaler is None:
@@ -424,7 +425,9 @@ class MixedPrecisionOptimizer(MegatronOptimizer):
 
             # We are done with scaling gradients
             # so we can update the loss scale.
-            self.grad_scaler.update(found_inf_flag)
+            # TODO: Remove this condition and self.use_global_grad_scaler (dummy flag)
+            if not self.use_global_grad_scaler:
+                self.grad_scaler.update(found_inf_flag)
 
             # If we found inf/nan, skip the update.
             if found_inf_flag:
