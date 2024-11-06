@@ -53,6 +53,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         # For unscale in mixed precision
         self.inv_scale = 0
         self.params_have_main_grad = True
+        self.step_event = None
 
         if multi_tensor_applier.available:
             import amp_C
@@ -146,7 +147,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
 
                 group['found_inf'] = (found_inf.item() > 0)
                 if group['found_inf']:
-                    return False
+                    return loss
 
             # assume same step across group now to simplify things
             # per parameter step can be easily support by making it tensor, or pass list into kernel
@@ -177,12 +178,13 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                                      [p_32, p_16],
                                      1.0)
 
-        return True
+        self.step_event = torch.cuda.Event()
+        self.step_event.record()
+        return loss
 
     def rollback(self):
         if not self.adam_w_mode:
             raise RuntimeError("SpiralGPUAdam only supports rollback for adam_w_mode.")
-        loss = None
 
         for group in self.param_groups:
             if len(group['params']) == 0:
@@ -194,7 +196,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             # if found_inf is True, skip rollback
             if dtype == torch.float16:
                 if group['found_inf']:
-                    return False
+                    return
 
             # create lists for multi-tensor apply
             p_16 = []
@@ -232,7 +234,18 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                                      [p_32, p_16],
                                      1.0)
 
-        return True
+    def sync(self, found_inf=None):
+        if self.step_event is not None:
+            self.step_event.synchronize()
+            self.step_event = None
+
+        if found_inf is not None:
+            flag = 0
+            for group in self.param_groups:
+                if group['found_inf']:
+                    flag = 1
+                    break
+            found_inf.fill_(flag)
 
 
 def multi_tensor_rollback_adamw(

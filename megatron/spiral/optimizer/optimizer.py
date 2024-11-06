@@ -11,23 +11,10 @@ class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
 
     @torch.no_grad()
     def step(self, args, timers):
-        if type(self.optimizer) == SpiralCPUAdam:
-            return self.optimizer.step()
-        else:
-            result = self.optimizer.step()
-            self.found_inf.fill_(0.0 if result else 1.0)
-            self.step_event = torch.cuda.Event()
-            self.step_event.record()
-            return result
+        return self.optimizer.step()
 
     def sync(self, found_inf=None):
-        if type(self.optimizer) == SpiralCPUAdam:
-            self.optimizer.sync(found_inf)
-        else:
-            if self.step_event is not None:
-                self.step_event.synchronize()
-                self.step_event = None
-            found_inf.data = self.found_inf.to(device = found_inf.device, non_blocking=False)
+        self.optimizer.sync(found_inf)
 
     @torch.no_grad()
     def rollback(self, sync=False):
