@@ -5,6 +5,8 @@
 
 import torch
 from apex.multi_tensor_apply import multi_tensor_applier
+from megatron import get_args
+
 
 class SpiralGPUAdam(torch.optim.Optimizer):
 
@@ -51,6 +53,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         self.set_grad_none = set_grad_none
 
         # For unscale in mixed precision
+        self.half_precision = get_args().fp16
         self.inv_scale = 0
         self.params_have_main_grad = True
         self.step_event = None
@@ -69,11 +72,27 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             for group in self.param_groups:
                 for p in group['params']:
                     p.grad = None
-                    state = self.state[p]
-                    if 'fp32_grad' in state:
-                        state['fp32_grad'] = None
         else:
             super(SpiralGPUAdam, self).zero_grad()
+
+    def _unscale_grads_and_check_inf(self):
+        fp32_grads = []
+        for group in self.param_groups:
+            for p in group['params']:
+                if self.params_have_main_grad and hasattr(p, 'main_grad'):
+                    if p.main_grad is not None:
+                        p.main_grad = p.main_grad.float()
+                        fp32_grads.append(p.main_grad.data)
+                else:
+                    if p.grad is not None:
+                        p.grad = p.grad.float()
+                        fp32_grads.append(p.grad.data)
+
+        found_inf = torch.cuda.FloatTensor([0.0])
+        inv_scale = torch.cuda.FloatTensor([self.inv_scale])
+        torch._amp_foreach_non_finite_check_and_unscale_(fp32_grads, found_inf, inv_scale)
+
+        return found_inf.item() > 0
 
     def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
         """Performs a single optimization step.
@@ -90,6 +109,12 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         if closure is not None:
             loss = closure()
 
+        # Unscale fp32 grads and check for inf/nan
+        if self.half_precision:
+            self.found_inf = self._unscale_grads_and_check_inf()
+            if self.found_inf:
+                return loss
+
         for group in self.param_groups:
             if len(group['params']) == 0:
                 continue
@@ -97,7 +122,12 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
 
-            group['found_inf'] = False
+            # assume same step across group now to simplify things
+            # per parameter step can be easily support by making it tensor, or pass list into kernel
+            if 'step' in group:
+                group['step'] += 1
+            else:
+                group['step'] = 1
 
             # create lists for multi-tensor apply
             p_16 = []
@@ -126,9 +156,8 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                         state['fp32_param'] = p.detach().clone().float()
                     else:
                         state['fp32_param'] = p
-
-                # Copy fp16 grad to fp32 grad
-                state['fp32_grad'] = grad.detach().clone().float()
+                
+                state['fp32_grad'] = grad
                 grad = None
 
                 if dtype == torch.float16 or dtype == torch.bfloat16:
@@ -138,23 +167,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                 p_32.append(state['fp32_param'].data)
                 m_32.append(state['exp_avg'])
                 v_32.append(state['exp_avg_sq'])
-
-            # Unscale fp32 grads and check for inf/nan
-            if dtype == torch.float16:
-                found_inf = torch.cuda.FloatTensor([0.0])
-                inv_scale = torch.cuda.FloatTensor([self.inv_scale])
-                torch._amp_foreach_non_finite_check_and_unscale_(g_32, found_inf, inv_scale)
-
-                group['found_inf'] = (found_inf.item() > 0)
-                if group['found_inf']:
-                    return loss
-
-            # assume same step across group now to simplify things
-            # per parameter step can be easily support by making it tensor, or pass list into kernel
-            if 'step' in group:
-                group['step'] += 1
-            else:
-                group['step'] = 1
 
             # Parameter update
             if len(g_32) > 0:
@@ -186,17 +198,16 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         if not self.adam_w_mode:
             raise RuntimeError("SpiralGPUAdam only supports rollback for adam_w_mode.")
 
+        # if found_inf is True, skip rollback
+        if self.half_precision and self.found_inf:
+            return
+
         for group in self.param_groups:
             if len(group['params']) == 0:
                 continue
             dtype = group['params'][0].dtype
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
-
-            # if found_inf is True, skip rollback
-            if dtype == torch.float16:
-                if group['found_inf']:
-                    return
 
             # create lists for multi-tensor apply
             p_16 = []
@@ -240,12 +251,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             self.step_event = None
 
         if found_inf is not None:
-            flag = 0
-            for group in self.param_groups:
-                if group['found_inf']:
-                    flag = 1
-                    break
-            found_inf.fill_(flag)
+            found_inf.fill_(1.0 if self.found_inf else 0.0)
 
 
 def multi_tensor_rollback_adamw(
