@@ -125,6 +125,11 @@ def onefoneb_schedule(
         if num_microbatches == pipeline_parallel_size:
             num_warmup_microbatches = total_num_microbatches
             all_warmup_microbatches = True
+            # TODO: Implement all_warmup_microbatches
+            raise RuntimeError(
+                "Current implementation does not support all_warmup_microbatches"
+                "(num_microbatches == pipeline_parallel_size)"
+            )
         else:
             num_warmup_microbatches = (
                 pipeline_parallel_size - pipeline_parallel_rank - 1
