@@ -15,8 +15,9 @@ from .p2p_communication import (
     recv_next,
 )
 from .schedule import (
-    forward_backward_pipelining_with_spiral_remap,
-    forward_backward_pipelining_with_spiral,
+    spipe_schedule,
+    mobius_schedule,
+    onefoneb_schedule,
 )
 from .optimizer.stage_optimizer import (
     SpiralStageOptimizer,

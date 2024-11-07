@@ -600,19 +600,23 @@ def get_pipeline_model_parallel_split_rank():
 
 def is_pipeline_first_stage(ignore_virtual=False):
     """Return True if in the first pipeline model-parallel stage, False otherwise."""
-    if _SPIRAL and _SPIRAL_REMAP:
-        # For SpiralPipe with remapping, lowest idx forward virtual stage and
-        # lowest idx backward virtual stage is the first stage
-        _is_forward_virtual_first_stage = get_spiral_forward_virtual_rank() == 0 and \
-        get_pipeline_model_parallel_rank() == 0
-        _is_backward_virtual_first_stage = get_spiral_backward_virtual_rank() == 0 and \
-        get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
-        return _is_forward_virtual_first_stage or _is_backward_virtual_first_stage
-    elif _SPIRAL and not _SPIRAL_REMAP:
-        return get_pipeline_model_parallel_rank() == 0 and (
-            get_spiral_forward_virtual_rank() == 0
-            or get_spiral_backward_virtual_rank() == 0
-        )
+    if _SPIRAL:
+        if ignore_virtual:
+            # Only for spipe 1f1b
+            return get_pipeline_model_parallel_rank() == 0
+        if _SPIRAL_REMAP:
+            # For SpiralPipe with remapping, lowest idx forward virtual stage and
+            # lowest idx backward virtual stage is the first stage
+            _is_forward_virtual_first_stage = get_spiral_forward_virtual_rank() == 0 and \
+            get_pipeline_model_parallel_rank() == 0
+            _is_backward_virtual_first_stage = get_spiral_backward_virtual_rank() == 0 and \
+            get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
+            return _is_forward_virtual_first_stage or _is_backward_virtual_first_stage
+        else:
+            return get_pipeline_model_parallel_rank() == 0 and (
+                get_spiral_forward_virtual_rank() == 0
+                or get_spiral_backward_virtual_rank() == 0
+            )
 
     # NOTE (SpiralPipe) below is original logic
     if not ignore_virtual:
@@ -624,19 +628,23 @@ def is_pipeline_first_stage(ignore_virtual=False):
 
 def is_pipeline_last_stage(ignore_virtual=False):
     """Return True if in the last pipeline model-parallel stage, False otherwise."""
-    if _SPIRAL and _SPIRAL_REMAP:
-        # For SpiralPipe with remapping, highest idx forward virtual stage and
-        # highest idx backward virtual stage is the last stage
-        _is_forward_virtual_last_stage = get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1 and \
-        get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
-        _is_backward_virtual_last_stage = get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1 and \
-        get_pipeline_model_parallel_rank() == 0
-        return _is_forward_virtual_last_stage or _is_backward_virtual_last_stage
-    elif _SPIRAL and not _SPIRAL_REMAP:
-        return get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1 and (
-            get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1
-            or get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1
-        )
+    if _SPIRAL:
+        if ignore_virtual:
+            # Only for spipe 1f1b
+            return get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
+        if _SPIRAL_REMAP:
+            # For SpiralPipe with remapping, highest idx forward virtual stage and
+            # highest idx backward virtual stage is the last stage
+            _is_forward_virtual_last_stage = get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1 and \
+            get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
+            _is_backward_virtual_last_stage = get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1 and \
+            get_pipeline_model_parallel_rank() == 0
+            return _is_forward_virtual_last_stage or _is_backward_virtual_last_stage
+        else:
+            return get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1 and (
+                get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1
+                or get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1
+            )
 
     # NOTE (SpiralPipe) below is original logic
     if not ignore_virtual:
