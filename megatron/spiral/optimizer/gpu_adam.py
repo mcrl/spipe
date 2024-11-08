@@ -162,6 +162,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
 
         prefetch_events = []
         compute_events = []
+        free_events = []
 
         # Fetch optimizer state
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
@@ -269,9 +270,20 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     if len(compute_events) > 0:
                         compute_events.pop(0).wait()
 
-            self.step_event = torch.cuda.Event()
-            self.step_event.record()
+                    event = torch.cuda.Event()
+                    event.record()
+                    free_events.append(event)
+        
+        if len(free_events) > 0:
+            free_events.pop(0).synchronize()
+        for group in self.param_groups:
+            for i, p in enumerate(group['params']):
+                self.free_state(p)
+                if len(free_events) > 0:
+                    free_events.pop(0).synchronize()
 
+        self.step_event = torch.cuda.Event()
+        self.step_event.record()
         return loss
 
     def rollback(self):
