@@ -61,9 +61,11 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         self.inv_scale = 0
         self.params_have_main_grad = True
         self.step_event = None
+        self.found_inf = False
 
         self.local_device = torch.cuda.current_device()
         self.remote_device = torch.device("cpu")
+        self.gpu_state = defaultdict(dict)
         self.cpu_state = defaultdict(dict)
         self.numel_threshold = get_args().hidden_size * get_args().hidden_size
 
@@ -113,31 +115,32 @@ class SpiralGPUAdam(torch.optim.Optimizer):
 
     @nvtx.annotate("offload_state", color="pink")
     def offload_state(self, p):
-        state = self.state[p]
+        gpu_state = self.gpu_state[p]
         cpu_state = self.cpu_state[p]
-        cpu_state['exp_avg'].copy_(state['exp_avg'].data, non_blocking=True)
-        cpu_state['exp_avg_sq'].copy_(state['exp_avg_sq'].data, non_blocking=True)
-        cpu_state['fp32_param'].copy_(state['fp32_param'].data, non_blocking=True)
-        cpu_state['fp32_grad'].copy_(state['fp32_grad'].data, non_blocking=True)
+        cpu_state['exp_avg'].copy_(gpu_state['exp_avg'].data, non_blocking=True)
+        cpu_state['exp_avg_sq'].copy_(gpu_state['exp_avg_sq'].data, non_blocking=True)
+        cpu_state['fp32_param'].copy_(gpu_state['fp32_param'].data, non_blocking=True)
+        cpu_state['fp32_grad'].copy_(gpu_state['fp32_grad'].data, non_blocking=True)
 
     @nvtx.annotate("free_state", color="purple")
     def free_state(self, p):
-        state = self.state[p]
-        state['exp_avg'] = None
-        state['exp_avg_sq'] = None
-        state['fp32_param'] = None
-        state['fp32_grad'] = None
+        gpu_state = self.gpu_state[p]
+        gpu_state['exp_avg'] = None
+        gpu_state['exp_avg_sq'] = None
+        gpu_state['fp32_param'] = None
+        gpu_state['fp32_grad'] = None
 
     @nvtx.annotate("fetch_state", color="green")
     def fetch_state(self, p, grad_temp=False):
-        state = self.state[p]
+        gpu_state = self.gpu_state[p]
         cpu_state = self.cpu_state[p]
-        state['exp_avg'] = cpu_state['exp_avg'].to(device=self.local_device, non_blocking=True)
-        state['exp_avg_sq'] = cpu_state['exp_avg_sq'].to(device=self.local_device, non_blocking=True)
-        state['fp32_param'] = cpu_state['fp32_param'].to(device=self.local_device, non_blocking=True)
+        gpu_state['exp_avg'] = cpu_state['exp_avg'].to(device=self.local_device, non_blocking=True)
+        gpu_state['exp_avg_sq'] = cpu_state['exp_avg_sq'].to(device=self.local_device, non_blocking=True)
+        gpu_state['fp32_param'] = cpu_state['fp32_param'].to(device=self.local_device, non_blocking=True)
 
+        # TODO: remove grad_temp
         if grad_temp:
-            state['fp32_grad'] = cpu_state['fp32_grad'].to(device=self.local_device, non_blocking=True)
+            gpu_state['fp32_grad'] = cpu_state['fp32_grad'].to(device=self.local_device, non_blocking=True)
 
     def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
         """Performs a single optimization step.
@@ -160,77 +163,92 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             if self.found_inf:
                 return loss
 
+        # TODO: This is just for dict key!! how about use other key? or just index?
+        for group in self.param_groups:
+            if not 'chunked_param' in group:
+                group['chunked_param'] = slice_tensor_list_in_chunks(group['params'], self.numel_threshold)
+
+        # Slice params and grads in chunks
+        for group in self.param_groups:
+            fp32_grads = []
+            for p in group['params']:
+                if self.params_have_main_grad and hasattr(p, 'main_grad'):
+                    grad = p.main_grad
+                else:
+                    grad = p.grad
+
+                if grad is None:
+                    continue
+                if grad.data.is_sparse:
+                    raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
+
+                fp32_grads.append(grad.data)
+
+            # TODO: change the key name
+            group['chunked_real_param'] = slice_tensor_list_in_chunks(group['params'], self.numel_threshold)
+            group['chunked_grad'] = slice_tensor_list_in_chunks(fp32_grads, self.numel_threshold)
+
         prefetch_events = []
         compute_events = []
         free_events = []
 
-        # Fetch optimizer state
-        with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
-            for group in self.param_groups:
-                for i, p in enumerate(group['params']):
-                    state = self.state[p]
-                    if not len(state) == 0:
+        for group in self.param_groups:
+            if len(group['chunked_param']) == 0:
+                continue
+            dtype = group['chunked_param'][0].dtype
+            bias_correction = 1 if group['bias_correction'] else 0
+            beta1, beta2 = group['betas']
+
+            # assume same step across group now to simplify things
+            # per parameter step can be easily support by making it tensor, or pass list into kernel
+            if 'step' in group:
+                group['step'] += 1
+            else:
+                group['step'] = 1
+
+            for i, p in enumerate(group['chunked_param']):
+
+                # Fetch optimizer state
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
+                    gpu_state = self.gpu_state[p]
+                    if not len(gpu_state) == 0:
                         self.fetch_state(p)
+
                         event = torch.cuda.Event()
                         event.record()
                         prefetch_events.append(event)
 
-        # Parameter update
-        with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
-            for group in self.param_groups:
-                if len(group['params']) == 0:
-                    continue
-                dtype = group['params'][0].dtype
-                bias_correction = 1 if group['bias_correction'] else 0
-                beta1, beta2 = group['betas']
-
-                # assume same step across group now to simplify things
-                # per parameter step can be easily support by making it tensor, or pass list into kernel
-                if 'step' in group:
-                    group['step'] += 1
-                else:
-                    group['step'] = 1
-
-                for i, p in enumerate(group['params']):
+                # Parameter update
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                     # create lists for multi-tensor apply
                     p_16 = []
                     g_32, p_32, m_32, v_32 = [], [], [], []
 
-                    if self.params_have_main_grad and hasattr(p, 'main_grad'):
-                        grad = p.main_grad
-                    else:
-                        grad = p.grad
-
-                    if grad is None:
-                        continue
-                    if grad.data.is_sparse:
-                        raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
-
-                    state = self.state[p]
+                    gpu_state = self.gpu_state[p]
                     # State initialization
-                    if len(state) == 0:
+                    if len(gpu_state) == 0:
                         # Exponential moving average of gradient values
-                        state['exp_avg'] = torch.zeros_like(p.data).float()
+                        gpu_state['exp_avg'] = torch.zeros_like(p.data).float()
                         # Exponential moving average of squared gradient values
-                        state['exp_avg_sq'] = torch.zeros_like(p.data).float()
+                        gpu_state['exp_avg_sq'] = torch.zeros_like(p.data).float()
                         # Copy fp16 param to fp32 param
                         if dtype == torch.float16 or dtype == torch.bfloat16:
-                            state['fp32_param'] = p.detach().clone().float()
+                            gpu_state['fp32_param'] = p.detach().clone().float()
                         else:
-                            state['fp32_param'] = p
+                            gpu_state['fp32_param'] = p
                     
                         self.init_cpu_state(p)
 
-                    state['fp32_grad'] = grad
-                    grad = None
+                    gpu_state['fp32_grad'] = group['chunked_grad'][i]
+                    group['chunked_grad'][i] = None
 
                     if dtype == torch.float16 or dtype == torch.bfloat16:
-                        p_16.append(p.data)
+                        p_16.append(group['chunked_real_param'][i].data)
 
-                    g_32.append(state['fp32_grad'].data)
-                    p_32.append(state['fp32_param'].data)
-                    m_32.append(state['exp_avg'])
-                    v_32.append(state['exp_avg_sq'])
+                    g_32.append(gpu_state['fp32_grad'].data)
+                    p_32.append(gpu_state['fp32_param'].data)
+                    m_32.append(gpu_state['exp_avg'])
+                    v_32.append(gpu_state['exp_avg_sq'])
 
                     if len(prefetch_events) > 0:
                         prefetch_events.pop(0).wait()
@@ -260,27 +278,22 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     event.record()
                     compute_events.append(event)
 
-        # Offload optimizer state
-        with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
-            if len(compute_events) > 0:
-                    compute_events.pop(0).wait()
-            for group in self.param_groups:
-                for i, p in enumerate(group['params']):
-                    self.offload_state(p)
+                # Offload optimizer state
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
                     if len(compute_events) > 0:
-                        compute_events.pop(0).wait()
+                            compute_events.pop(0).wait()
+                    self.offload_state(p)
 
                     event = torch.cuda.Event()
                     event.record()
                     free_events.append(event)
-        
-        if len(free_events) > 0:
-            free_events.pop(0).synchronize()
+
+        # Free optimizer state
         for group in self.param_groups:
-            for i, p in enumerate(group['params']):
-                self.free_state(p)
+            for p in group['chunked_param']:
                 if len(free_events) > 0:
                     free_events.pop(0).synchronize()
+                self.free_state(p)
 
         self.step_event = torch.cuda.Event()
         self.step_event.record()
@@ -392,3 +405,16 @@ def rollback_adamw(
     p.add_(update).div_(1 - lr * decay)
     v.addcmul_(g, g, value=beta2 - 1).div_(beta2)
     m.add_(g, alpha=beta1 - 1).div_(beta1)
+
+
+def slice_tensor_list_in_chunks(tensor_list, chunk_size=0):
+    sliced_tensor_list = []
+    
+    for tensor in tensor_list:
+        current_index = 0
+        while current_index < tensor.numel():
+            end = min(current_index + chunk_size, tensor.numel())
+            sliced_tensor_list.append(tensor.view(-1)[current_index:end])
+            current_index += chunk_size
+
+    return sliced_tensor_list
