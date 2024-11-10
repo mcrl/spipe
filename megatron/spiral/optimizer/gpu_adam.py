@@ -105,35 +105,35 @@ class SpiralGPUAdam(torch.optim.Optimizer):
 
         return found_inf.item() > 0
 
-    def init_cpu_state(self, p):
-        cpu_state = self.cpu_state[p]
+    def init_cpu_state(self, idx, shape):
+        cpu_state = self.cpu_state[idx]
         if len(cpu_state) == 0:
-            cpu_state['exp_avg'] = torch.empty(p.data.shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
-            cpu_state['exp_avg_sq'] = torch.empty(p.data.shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
-            cpu_state['fp32_param'] = torch.empty(p.data.shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
-            cpu_state['fp32_grad'] = torch.empty(p.data.shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+            cpu_state['exp_avg'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+            cpu_state['exp_avg_sq'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+            cpu_state['fp32_param'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+            cpu_state['fp32_grad'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
 
     @nvtx.annotate("offload_state", color="pink")
-    def offload_state(self, p):
-        gpu_state = self.gpu_state[p]
-        cpu_state = self.cpu_state[p]
+    def offload_state(self, idx):
+        gpu_state = self.gpu_state[idx]
+        cpu_state = self.cpu_state[idx]
         cpu_state['exp_avg'].copy_(gpu_state['exp_avg'].data, non_blocking=True)
         cpu_state['exp_avg_sq'].copy_(gpu_state['exp_avg_sq'].data, non_blocking=True)
         cpu_state['fp32_param'].copy_(gpu_state['fp32_param'].data, non_blocking=True)
         cpu_state['fp32_grad'].copy_(gpu_state['fp32_grad'].data, non_blocking=True)
 
     @nvtx.annotate("free_state", color="purple")
-    def free_state(self, p):
-        gpu_state = self.gpu_state[p]
+    def free_state(self, idx):
+        gpu_state = self.gpu_state[idx]
         gpu_state['exp_avg'] = None
         gpu_state['exp_avg_sq'] = None
         gpu_state['fp32_param'] = None
         gpu_state['fp32_grad'] = None
 
     @nvtx.annotate("fetch_state", color="green")
-    def fetch_state(self, p, grad_temp=False):
-        gpu_state = self.gpu_state[p]
-        cpu_state = self.cpu_state[p]
+    def fetch_state(self, idx, grad_temp=False):
+        gpu_state = self.gpu_state[idx]
+        cpu_state = self.cpu_state[idx]
         gpu_state['exp_avg'] = cpu_state['exp_avg'].to(device=self.local_device, non_blocking=True)
         gpu_state['exp_avg_sq'] = cpu_state['exp_avg_sq'].to(device=self.local_device, non_blocking=True)
         gpu_state['fp32_param'] = cpu_state['fp32_param'].to(device=self.local_device, non_blocking=True)
@@ -163,10 +163,10 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             if self.found_inf:
                 return loss
 
-        # TODO: This is just for dict key!! how about use other key? or just index?
+        # Calc number of chunked parameter
         for group in self.param_groups:
-            if not 'chunked_param' in group:
-                group['chunked_param'] = slice_tensor_list_in_chunks(group['params'], self.numel_threshold)
+            if not 'chunked_param_num' in group:
+                group['chunked_param_num'] = len(slice_tensor_list_in_chunks(group['params'], self.numel_threshold))
 
         # Slice params and grads in chunks
         for group in self.param_groups:
@@ -184,18 +184,18 @@ class SpiralGPUAdam(torch.optim.Optimizer):
 
                 fp32_grads.append(grad.data)
 
-            # TODO: change the key name
-            group['chunked_real_param'] = slice_tensor_list_in_chunks(group['params'], self.numel_threshold)
-            group['chunked_grad'] = slice_tensor_list_in_chunks(fp32_grads, self.numel_threshold)
+            group['chunked_params'] = slice_tensor_list_in_chunks(group['params'], self.numel_threshold)
+            group['chunked_grads'] = slice_tensor_list_in_chunks(fp32_grads, self.numel_threshold)
 
         prefetch_events = []
         compute_events = []
         free_events = []
+        chunked_idx = -1
 
         for group in self.param_groups:
-            if len(group['chunked_param']) == 0:
+            if group['chunked_param_num'] == 0:
                 continue
-            dtype = group['chunked_param'][0].dtype
+            dtype = group['params'][0].dtype
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
 
@@ -206,13 +206,16 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             else:
                 group['step'] = 1
 
-            for i, p in enumerate(group['chunked_param']):
+            for i in range(group['chunked_param_num']):
+                chunked_idx += 1
+                gpu_state = self.gpu_state[chunked_idx]
+                p = group['chunked_params'][i]
+                g = group['chunked_grads'][i]
 
                 # Fetch optimizer state
                 with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
-                    gpu_state = self.gpu_state[p]
                     if not len(gpu_state) == 0:
-                        self.fetch_state(p)
+                        self.fetch_state(chunked_idx)
 
                         event = torch.cuda.Event()
                         event.record()
@@ -224,7 +227,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     p_16 = []
                     g_32, p_32, m_32, v_32 = [], [], [], []
 
-                    gpu_state = self.gpu_state[p]
                     # State initialization
                     if len(gpu_state) == 0:
                         # Exponential moving average of gradient values
@@ -236,14 +238,14 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                             gpu_state['fp32_param'] = p.detach().clone().float()
                         else:
                             gpu_state['fp32_param'] = p
-                    
-                        self.init_cpu_state(p)
 
-                    gpu_state['fp32_grad'] = group['chunked_grad'][i]
-                    group['chunked_grad'][i] = None
+                        self.init_cpu_state(chunked_idx, p.data.shape)
+
+                    gpu_state['fp32_grad'] = g
+                    g = None
 
                     if dtype == torch.float16 or dtype == torch.bfloat16:
-                        p_16.append(group['chunked_real_param'][i].data)
+                        p_16.append(p.data)
 
                     g_32.append(gpu_state['fp32_grad'].data)
                     p_32.append(gpu_state['fp32_param'].data)
@@ -282,18 +284,20 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                 with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
                     if len(compute_events) > 0:
                             compute_events.pop(0).wait()
-                    self.offload_state(p)
+                    self.offload_state(chunked_idx)
 
                     event = torch.cuda.Event()
                     event.record()
                     free_events.append(event)
 
         # Free optimizer state
+        chunked_idx = -1
         for group in self.param_groups:
-            for p in group['chunked_param']:
+            for i in range(group['chunked_param_num']):
+                chunked_idx += 1
                 if len(free_events) > 0:
                     free_events.pop(0).synchronize()
-                self.free_state(p)
+                self.free_state(chunked_idx)
 
         self.step_event = torch.cuda.Event()
         self.step_event.record()
