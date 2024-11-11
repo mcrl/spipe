@@ -110,7 +110,8 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         if len(cpu_state) == 0:
             cpu_state['exp_avg'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
             cpu_state['exp_avg_sq'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
-            cpu_state['fp32_param'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+            if self.half_precision:
+                cpu_state['fp32_param'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
 
     @nvtx.annotate("offload_state", color="pink")
     def offload_state(self, idx):
@@ -118,14 +119,16 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         cpu_state = self.cpu_state[idx]
         cpu_state['exp_avg'].copy_(gpu_state['exp_avg'].data, non_blocking=True)
         cpu_state['exp_avg_sq'].copy_(gpu_state['exp_avg_sq'].data, non_blocking=True)
-        cpu_state['fp32_param'].copy_(gpu_state['fp32_param'].data, non_blocking=True)
+        if self.half_precision:
+            cpu_state['fp32_param'].copy_(gpu_state['fp32_param'].data, non_blocking=True)
 
     @nvtx.annotate("free_state", color="purple")
     def free_state(self, idx):
         gpu_state = self.gpu_state[idx]
         gpu_state['exp_avg'] = None
         gpu_state['exp_avg_sq'] = None
-        gpu_state['fp32_param'] = None
+        if self.half_precision:
+            gpu_state['fp32_param'] = None
 
     @nvtx.annotate("fetch_state", color="green")
     def fetch_state(self, idx):
@@ -133,7 +136,8 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         cpu_state = self.cpu_state[idx]
         gpu_state['exp_avg'] = cpu_state['exp_avg'].to(device=self.local_device, non_blocking=True)
         gpu_state['exp_avg_sq'] = cpu_state['exp_avg_sq'].to(device=self.local_device, non_blocking=True)
-        gpu_state['fp32_param'] = cpu_state['fp32_param'].to(device=self.local_device, non_blocking=True)
+        if self.half_precision:
+            gpu_state['fp32_param'] = cpu_state['fp32_param'].to(device=self.local_device, non_blocking=True)
 
     def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
         """Performs a single optimization step.
@@ -188,7 +192,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         for group in self.param_groups:
             if group['chunked_param_num'] == 0:
                 continue
-            dtype = group['params'][0].dtype
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
 
@@ -227,18 +230,18 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                         # Exponential moving average of squared gradient values
                         gpu_state['exp_avg_sq'] = torch.zeros_like(p.data).float()
                         # Copy fp16 param to fp32 param
-                        if dtype == torch.float16 or dtype == torch.bfloat16:
+                        if self.half_precision:
                             gpu_state['fp32_param'] = p.detach().clone().float()
-                        else:
-                            gpu_state['fp32_param'] = p
 
                         self.init_cpu_state(chunked_idx, p.data.shape)
 
-                    if dtype == torch.float16 or dtype == torch.bfloat16:
+                    if self.half_precision:
                         p_16.append(p.data)
+                        p_32.append(gpu_state['fp32_param'].data)
+                    else:
+                        p_32.append(p.data)
 
                     g_32.append(g.data)
-                    p_32.append(gpu_state['fp32_param'].data)
                     m_32.append(gpu_state['exp_avg'])
                     v_32.append(gpu_state['exp_avg_sq'])
 
@@ -259,7 +262,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                             group['weight_decay'])
 
                     # Copy fp32 params to fp16 params
-                    if dtype == torch.float16 or dtype == torch.bfloat16:
+                    if self.half_precision:
                         # Scaling with factor `1.0` is equivalent to copy.
                         multi_tensor_applier(self.multi_tensor_scale,
                                             self._dummy_overflow_buf,
@@ -311,7 +314,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             assert 'chunked_param_num' in group, "Rollback should be call after run optimizer.step"
             if group['chunked_param_num'] == 0:
                 continue
-            dtype = group['params'][0].dtype
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
 
@@ -335,11 +337,13 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     p_16 = []
                     g_32, p_32, m_32, v_32 = [], [], [], []
 
-                    if dtype == torch.float16 or dtype == torch.bfloat16:
+                    if self.half_precision:
                         p_16.append(p.data)
+                        p_32.append(gpu_state['fp32_param'].data)
+                    else:
+                        p_32.append(p.data)
 
                     g_32.append(g.data)
-                    p_32.append(gpu_state['fp32_param'].data)
                     m_32.append(gpu_state['exp_avg'])
                     v_32.append(gpu_state['exp_avg_sq'])
 
@@ -358,7 +362,7 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                         group['weight_decay'])
 
                     # Copy fp32 params to fp16 params
-                    if dtype == torch.float16 or dtype == torch.bfloat16:
+                    if self.half_precision:
                         # Scaling with factor `1.0` is equivalent to copy.
                         multi_tensor_applier(self.multi_tensor_scale,
                                             self._dummy_overflow_buf,
