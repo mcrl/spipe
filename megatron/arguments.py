@@ -430,18 +430,25 @@ def validate_args(args, defaults={}):
             if args.spiral_forward_virtual_size != args.spiral_backward_virtual_size:
                 raise RuntimeError(
                     "SpiralPipe w/o remapping requires forward and backward virtual size to be the same")
-            if args.spiral_recompute_activations:
+            if args.spiral_mobius and args.spiral_recompute_activations:
                 if args.rank == 0:
                     print(
-                        "Warning: SpiralPipe without remapping will run with full uniform (recompute num layers=1) recomputation "
+                        "Warning: Mobius will run with full uniform (recompute num layers=1) recomputation "
                         "regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers"
+                    )
+            if args.spiral_1f1b and args.spiral_recompute_activations:
+                if args.rank == 0:
+                    print(
+                        "Warning: Interleaved 1f1b offload with recomputation will ignore --spiral-recompute-activations and follow configuration given by --recompute-granularity, --recompute-method, and --recompute-num-layers"
                     )
         if args.use_distributed_optimizer:
             raise RuntimeError(
                 "SpiralPipe currently does not support distributed optimizer")
         if args.spiral_heterogeneous_optimizer:
             assert args.spiral_stage_optimizer, "spiral-heterogeneous-optimizer should be enabled with spiral-stage-optimizer"
-        
+        if (args.spiral_remap and args.spiral_1f1b) or (args.spiral_remap and args.spiral_mobius) or (args.spiral_1f1b and args.spiral_mobius):
+            raise RuntimeError(
+                "SpiralPipe does not support remapping/1f1b/mobius together")
 
     # GQA
     if args.num_key_value_heads is None:
@@ -1099,6 +1106,10 @@ def _add_distributed_args(parser):
                        'If turned on, --spiral-forward-virtual-size and --spiral-backward-virtual-size must be set to equal. '
                        'If turned off, the pipeline will resemble that of Mobius (ASPLOS 2023) '
                        'https://dl.acm.org/doi/abs/10.1145/3575693.3575703')
+    group.add_argument('--spiral-1f1b', action='store_true',
+                       help='Enable interleaved 1f1B offloading')
+    group.add_argument('--spiral-mobius', action='store_true',
+                       help='Enable mobius')
     group.add_argument('--spiral-shared-memory-name', type=str, default='/spiral',
                        help='Shared memory name to use when --spiral-remap')
     group.add_argument('--spiral-shared-memory-buffer-size', type=int, default=0,

@@ -2,6 +2,7 @@
 
 EXTRA_ARGS="
     --spiral \
+    --spiral-mobius \
     --spiral-forward-virtual-size $SPIRAL_FWD \
     --spiral-backward-virtual-size $SPIRAL_FWD \
     --spiral-recompute-activations \

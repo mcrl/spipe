@@ -54,8 +54,7 @@ def mobius_schedule(
     param_sync_func: Optional[Callable] = None,
     **kwargs,
 ):
-    """Run SpiralPipe schedule w/o remapping, with communication between pipeline stages as needed.
-    Resembles Mobius pipeline schedule. Implements both (non)re-computation versions.
+    """Run mobius schedule, with communication between pipeline stages as needed.
 
     Returns dictionary with losses if the last stage, empty dict otherwise."""
 

@@ -8,6 +8,7 @@ import torch
 from torch.autograd.variable import Variable
 from torch.nn.parallel.distributed import DistributedDataParallel as torchDDP
 
+from megatron import get_args
 from megatron.core import parallel_state
 from megatron.core.pipeline_parallel import p2p_communication
 from megatron.core.enums import ModelType
@@ -128,9 +129,14 @@ def get_forward_backward_func():
     """
     pipeline_model_parallel_size = parallel_state.get_pipeline_model_parallel_world_size()
     if parallel_state.is_spiral_remap():
-        forward_backward_func = megatron.spiral.schedule.forward_backward_pipelining_with_spiral_remap
+        forward_backward_func = megatron.spiral.schedule.spipe_schedule
     elif parallel_state.is_spiral():
-        forward_backward_func = megatron.spiral.schedule.forward_backward_pipelining_with_spiral
+        if get_args().spiral_1f1b:
+            forward_backward_func = megatron.spiral.schedule.onefoneb_schedule
+        elif get_args().spiral_mobius:
+            forward_backward_func = megatron.spiral.schedule.mobius_schedule
+        else:
+            raise RuntimeError("Spiral schedule unspecified")
     elif pipeline_model_parallel_size > 1:
         if parallel_state.get_virtual_pipeline_model_parallel_world_size() is not None:
             forward_backward_func = forward_backward_pipelining_with_interleaving
@@ -623,7 +629,6 @@ def forward_backward_pipelining_with_interleaving(*,
                           model_type,
                           timers,
                           deallocate_pipeline_outputs)
-
         # launch grad synchronization (custom grad sync)
         # Note: Asynchronous communication tends to slow down compute.
         # To reduce idling from mismatched microbatch times, we launch
@@ -652,7 +657,6 @@ def forward_backward_pipelining_with_interleaving(*,
     bwd_wait_handles = None
 
     for k in range(num_warmup_microbatches):
-
         if fwd_wait_handles is not None:
             for req in fwd_wait_handles:
                 req.wait()
@@ -907,6 +911,7 @@ def forward_backward_pipelining_with_interleaving(*,
                                                 dtype=dtype,
                                                 batch_p2p_comm=batch_p2p_comm,
                                                 timers=timers))
+
         for k in range(num_microbatches_remaining, total_num_microbatches):
             input_tensor_grad = backward_step_helper(k)
             next_backward_model_chunk_id = get_model_chunk_id(k+1, forward=False)

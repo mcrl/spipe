@@ -2,11 +2,14 @@
 
 EXTRA_ARGS="
     --spiral \
-    --spiral-mobius \
+    --spiral-1f1b \
     --spiral-forward-virtual-size $SPIRAL_FWD \
     --spiral-backward-virtual-size $SPIRAL_FWD \
     --spiral-overlap-offload-grad \
     --overlap-p2p-communication \
+    --recompute-granularity full \
+    --recompute-method uniform \
+    --recompute-num-layers $(($LAYER/$NP/$INTERLEAVE_VIRTUAL_SIZE)) \
     --megatron-mpi
 "
 

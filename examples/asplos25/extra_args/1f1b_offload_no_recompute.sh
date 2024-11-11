@@ -2,7 +2,7 @@
 
 EXTRA_ARGS="
     --spiral \
-    --spiral-mobius \
+    --spiral-1f1b \
     --spiral-forward-virtual-size $SPIRAL_FWD \
     --spiral-backward-virtual-size $SPIRAL_FWD \
     --spiral-overlap-offload-grad \
