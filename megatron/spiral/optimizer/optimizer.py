@@ -11,7 +11,7 @@ class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
 
     @torch.no_grad()
     def step(self, args, timers):
-        return self.optimizer.step()
+        self.optimizer.step()
 
     def sync(self, found_inf=None):
         self.optimizer.sync(found_inf)
@@ -47,21 +47,10 @@ class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
 class SpiralFP32Optimizer(FP32Optimizer):
     @torch.no_grad()
     def step(self, args, timers):
-        if type(self.optimizer) == SpiralCPUAdam:
-            return self.optimizer.step()
-        else:
-            result = self.optimizer.step()
-            self.step_event = torch.cuda.Event()
-            self.step_event.record()
-            return result
+        self.optimizer.step()
 
     def sync(self, found_inf=None):
-        if type(self.optimizer) == SpiralCPUAdam:
-            self.optimizer.sync(found_inf)
-        else:
-            if self.step_event is not None:
-                self.step_event.synchronize()
-                self.step_event = None
+        self.optimizer.sync()
 
     def rollback(self, sync=False):
         # No need to rollback for fp32 param
