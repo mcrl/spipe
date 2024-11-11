@@ -4,12 +4,8 @@
 # with some modifications.
 
 import torch
-import nvtx
 from apex.multi_tensor_apply import multi_tensor_applier
-from collections import defaultdict
-
 from megatron import get_args
-from megatron.spiral.initialize import get_thunder_cuda_manager
 
 
 class SpiralGPUAdam(torch.optim.Optimizer):
@@ -61,13 +57,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         self.inv_scale = 0
         self.params_have_main_grad = True
         self.step_event = None
-        self.found_inf = False
-
-        self.local_device = torch.cuda.current_device()
-        self.remote_device = torch.device("cpu")
-        self.gpu_state = defaultdict(dict)
-        self.cpu_state = defaultdict(dict)
-        self.numel_threshold = get_args().hidden_size * get_args().hidden_size
 
         if multi_tensor_applier.available:
             import amp_C
@@ -105,40 +94,6 @@ class SpiralGPUAdam(torch.optim.Optimizer):
 
         return found_inf.item() > 0
 
-    def init_cpu_state(self, idx, shape):
-        cpu_state = self.cpu_state[idx]
-        if len(cpu_state) == 0:
-            cpu_state['exp_avg'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
-            cpu_state['exp_avg_sq'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
-            if self.half_precision:
-                cpu_state['fp32_param'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
-
-    @nvtx.annotate("offload_state", color="pink")
-    def offload_state(self, idx):
-        gpu_state = self.gpu_state[idx]
-        cpu_state = self.cpu_state[idx]
-        cpu_state['exp_avg'].copy_(gpu_state['exp_avg'].data, non_blocking=True)
-        cpu_state['exp_avg_sq'].copy_(gpu_state['exp_avg_sq'].data, non_blocking=True)
-        if self.half_precision:
-            cpu_state['fp32_param'].copy_(gpu_state['fp32_param'].data, non_blocking=True)
-
-    @nvtx.annotate("free_state", color="purple")
-    def free_state(self, idx):
-        gpu_state = self.gpu_state[idx]
-        gpu_state['exp_avg'] = None
-        gpu_state['exp_avg_sq'] = None
-        if self.half_precision:
-            gpu_state['fp32_param'] = None
-
-    @nvtx.annotate("fetch_state", color="green")
-    def fetch_state(self, idx):
-        gpu_state = self.gpu_state[idx]
-        cpu_state = self.cpu_state[idx]
-        gpu_state['exp_avg'] = cpu_state['exp_avg'].to(device=self.local_device, non_blocking=True)
-        gpu_state['exp_avg_sq'] = cpu_state['exp_avg_sq'].to(device=self.local_device, non_blocking=True)
-        if self.half_precision:
-            gpu_state['fp32_param'] = cpu_state['fp32_param'].to(device=self.local_device, non_blocking=True)
-
     def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
         """Performs a single optimization step.
 
@@ -160,14 +115,24 @@ class SpiralGPUAdam(torch.optim.Optimizer):
             if self.found_inf:
                 return loss
 
-        # Calc number of chunked parameter
         for group in self.param_groups:
-            if not 'chunked_param_num' in group:
-                group['chunked_param_num'] = len(slice_tensor_list_in_chunks(group['params'], self.numel_threshold))
+            if len(group['params']) == 0:
+                continue
+            dtype = group['params'][0].dtype
+            bias_correction = 1 if group['bias_correction'] else 0
+            beta1, beta2 = group['betas']
 
-        # Slice params and grads in chunks
-        for group in self.param_groups:
-            fp32_grads = []
+            # assume same step across group now to simplify things
+            # per parameter step can be easily support by making it tensor, or pass list into kernel
+            if 'step' in group:
+                group['step'] += 1
+            else:
+                group['step'] = 1
+
+            # create lists for multi-tensor apply
+            p_16 = []
+            g_32, p_32, m_32, v_32 = [], [], [], []
+
             for p in group['params']:
                 if self.params_have_main_grad and hasattr(p, 'main_grad'):
                     grad = p.main_grad
@@ -179,122 +144,54 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                 if grad.data.is_sparse:
                     raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
 
-                fp32_grads.append(grad.data)
-
-            group['chunked_params'] = slice_tensor_list_in_chunks(group['params'], self.numel_threshold)
-            group['chunked_grads'] = slice_tensor_list_in_chunks(fp32_grads, self.numel_threshold)
-
-        prefetch_events = []
-        compute_events = []
-        free_events = []
-        chunked_idx = -1
-
-        for group in self.param_groups:
-            if group['chunked_param_num'] == 0:
-                continue
-            bias_correction = 1 if group['bias_correction'] else 0
-            beta1, beta2 = group['betas']
-
-            # assume same step across group now to simplify things
-            # per parameter step can be easily support by making it tensor, or pass list into kernel
-            if 'step' in group:
-                group['step'] += 1
-            else:
-                group['step'] = 1
-
-            for i in range(group['chunked_param_num']):
-                chunked_idx += 1
-                gpu_state = self.gpu_state[chunked_idx]
-                p = group['chunked_params'][i]
-                g = group['chunked_grads'][i]
-
-                # Fetch optimizer state
-                with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
-                    if not len(gpu_state) == 0:
-                        self.fetch_state(chunked_idx)
-
-                        event = torch.cuda.Event()
-                        event.record()
-                        prefetch_events.append(event)
-
-                # Parameter update
-                with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
-                    # create lists for multi-tensor apply
-                    p_16 = []
-                    g_32, p_32, m_32, v_32 = [], [], [], []
-
-                    # State initialization
-                    if len(gpu_state) == 0:
-                        # Exponential moving average of gradient values
-                        gpu_state['exp_avg'] = torch.zeros_like(p.data).float()
-                        # Exponential moving average of squared gradient values
-                        gpu_state['exp_avg_sq'] = torch.zeros_like(p.data).float()
-                        # Copy fp16 param to fp32 param
-                        if self.half_precision:
-                            gpu_state['fp32_param'] = p.detach().clone().float()
-
-                        self.init_cpu_state(chunked_idx, p.data.shape)
-
-                    if self.half_precision:
-                        p_16.append(p.data)
-                        p_32.append(gpu_state['fp32_param'].data)
+                state = self.state[p]
+                # State initialization
+                if len(state) == 0:
+                    # Exponential moving average of gradient values
+                    state['exp_avg'] = torch.zeros_like(p.data).float()
+                    # Exponential moving average of squared gradient values
+                    state['exp_avg_sq'] = torch.zeros_like(p.data).float()
+                    # Copy fp16 param to fp32 param
+                    if dtype == torch.float16 or dtype == torch.bfloat16:
+                        state['fp32_param'] = p.detach().clone().float()
                     else:
-                        p_32.append(p.data)
+                        state['fp32_param'] = p
+                
+                state['fp32_grad'] = grad
+                grad = None
 
-                    g_32.append(g.data)
-                    m_32.append(gpu_state['exp_avg'])
-                    v_32.append(gpu_state['exp_avg_sq'])
+                if dtype == torch.float16 or dtype == torch.bfloat16:
+                    p_16.append(p.data)
 
-                    if len(prefetch_events) > 0:
-                        prefetch_events.pop(0).wait()
+                g_32.append(state['fp32_grad'].data)
+                p_32.append(state['fp32_param'].data)
+                m_32.append(state['exp_avg'])
+                v_32.append(state['exp_avg_sq'])
 
-                    # Parameter update
-                    multi_tensor_applier(self.multi_tensor_adam,
-                            self._dummy_overflow_buf,
-                            [g_32, p_32, m_32, v_32],
-                            group['lr'],
-                            beta1,
-                            beta2,
-                            group['eps'],
-                            group['step'],
-                            self.adam_w_mode,
-                            bias_correction,
-                            group['weight_decay'])
+            # Parameter update
+            if len(g_32) > 0:
+                multi_tensor_applier(self.multi_tensor_adam,
+                        self._dummy_overflow_buf,
+                        [g_32, p_32, m_32, v_32],
+                        group['lr'],
+                        beta1,
+                        beta2,
+                        group['eps'],
+                        group['step'],
+                        self.adam_w_mode,
+                        bias_correction,
+                        group['weight_decay'])
 
-                    # Copy fp32 params to fp16 params
-                    if self.half_precision:
-                        # Scaling with factor `1.0` is equivalent to copy.
-                        multi_tensor_applier(self.multi_tensor_scale,
-                                            self._dummy_overflow_buf,
-                                            [p_32, p_16],
-                                            1.0)
-
-                    event = torch.cuda.Event()
-                    event.record()
-                    compute_events.append(event)
-
-                # Offload optimizer state
-                with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
-                    if len(compute_events) > 0:
-                            compute_events.pop(0).wait()
-                    self.offload_state(chunked_idx)
-
-                    event = torch.cuda.Event()
-                    event.record()
-                    free_events.append(event)
+            # Copy fp32 params to fp16 params
+            if dtype == torch.float16 or dtype == torch.bfloat16:
+                # Scaling with factor `1.0` is equivalent to copy.
+                multi_tensor_applier(self.multi_tensor_scale,
+                                     self._dummy_overflow_buf,
+                                     [p_32, p_16],
+                                     1.0)
 
         self.step_event = torch.cuda.Event()
         self.step_event.record()
-
-        # Free optimizer state
-        chunked_idx = -1
-        for group in self.param_groups:
-            for i in range(group['chunked_param_num']):
-                chunked_idx += 1
-                if len(free_events) > 0:
-                    free_events.pop(0).synchronize()
-                self.free_state(chunked_idx)
-
         return loss
 
     def rollback(self):
@@ -305,94 +202,48 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         if self.half_precision and self.found_inf:
             return
 
-        prefetch_events = []
-        compute_events = []
-        free_events = []
-        chunked_idx = -1
-
         for group in self.param_groups:
-            assert 'chunked_param_num' in group, "Rollback should be call after run optimizer.step"
-            if group['chunked_param_num'] == 0:
+            if len(group['params']) == 0:
                 continue
+            dtype = group['params'][0].dtype
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
 
-            for i in range(group['chunked_param_num']):
-                chunked_idx += 1
-                gpu_state = self.gpu_state[chunked_idx]
-                assert len(gpu_state) != 0, "Rollback should be call after run optimizer.step"
-                p = group['chunked_params'][i]
-                g = group['chunked_grads'][i]
+            # create lists for multi-tensor apply
+            p_16 = []
+            g_32, p_32, m_32, v_32 = [], [], [], []
 
-                # Fetch optimizer state
-                with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
-                    self.fetch_state(chunked_idx)
-                    event = torch.cuda.Event()
-                    event.record()
-                    prefetch_events.append(event)
+            for p in group['params']:
+                state = self.state[p]
+                assert len(state) != 0, "Rollback should be call after run optimizer.step"
 
-                # Parameter update
-                with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
-                    # create lists for multi-tensor apply
-                    p_16 = []
-                    g_32, p_32, m_32, v_32 = [], [], [], []
+                if dtype == torch.float16 or dtype == torch.bfloat16:
+                    p_16.append(p.data)
 
-                    if self.half_precision:
-                        p_16.append(p.data)
-                        p_32.append(gpu_state['fp32_param'].data)
-                    else:
-                        p_32.append(p.data)
+                g_32.append(state['fp32_grad'].data)
+                p_32.append(state['fp32_param'].data)
+                m_32.append(state['exp_avg'])
+                v_32.append(state['exp_avg_sq'])
 
-                    g_32.append(g.data)
-                    m_32.append(gpu_state['exp_avg'])
-                    v_32.append(gpu_state['exp_avg_sq'])
-
-                    if len(prefetch_events) > 0:
-                        prefetch_events.pop(0).wait()
-
-                    # Parameter update
-                    multi_tensor_rollback_adamw(
-                        g_32, p_32, m_32, v_32,
-                        group['lr'],
-                        beta1,
-                        beta2,
-                        group['eps'],
-                        group['step'],
-                        bias_correction,
-                        group['weight_decay'])
-
-                    # Copy fp32 params to fp16 params
-                    if self.half_precision:
-                        # Scaling with factor `1.0` is equivalent to copy.
-                        multi_tensor_applier(self.multi_tensor_scale,
-                                            self._dummy_overflow_buf,
-                                            [p_32, p_16],
-                                            1.0)
-
-                    event = torch.cuda.Event()
-                    event.record()
-                    compute_events.append(event)
-                
-                # Offload optimizer state
-                with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
-                    if len(compute_events) > 0:
-                            compute_events.pop(0).wait()
-                    self.offload_state(chunked_idx)
-
-                    event = torch.cuda.Event()
-                    event.record()
-                    free_events.append(event)
-
+            if len(g_32) > 0:
+                multi_tensor_rollback_adamw(
+                    g_32, p_32, m_32, v_32,
+                    group['lr'],
+                    beta1,
+                    beta2,
+                    group['eps'],
+                    group['step'],
+                    bias_correction,
+                    group['weight_decay'])
             group['step'] -= 1
 
-        # Free optimizer state
-        chunked_idx = -1
-        for group in self.param_groups:
-            for i in range(group['chunked_param_num']):
-                chunked_idx += 1
-                if len(free_events) > 0:
-                    free_events.pop(0).synchronize()
-                self.free_state(chunked_idx)
+            # Copy fp32 params to fp16 params
+            if dtype == torch.float16 or dtype == torch.bfloat16:
+                # Scaling with factor `1.0` is equivalent to copy.
+                multi_tensor_applier(self.multi_tensor_scale,
+                                     self._dummy_overflow_buf,
+                                     [p_32, p_16],
+                                     1.0)
 
     def sync(self, found_inf=None):
         if self.step_event is not None:
@@ -445,16 +296,3 @@ def rollback_adamw(
     p.add_(update).div_(1 - lr * decay)
     v.addcmul_(g, g, value=beta2 - 1).div_(beta2)
     m.add_(g, alpha=beta1 - 1).div_(beta1)
-
-
-def slice_tensor_list_in_chunks(tensor_list, chunk_size=0):
-    sliced_tensor_list = []
-    
-    for tensor in tensor_list:
-        current_index = 0
-        while current_index < tensor.numel():
-            end = min(current_index + chunk_size, tensor.numel())
-            sliced_tensor_list.append(tensor.view(-1)[current_index:end])
-            current_index += chunk_size
-
-    return sliced_tensor_list

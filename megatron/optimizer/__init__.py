@@ -98,6 +98,14 @@ def get_megatron_optimizer(model,
                            no_weight_decay_cond=None,
                            scale_lr_cond=None,
                            lr_mult=1.0):
+    """
+    - FP16 megatron optimizer : Float16OptimizerWithFloat16Params(FusedAdam)
+    - FP32 megatron optimizer : FP32Optimizer(FusedAdam)
+    - FP16 no staged optimizer : DeepSpeedFloat16Optimizer(DeepSpeedCPUAdam)
+    - FP32 no staged optimizer : FP32Optimizer(DeepSpeedCPUAdam)
+    - FP16 staged optimizer : SpiralStageOptimizer(...SpiralFloat16Optimizer(SpiralCPUAdam | SpiralGPUAdam | SpiralGPUChunkedAdam))
+    - FP16 staged optimizer : SpiralStageOptimizer(...SpiralFP32Optimizer(SpiralCPUAdam | SpiralGPUAdam | SpiralGPUChunkedAdam))
+    """
     args = get_args()
 
     # Determine whether the params have main-grad field.
@@ -152,8 +160,12 @@ def get_megatron_optimizer(model,
             # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
             # If --spiral-heterogeneous-optimizer is enabled, apply gpu optimizer to first stage.
             if args.spiral_heterogeneous_optimizer and _unwrapped_model.spiral_backward_stage_id == 0:
-                from megatron.spiral.optimizer.gpu_adam import SpiralGPUAdam
-                inner_opt_ty = SpiralGPUAdam
+                if args.spiral_offload_optimizer:
+                    from megatron.spiral.optimizer.gpu_chunked_adam import SpiralGPUChunkedAdam
+                    inner_opt_ty = SpiralGPUChunkedAdam
+                else:
+                    from megatron.spiral.optimizer.gpu_adam import SpiralGPUAdam
+                    inner_opt_ty = SpiralGPUAdam
             else:
                 from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
                 inner_opt_ty = SpiralCPUAdam

@@ -446,6 +446,8 @@ def validate_args(args, defaults={}):
                 "SpiralPipe currently does not support distributed optimizer")
         if args.spiral_heterogeneous_optimizer:
             assert args.spiral_stage_optimizer, "spiral-heterogeneous-optimizer should be enabled with spiral-stage-optimizer"
+        if args.spiral_offload_optimizer:
+            assert args.spiral_heterogeneous_optimizer, "spiral-offload-optimizer should be enabled with spiral-heterogeneous-optimizer"
         if (args.spiral_remap and args.spiral_1f1b) or (args.spiral_remap and args.spiral_mobius) or (args.spiral_1f1b and args.spiral_mobius):
             raise RuntimeError(
                 "SpiralPipe does not support remapping/1f1b/mobius together")
@@ -1128,6 +1130,8 @@ def _add_distributed_args(parser):
     group.add_argument('--spiral-heterogeneous-optimizer', action='store_true',
                         help='Enable cpu-gpu heterogeneous optimizer per each stage. '
                         'Use gpu optimizer for the first stage and cpu optimizer for the others')
+    group.add_argument('--spiral-offload-optimizer', action='store_true',
+                        help='Enable offload optimizer state per chunked parameter in gpu heterogeneous optimizer.')
     group.add_argument('--spiral-debug-backend', action='store_true',
                        help='Enable SpiralPipe backend logging')
     group.add_argument('--spiral-cross-mapping', action='store_true',
