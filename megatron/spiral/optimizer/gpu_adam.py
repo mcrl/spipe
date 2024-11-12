@@ -5,6 +5,8 @@
 
 import torch
 from apex.multi_tensor_apply import multi_tensor_applier
+from megatron import get_args
+
 
 class SpiralGPUAdam(torch.optim.Optimizer):
 
@@ -50,13 +52,18 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         self.adam_w_mode = 1 if adam_w_mode else 0
         self.set_grad_none = set_grad_none
 
+        # For unscale in mixed precision
+        self.half_precision = get_args().fp16
+        self.inv_scale = 0
+        self.params_have_main_grad = True
+        self.step_event = None
+
         if multi_tensor_applier.available:
             import amp_C
             # Skip buffer
             self._dummy_overflow_buf = torch.cuda.IntTensor([0])
             self.multi_tensor_adam = amp_C.multi_tensor_adam
-            self.multi_tensor_adam_capturable = amp_C.multi_tensor_adam_capturable
-            self.multi_tensor_adam_capturable_master = amp_C.multi_tensor_adam_capturable_master
+            self.multi_tensor_scale = amp_C.multi_tensor_scale
         else:
             raise RuntimeError('SpiralGPUAdam requires cuda extensions')
 
@@ -67,6 +74,25 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     p.grad = None
         else:
             super(SpiralGPUAdam, self).zero_grad()
+
+    def _unscale_grads_and_check_inf(self):
+        fp32_grads = []
+        for group in self.param_groups:
+            for p in group['params']:
+                if self.params_have_main_grad and hasattr(p, 'main_grad'):
+                    if p.main_grad is not None:
+                        p.main_grad = p.main_grad.float()
+                        fp32_grads.append(p.main_grad.data)
+                else:
+                    if p.grad is not None:
+                        p.grad = p.grad.float()
+                        fp32_grads.append(p.grad.data)
+
+        found_inf = torch.cuda.FloatTensor([0.0])
+        inv_scale = torch.cuda.FloatTensor([self.inv_scale])
+        torch._amp_foreach_non_finite_check_and_unscale_(fp32_grads, found_inf, inv_scale)
+
+        return found_inf.item() > 0
 
     def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
         """Performs a single optimization step.
@@ -83,10 +109,16 @@ class SpiralGPUAdam(torch.optim.Optimizer):
         if closure is not None:
             loss = closure()
 
+        # Unscale fp32 grads and check for inf/nan
+        if self.half_precision:
+            self.found_inf = self._unscale_grads_and_check_inf()
+            if self.found_inf:
+                return loss
+
         for group in self.param_groups:
             if len(group['params']) == 0:
                 continue
-            device = group['params'][0].device
+            dtype = group['params'][0].dtype
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
 
@@ -98,14 +130,18 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                 group['step'] = 1
 
             # create lists for multi-tensor apply
-            g_16, p_16, m_16, v_16 = [], [], [], []
-            g_bf, p_bf, m_bf, v_bf = [], [], [], []
+            p_16 = []
             g_32, p_32, m_32, v_32 = [], [], [], []
 
             for p in group['params']:
-                if p.grad is None:
+                if self.params_have_main_grad and hasattr(p, 'main_grad'):
+                    grad = p.main_grad
+                else:
+                    grad = p.grad
+
+                if grad is None:
                     continue
-                if p.grad.data.is_sparse:
+                if grad.data.is_sparse:
                     raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
 
                 state = self.state[p]
@@ -115,52 +151,24 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     state['exp_avg'] = torch.zeros_like(p.data).float()
                     # Exponential moving average of squared gradient values
                     state['exp_avg_sq'] = torch.zeros_like(p.data).float()
+                    # Copy fp16 param to fp32 param
+                    if dtype == torch.float16 or dtype == torch.bfloat16:
+                        state['fp32_param'] = p.detach().clone().float()
+                    else:
+                        state['fp32_param'] = p
+                
+                state['fp32_grad'] = grad
+                grad = None
 
-                if p.dtype == torch.float16:
-                    g_16.append(p.grad.data)
+                if dtype == torch.float16 or dtype == torch.bfloat16:
                     p_16.append(p.data)
-                    m_16.append(state['exp_avg'])
-                    v_16.append(state['exp_avg_sq'])
-                elif p.dtype == torch.bfloat16:
-                    g_bf.append(p.grad)
-                    p_bf.append(p)
-                    m_bf.append(state['exp_avg'])
-                    v_bf.append(state['exp_avg_sq'])
-                elif p.dtype == torch.float32:
-                    g_32.append(p.grad.data)
-                    p_32.append(p.data)
-                    m_32.append(state['exp_avg'])
-                    v_32.append(state['exp_avg_sq'])
-                else:
-                    raise RuntimeError('SpiralGPUAdam only support fp16 and fp32.')
 
-            if len(g_16) > 0:
-                multi_tensor_applier(self.multi_tensor_adam,
-                        self._dummy_overflow_buf,
-                        [g_16, p_16, m_16, v_16],
-                        group['lr'],
-                        beta1,
-                        beta2,
-                        group['eps'],
-                        group['step'],
-                        self.adam_w_mode,
-                        bias_correction,
-                        group['weight_decay'])
+                g_32.append(state['fp32_grad'].data)
+                p_32.append(state['fp32_param'].data)
+                m_32.append(state['exp_avg'])
+                v_32.append(state['exp_avg_sq'])
 
-            if len(g_bf) > 0:
-                multi_tensor_applier(
-                        self.multi_tensor_adam,
-                        self._dummy_overflow_buf,
-                        [g_bf, p_bf, m_bf, v_bf],
-                        group['lr'],
-                        beta1,
-                        beta2,
-                        group['eps'],
-                        group['step'],
-                        self.adam_w_mode,
-                        bias_correction,
-                        group['weight_decay'])
-
+            # Parameter update
             if len(g_32) > 0:
                 multi_tensor_applier(self.multi_tensor_adam,
                         self._dummy_overflow_buf,
@@ -174,73 +182,48 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                         bias_correction,
                         group['weight_decay'])
 
+            # Copy fp32 params to fp16 params
+            if dtype == torch.float16 or dtype == torch.bfloat16:
+                # Scaling with factor `1.0` is equivalent to copy.
+                multi_tensor_applier(self.multi_tensor_scale,
+                                     self._dummy_overflow_buf,
+                                     [p_32, p_16],
+                                     1.0)
+
+        self.step_event = torch.cuda.Event()
+        self.step_event.record()
         return loss
 
     def rollback(self):
         if not self.adam_w_mode:
             raise RuntimeError("SpiralGPUAdam only supports rollback for adam_w_mode.")
-        loss = None
+
+        # if found_inf is True, skip rollback
+        if self.half_precision and self.found_inf:
+            return
 
         for group in self.param_groups:
             if len(group['params']) == 0:
                 continue
-
+            dtype = group['params'][0].dtype
             bias_correction = 1 if group['bias_correction'] else 0
             beta1, beta2 = group['betas']
 
             # create lists for multi-tensor apply
-            g_16, p_16, m_16, v_16 = [], [], [], []
-            g_bf, p_bf, m_bf, v_bf = [], [], [], []
+            p_16 = []
             g_32, p_32, m_32, v_32 = [], [], [], []
 
             for p in group['params']:
-                if p.grad is None:
-                    continue
-                if p.grad.data.is_sparse:
-                    raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
-
                 state = self.state[p]
                 assert len(state) != 0, "Rollback should be call after run optimizer.step"
 
-                if p.dtype == torch.float16:
-                    g_16.append(p.grad.data)
+                if dtype == torch.float16 or dtype == torch.bfloat16:
                     p_16.append(p.data)
-                    m_16.append(state['exp_avg'])
-                    v_16.append(state['exp_avg_sq'])
-                elif p.dtype == torch.bfloat16:
-                    g_bf.append(p.grad)
-                    p_bf.append(p)
-                    m_bf.append(state['exp_avg'])
-                    v_bf.append(state['exp_avg_sq'])
-                elif p.dtype == torch.float32:
-                    g_32.append(p.grad.data)
-                    p_32.append(p.data)
-                    m_32.append(state['exp_avg'])
-                    v_32.append(state['exp_avg_sq'])
-                else:
-                    raise RuntimeError('SpiralGPUAdam only support fp16 and fp32.')
 
-            if len(g_16) > 0:
-                multi_tensor_rollback_adamw(
-                    g_16, p_16, m_16, v_16,
-                    group['lr'],
-                    beta1,
-                    beta2,
-                    group['eps'],
-                    group['step'],
-                    bias_correction,
-                    group['weight_decay'])
-
-            if len(g_bf) > 0:
-                multi_tensor_rollback_adamw(
-                    g_bf, p_bf, m_bf, v_bf,
-                    group['lr'],
-                    beta1,
-                    beta2,
-                    group['eps'],
-                    group['step'],
-                    bias_correction,
-                    group['weight_decay'])
+                g_32.append(state['fp32_grad'].data)
+                p_32.append(state['fp32_param'].data)
+                m_32.append(state['exp_avg'])
+                v_32.append(state['exp_avg_sq'])
 
             if len(g_32) > 0:
                 multi_tensor_rollback_adamw(
@@ -254,7 +237,21 @@ class SpiralGPUAdam(torch.optim.Optimizer):
                     group['weight_decay'])
             group['step'] -= 1
 
-        return loss
+            # Copy fp32 params to fp16 params
+            if dtype == torch.float16 or dtype == torch.bfloat16:
+                # Scaling with factor `1.0` is equivalent to copy.
+                multi_tensor_applier(self.multi_tensor_scale,
+                                     self._dummy_overflow_buf,
+                                     [p_32, p_16],
+                                     1.0)
+
+    def sync(self, found_inf=None):
+        if self.step_event is not None:
+            self.step_event.synchronize()
+            self.step_event = None
+
+        if found_inf is not None:
+            found_inf.fill_(1.0 if self.found_inf else 0.0)
 
 
 def multi_tensor_rollback_adamw(
