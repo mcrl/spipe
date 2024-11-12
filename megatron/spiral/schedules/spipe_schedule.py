@@ -188,27 +188,29 @@ def spipe_schedule(
         prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
 
     # pre-pipeline non-compute timesteps
-    # NOTE fwd_pre_pipeline_init_recvs **MUST PRECEDE** pre-pipeline comm_ckpt to avoid deadlock
-    #   e.g., rank 0: a) comm_actv (isend) -> b) comm_ckpt (isend)
-    #         rank 1: b) pre-pipeline comm_ckpt (irecv) -> a) comm_actv (irecv)
-    # Above pattern deadlocks as a)s and b)s requires synchronization, respectively.
-    # Another solution can be to move fwd_pre_pipeline_init_recvs logic into fwd_init_recvs and reorder to
-    # comm_ckpt >> comm_actv/_actv_grad pattern. However, this stall activation sdrvs which are the
-    # critical path for the pipeline. So, we choose to keep comm_actv/_actv_grad >> comm_ckpt pattern and
-    # use current form.
-
-    # set the first input tensor of pprank != 0 ranks
-    fwd_pre_pipeline_init_recvs(
-        recvs,
-        dtype,
-        tensor_shape,
-        overlap_p2p_comm=overlap_p2p_comm,
-        batch_p2p_comm=batch_p2p_comm,
-        timers=timers,
-    )
-    # must succeed `fwd_pre_pipeline_init_recvs` to avoid deadlock
     __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
-    for _ in range(__num_pre_pipeline_non_compute_ts):
+    for ppnct in range(__num_pre_pipeline_non_compute_ts):
+        if ppnct == __num_pre_pipeline_non_compute_ts - 1:
+            # NOTE In the last non_compute timestep, fwd_pre_pipeline_init_recvs **MUST PRECEDE** pre-pipeline
+            # comm_ckpt to avoid deadlock.
+            #   e.g., rank 0: a) comm_actv (isend) -> b) comm_ckpt (isend)
+            #         rank 1: b) pre-pipeline comm_ckpt (irecv) -> a) comm_actv (irecv)
+            # Above pattern deadlocks as a)s and b)s requires synchronization, respectively.
+            # Another solution can be to move fwd_pre_pipeline_init_recvs logic into fwd_init_recvs and reorder to
+            # comm_ckpt >> comm_actv/_actv_grad pattern. However, this stall activation sdrvs which are the
+            # critical path for the pipeline. So, we choose to keep comm_actv/_actv_grad >> comm_ckpt pattern and
+            # use current form.
+            # NOTE Moving this out of current for loop, or merging with fwd_init_recvs in the fwd for loop will
+            # definitely lead to deadlock.
+            fwd_pre_pipeline_init_recvs(
+                recvs,
+                dtype,
+                tensor_shape,
+                overlap_p2p_comm=overlap_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
+                timers=timers,
+            )
+        # endif
         if not forward_only:
             comm_ckpt(
                 next(ckpt_send_recv_schedule),
