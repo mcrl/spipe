@@ -5,19 +5,23 @@ from megatron.optimizer.optimizer import MixedPrecisionOptimizer, Float16Optimiz
 from megatron.optimizer.optimizer import _zero_grad_group_helper
 from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
 from megatron.spiral.utils import is_spiral_param
+from megatron.spiral.debug import spiral_report_memory
 
 
 class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
 
     @torch.no_grad()
     def step(self, args, timers):
+        spiral_report_memory(f"before step")
         self.optimizer.step()
+        spiral_report_memory(f"after step")
 
     def sync(self, found_inf=None):
         self.optimizer.sync(found_inf)
 
     @torch.no_grad()
     def rollback(self, sync=False):
+        spiral_report_memory(f"before rollback")
         if type(self.optimizer) == SpiralCPUAdam:
             self.optimizer.rollback(sync)
         else:
@@ -32,6 +36,7 @@ class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
                 for p in group['params']:
                     if is_spiral_param(p):
                         p.offload(non_blocking=not sync)
+        spiral_report_memory(f"after rollback")
 
     def zero_grad(self, set_to_none=True):
         for group in self.optimizer.param_groups:
@@ -47,7 +52,9 @@ class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
 class SpiralFP32Optimizer(FP32Optimizer):
     @torch.no_grad()
     def step(self, args, timers):
+        spiral_report_memory(f"before step")
         self.optimizer.step()
+        spiral_report_memory(f"after step")
 
     def sync(self, found_inf=None):
         self.optimizer.sync()
