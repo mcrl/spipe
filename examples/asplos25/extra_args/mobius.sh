@@ -25,3 +25,7 @@ fi
 if [ ${SPIRAL_HETERO_OPTIMIZER} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-heterogeneous-optimizer"
 fi
+
+if [ ${SPIRAL_OFFLOAD_OPTIMIZER} == "YES" ]; then
+    EXTRA_ARGS+=" --spiral-offload-optimizer"
+fi

@@ -81,10 +81,14 @@ SPIRAL_SHMEM_HEADER_SIZE=$(( 1 * 2**30 ))
 SPIRAL_DEBUG_BACKEND=NO
 
 SPIRAL_HETERO_OPTIMIZER=NO
+SPIRAL_OFFLOAD_OPTIMIZER=NO
 if [[ "$OPTIMIZER" == *"stage"* ]]; then
     SPIRAL_STAGE_OPTIMIZER=YES
     if [[ "$OPTIMIZER" == *"hetero"* ]]; then
         SPIRAL_HETERO_OPTIMIZER=YES
+    fi
+    if [[ "$OPTIMIZER" == *"offload"* ]]; then
+        SPIRAL_OFFLOAD_OPTIMIZER=YES
     fi
 else
     SPIRAL_STAGE_OPTIMIZER=NO
