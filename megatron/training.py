@@ -433,8 +433,8 @@ def get_model(model_provider_func, model_type=ModelType.encoder_or_decoder, wrap
                 ]
                 this_model = SpiralPhaseList(
                     map(lambda f: f(), __stage_models),
-                    save_input_tensors=True,
-                    save_output_tensors=not mpu.is_spiral_remap() and not args.spiral_recompute_activations,
+                    save_input_tensors=not args.spiral_1f1b,
+                    save_output_tensors=args.spiral_mobius and not args.spiral_recompute_activations,
                 )
                 this_model.model_type = model_type
                 model.append(this_model)
