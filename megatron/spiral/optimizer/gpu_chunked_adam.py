@@ -125,10 +125,10 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
     @nvtx.annotate("free_state", color="purple")
     def free_state(self, idx):
         gpu_state = self.gpu_state[idx]
-        gpu_state['exp_avg'] = None
-        gpu_state['exp_avg_sq'] = None
+        gpu_state['exp_avg'] = torch.empty(0, dtype=torch.float32, device=self.local_device)
+        gpu_state['exp_avg_sq'] = torch.empty(0, dtype=torch.float32, device=self.local_device)
         if self.half_precision:
-            gpu_state['fp32_param'] = None
+            gpu_state['fp32_param'] = torch.empty(0, dtype=torch.float32, device=self.local_device)
 
     @nvtx.annotate("fetch_state", color="green")
     def fetch_state(self, idx):
@@ -186,7 +186,6 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
 
         prefetch_events = []
         compute_events = []
-        free_events = []
         chunked_idx = -1
 
         for group in self.param_groups:
@@ -273,27 +272,15 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
                     event.record()
                     compute_events.append(event)
 
-                # Offload optimizer state
+                # Offload and free optimizer state
                 with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
                     if len(compute_events) > 0:
                             compute_events.pop(0).wait()
                     self.offload_state(chunked_idx)
-
-                    event = torch.cuda.Event()
-                    event.record()
-                    free_events.append(event)
+                    self.free_state(chunked_idx)
 
         self.step_event = torch.cuda.Event()
         self.step_event.record()
-
-        # Free optimizer state
-        chunked_idx = -1
-        for group in self.param_groups:
-            for i in range(group['chunked_param_num']):
-                chunked_idx += 1
-                if len(free_events) > 0:
-                    free_events.pop(0).synchronize()
-                self.free_state(chunked_idx)
 
         return loss
 
@@ -307,7 +294,6 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
 
         prefetch_events = []
         compute_events = []
-        free_events = []
         chunked_idx = -1
 
         for group in self.param_groups:
@@ -373,26 +359,14 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
                     event.record()
                     compute_events.append(event)
                 
-                # Offload optimizer state
+                # Offload and free optimizer state
                 with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
                     if len(compute_events) > 0:
                             compute_events.pop(0).wait()
                     self.offload_state(chunked_idx)
-
-                    event = torch.cuda.Event()
-                    event.record()
-                    free_events.append(event)
+                    self.free_state(chunked_idx)
 
             group['step'] -= 1
-
-        # Free optimizer state
-        chunked_idx = -1
-        for group in self.param_groups:
-            for i in range(group['chunked_param_num']):
-                chunked_idx += 1
-                if len(free_events) > 0:
-                    free_events.pop(0).synchronize()
-                self.free_state(chunked_idx)
 
     def sync(self, found_inf=None):
         if self.step_event is not None:
