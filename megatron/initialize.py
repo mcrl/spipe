@@ -20,7 +20,7 @@ from megatron.checkpointing import load_args_from_checkpoint
 from megatron.global_vars import set_global_variables
 from megatron.model.transformer import bias_dropout_add_fused_train
 from megatron.model.fused_bias_gelu import bias_gelu
-from megatron.spiral import SpiralBackend, get_thunder_group
+from megatron.spiral import SpiralBackend, get_thunder_group, set_node_cpu_affinity
 import megatron.spiral.build_state as sbs
 from megatron.spiral.debug import spiral_print
 import spiral_helper
@@ -398,6 +398,7 @@ def _spiral_backend_init():
             2 if (args.fp16 or args.bf16) else 4,
         )
         _set_comm_info()
+        set_node_cpu_affinity()
 
 
 def _spiral_build_state_init():

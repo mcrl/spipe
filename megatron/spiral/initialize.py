@@ -2,8 +2,12 @@ from typing import Optional, Union, Tuple
 from collections import deque
 from dataclasses import dataclass
 import atexit
+import os
+import psutil
 
 import torch
+
+from megatron.core import mpu
 
 import spiral_helper
 
@@ -53,6 +57,28 @@ def get_thunder_cuda_manager():
     global SPIRAL_BACKEND
     assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
     return SPIRAL_BACKEND.thunder_cuda_manager
+
+
+def get_node_cpu_affinity():
+    global SPIRAL_BACKEND
+    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
+    return SPIRAL_BACKEND.node_cpu_affinity
+
+
+def set_node_cpu_affinity():
+    """Share CPU affinity only with ranks on the same node."""
+    node_group = torch.distributed.new_group(mpu.get_spiral_local_ranks())
+    os.sched_setaffinity(0, {psutil.Process().cpu_num()}) # set current process affinity to current cpu
+    affinity = os.sched_getaffinity(0)
+    node_affinity = torch.tensor(
+        [1 if i in affinity else 0 for i in range(os.cpu_count())],
+        dtype=torch.int32,
+        device="cuda",
+    )
+    torch.distributed.all_reduce(node_affinity, op=torch.distributed.ReduceOp.SUM, group=node_group)
+    assert torch.sum(node_affinity) == torch.distributed.get_world_size(group=node_group)
+    assert torch.max(node_affinity) == 1, "CPU affinity conflict between ranks on the same node"
+    SPIRAL_BACKEND.node_cpu_affinity = node_affinity.tolist()
 
 
 @dataclass(frozen=True)
