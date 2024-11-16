@@ -216,6 +216,10 @@ def validate_args(args, defaults={}):
         if args.skip_train_iter_zero_timing:
             # Set after training log skips iter zero timing
             args.skipped_train_iter_zero_timing = False
+        if args.no_refresh_btw_log_intervals:
+            args.total_advanced_iters = 0
+            args.total_skipped_iters = 0
+            args.total_nan_iters = 0
 
     # Sample-based training.
     if args.train_samples:
@@ -720,7 +724,8 @@ def _add_logging_args(parser):
                        help='Enable world size logging to tensorboard.')
     group.add_argument('--skip-train-iter-zero-timing', action='store_true',
                        help='Skip logging timing at train iteration zero.')
-
+    group.add_argument('--no-refresh-btw-log-intervals', action='store_true',
+                       help='Disable refreshing stats between log intervals.')
     return parser
 
 

@@ -35,7 +35,9 @@ MIXED_PRECISION_ARGS="
     --fp16
 "
 
-LOGGING_ARGS=""
+LOGGING_ARGS="
+    --no-refresh-btw-log-intervals
+"
 
 if [ ${SKIP_TRAIN_ITER_ZERO_TIMING} == "YES" ]; then
     LOGGING_ARGS+=" --skip-train-iter-zero-timing"
