@@ -24,7 +24,10 @@ def _batched_p2p_ops(
     send_ranks: Optional[List[int]],
     recv_ranks: Optional[List[int]],
     group: torch.distributed.ProcessGroup,
+    omit_send_reqs: bool = False,
 ):
+    assert omit_send_reqs is False, "Batch p2p does not support omitting send reqs"
+
     ops = []
     if tensor_sends is not None:
         assert send_ranks is not None and len(tensor_sends) == len(send_ranks)
@@ -54,14 +57,18 @@ def _p2p_ops(
     send_ranks: Optional[List[int]],
     recv_ranks: Optional[List[int]],
     group: torch.distributed.ProcessGroup,
+    omit_send_reqs: bool = False,
 ):
+    # Send reqs can be omitted to avoid waiting on them
+
     reqs = []
     if mpu.get_pipeline_model_parallel_rank() % 2 == 0:
         if tensor_sends is not None:
             assert send_ranks is not None and len(tensor_sends) == len(send_ranks)
             for tensor, rank in zip(tensor_sends, send_ranks):
                 send_req = torch.distributed.isend(tensor, rank, group=group)
-                reqs.append(send_req)
+                if not omit_send_reqs:
+                    reqs.append(send_req)
         if tensor_recvs is not None:
             assert recv_ranks is not None and len(tensor_recvs) == len(recv_ranks)
             for tensor, rank in zip(tensor_recvs, recv_ranks):
@@ -77,7 +84,8 @@ def _p2p_ops(
             assert send_ranks is not None and len(tensor_sends) == len(send_ranks)
             for tensor, rank in zip(tensor_sends, send_ranks):
                 send_req = torch.distributed.isend(tensor, rank, group=group)
-                reqs.append(send_req)
+                if not omit_send_reqs:
+                    reqs.append(send_req)
     return reqs
 
 
@@ -93,6 +101,7 @@ def _communicate(
     dtype: Optional[torch.dtype],
     variable_seq_lengths: bool = False,
     use_ring_exchange_p2p: bool = False,
+    omit_send_reqs: bool = False,
 ) -> Tuple[Optional[List[torch.Tensor]], Optional[List[Work]]]:
 
     # Create placeholder for receive if needed
@@ -151,6 +160,7 @@ def _communicate(
         send_ranks=send_ranks,
         recv_ranks=recv_ranks,
         group=group if group is not None else mpu.get_pipeline_model_parallel_group(),
+        omit_send_reqs=omit_send_reqs,
     )
 
     if wait_on_reqs and len(reqs) > 0:
@@ -173,6 +183,7 @@ def send_next_recv_prev(
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = True,
     timers: Callable = None,
+    omit_send_reqs: bool = False,
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
     if _DEBUG_COMM:
         spiral_print("snrp")
@@ -187,6 +198,7 @@ def send_next_recv_prev(
         wait_on_reqs=not overlap_p2p_comm,
         batch_p2p_comm=batch_p2p_comm,
         dtype=dtype,
+        omit_send_reqs=omit_send_reqs,
     )
     if timers is not None:
         timers("send_next_recv_prev").stop()
@@ -201,6 +213,7 @@ def send_prev_recv_next(
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = True,
     timers: Callable = None,
+    omit_send_reqs: bool = False,
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
     if _DEBUG_COMM:
         spiral_print("sprn")
@@ -215,6 +228,7 @@ def send_prev_recv_next(
         wait_on_reqs=not overlap_p2p_comm,
         batch_p2p_comm=batch_p2p_comm,
         dtype=dtype,
+        omit_send_reqs=omit_send_reqs,
     )
     if timers is not None:
         timers("send_next_recv_prev").stop()
@@ -227,6 +241,7 @@ def send_next(
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = True,
     timers: Callable = None,
+    omit_send_reqs: bool = False,
 ) -> Optional[Work]:
     if _DEBUG_COMM:
         spiral_print("sn")
@@ -241,6 +256,7 @@ def send_next(
         wait_on_reqs=not overlap_p2p_comm,
         batch_p2p_comm=batch_p2p_comm,
         dtype=None,
+        omit_send_reqs=omit_send_reqs,
     )
     if timers is not None:
         timers("send_next").stop()
@@ -280,6 +296,7 @@ def send_prev(
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = True,
     timers: Callable = None,
+    omit_send_reqs: bool = False,
 ) -> Optional[Work]:
     if _DEBUG_COMM:
         spiral_print("sp")
@@ -294,6 +311,7 @@ def send_prev(
         wait_on_reqs=not overlap_p2p_comm,
         batch_p2p_comm=batch_p2p_comm,
         dtype=None,
+        omit_send_reqs=omit_send_reqs,
     )
     if timers is not None:
         timers("send_next").stop()
