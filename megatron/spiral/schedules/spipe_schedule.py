@@ -31,7 +31,7 @@ Shape = Union[List[int], torch.Size]
 
 # Constants
 _DEBUG_SCHEDULE = True
-
+_USE_BATCH_P2P_COMM = False
 
 def spipe_schedule(
     *,
@@ -207,7 +207,7 @@ def spipe_schedule(
                 dtype,
                 tensor_shape,
                 overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=batch_p2p_comm,
+                batch_p2p_comm=_USE_BATCH_P2P_COMM,
                 timers=timers,
             )
         # endif
@@ -338,7 +338,7 @@ def spipe_schedule(
                 tensor_shape,
                 dtype,
                 overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=batch_p2p_comm,
+                batch_p2p_comm=_USE_BATCH_P2P_COMM,
                 timers=timers,
                 omit_send_reqs=not batch_p2p_comm,
             )
@@ -519,7 +519,7 @@ def spipe_schedule(
                 tensor_shape,
                 dtype,
                 overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=batch_p2p_comm,
+                batch_p2p_comm=_USE_BATCH_P2P_COMM,
                 timers=timers,
                 omit_send_reqs=not batch_p2p_comm,
             )
