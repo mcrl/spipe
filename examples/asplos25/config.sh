@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:o:x:y:" opt
+while getopts "j:n:s:t:l:f:b:m:g:o:v:x:y:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -13,6 +13,7 @@ do
         m ) MBS="$OPTARG" ;;
         g ) GBS="$OPTARG" ;;
         o ) OPTIMIZER="$OPTARG" ;;
+        v ) ACTV_P2P="$OPTARG" ;;
         x ) CROSS_MAPPING="$OPTARG" ;;
         y ) SYNC_CKPT_COMMUNICATION="$OPTARG" ;;
     esac
@@ -104,6 +105,12 @@ if [[ "$SYNC_CKPT_COMMUNICATION" == "1" ]]; then
     SPIRAL_SYNC_CKPT_COMMUNICATION=YES
 else
     SPIRAL_SYNC_CKPT_COMMUNICATION=NO
+fi
+
+if [[ "$ACTV_P2P" == "1" ]]; then
+    SPIRAL_P2P=YES
+else
+    SPIRAL_P2P=NO
 fi
 
 # config for interleaving
