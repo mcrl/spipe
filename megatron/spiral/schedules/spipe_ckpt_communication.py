@@ -2,7 +2,7 @@ import nvtx
 from typing import List, Union
 
 import torch
-import torch.distributed
+import torch.distributed as dist
 
 import megatron.spiral.build_state as sbs
 from megatron.core import mpu
@@ -17,6 +17,7 @@ Shape = Union[List[int], torch.Size]
 
 # Constants
 _DEBUG_CKPT_COMMUNICATION = True
+_USE_BATCH_P2P = True
 
 
 # Handle for self send/recv
@@ -41,6 +42,8 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
         spiral_print(f"comm: {schedule}")
 
     recvs, reqs = [], []
+    batch_ops = []
+    batch_ops_reqs_idx = []
 
     for idx, op in enumerate(schedule):
 
@@ -93,16 +96,28 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                     if mpu.is_spiral_cross_mapping()
                     else op.rank
                 )
-                reqs.append(
-                    # torch.distributed.irecv(
-                    #     et, src=src, group=mpu.get_spiral_input_tensor_ckpt_group()
-                    # )
-
-                    # TODO: Junyeol temp code
-                    torch.distributed.irecv(
-                        et, src=src, group=mpu.get_spiral_input_tensor_ckpt_groups(src)
+                if _USE_BATCH_P2P:
+                    batch_ops.append(
+                        dist.P2POp(
+                            dist.irecv,
+                            et,
+                            src,
+                            group=mpu.get_spiral_input_tensor_ckpt_group(),
+                        )
                     )
-                )
+                    reqs.append(NOP_Wait) # dummy
+                    batch_ops_reqs_idx.append(idx)
+                else:
+                    reqs.append(
+                        # dist.irecv(
+                        #     et, src=src, group=mpu.get_spiral_input_tensor_ckpt_group()
+                        # )
+
+                        # TODO: Junyeol temp code
+                        dist.irecv(
+                            et, src=src, group=mpu.get_spiral_input_tensor_ckpt_groups(src)
+                        )
+                    )
                 recvs.append(et)
 
         elif op.comm_type == CkptSendRecvType.SEND:
@@ -131,16 +146,28 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                     if mpu.is_spiral_cross_mapping()
                     else op.rank
                 )
-                reqs.append(
-                    # torch.distributed.isend(
-                    #     input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_group()
-                    # )
-
-                    # TODO: Junyeol temp code
-                    torch.distributed.isend(
-                        input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst)
+                if _USE_BATCH_P2P:
+                    batch_ops.append(
+                        dist.P2POp(
+                            dist.isend,
+                            input_ckpt_,
+                            dst,
+                            group=mpu.get_spiral_input_tensor_ckpt_group(),
+                        )
                     )
-                )
+                    reqs.append(NOP_Wait) # dummy
+                    batch_ops_reqs_idx.append(idx)
+                else:
+                    reqs.append(
+                        # dist.isend(
+                        #     input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_group()
+                        # )
+
+                        # TODO: Junyeol temp code
+                        dist.isend(
+                            input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst)
+                        )
+                    )
 
         elif op.comm_type == CkptSendRecvType.SDRV:
             sd_phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_ids[0])
@@ -161,14 +188,20 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
             )
             et = _get_empty_tensor(tensor_shape, dtype)
             src = dst
-            sd = torch.distributed.P2POp(torch.distributed.isend, input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst))
-            rv = torch.distributed.P2POp(torch.distributed.irecv, et, src, group=mpu.get_spiral_input_tensor_ckpt_groups(src))
-            _req = torch.distributed.batch_isend_irecv([sd, rv])
+            sd = dist.P2POp(dist.isend, input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst))
+            rv = dist.P2POp(dist.irecv, et, src, group=mpu.get_spiral_input_tensor_ckpt_groups(src))
+            _req = dist.batch_isend_irecv([sd, rv])
             reqs.append(_req)
             recvs.append(et)
 
         else:
             raise RuntimeError(f"Invalid comm type {op.comm_type}")
+
+    if _USE_BATCH_P2P:
+        if len(batch_ops) > 0:
+            [batch_reqs] = dist.batch_isend_irecv(batch_ops)
+            for _idx in batch_ops_reqs_idx:
+                reqs[_idx] = batch_reqs # NOTE: this is quite shitty...
 
     if recvs and len(recvs) > 0:
         # zip only recv with corresponding req from same op => append to ckpt_recvs
