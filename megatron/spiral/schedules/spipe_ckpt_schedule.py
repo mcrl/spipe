@@ -10,6 +10,7 @@ import megatron.spiral.build_state as sbs
 class CkptSendRecvType(Enum):
     SEND = "send"
     RECV = "recv"
+    SDRV = "sdrv"
 
 
 @dataclass
@@ -17,6 +18,7 @@ class CkptSendRecvOp:
     comm_type: CkptSendRecvType
     phase_id: int
     rank: int
+    phase_ids: List[int] = None
 
 
 class CkptSendRecvScheduleMeta(type):
@@ -55,7 +57,7 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
 
     """
 
-    def __init__(self, num_microbatches = None, use_sync = False):
+    def __init__(self, num_microbatches = None, use_sync = False, use_batch_p2p = False):
         assert (
             num_microbatches >= mpu.get_pipeline_model_parallel_world_size()
         ), "CkptSendRecvSchedule requires num_microbatches >= pipeline model parallel world size"
@@ -85,6 +87,8 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
             self._set_recv_schedule_async()
             self._optimize_schedule()
             self._resolve_p2p_hang()
+        # if use_batch_p2p:
+        #     self._group_batch_ops()
 
     def _set_recv_schedule_sync(self):
         for pp_rank in range(mpu.get_pipeline_model_parallel_world_size()):
@@ -217,6 +221,29 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
             _merged.sort(key=lambda tup: tup[0].phase_id)
             for op, pp_rank in _merged:
                 self.global_schedule[pp_rank][ts].append(op)
+
+    def _group_batch_ops(self):
+        # TODO
+        self.global_schedule[0][2] = [
+            CkptSendRecvOp(CkptSendRecvType.SEND, 0, 3),
+            CkptSendRecvOp(CkptSendRecvType.SDRV, -1, 2, [1,7]),
+            CkptSendRecvOp(CkptSendRecvType.SDRV, -1, 1, [2,3]),
+        ]
+        self.global_schedule[1][2] = [
+            CkptSendRecvOp(CkptSendRecvType.SDRV, -1, 0, [3,2]),
+            CkptSendRecvOp(CkptSendRecvType.SEND, 4, 3),
+            CkptSendRecvOp(CkptSendRecvType.SDRV, -1, 2, [5,6]),
+        ]
+        self.global_schedule[2][2] = [
+            CkptSendRecvOp(CkptSendRecvType.SDRV, -1, 0, [7,1]),
+            CkptSendRecvOp(CkptSendRecvType.SDRV, -1, 1, [6,5]),
+            CkptSendRecvOp(CkptSendRecvType.SEND, 8, 3),
+        ]
+        self.global_schedule[3][2] = [
+            CkptSendRecvOp(CkptSendRecvType.RECV, 0, 0),
+            CkptSendRecvOp(CkptSendRecvType.RECV, 4, 1),
+            CkptSendRecvOp(CkptSendRecvType.RECV, 8, 2),
+        ]
 
     def __str__(self) -> str:
         _str = ""

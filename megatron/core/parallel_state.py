@@ -27,6 +27,8 @@ _SPIRAL_POSITION_EMBEDDING_GROUP = None
 _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
 # Input tensor checkpoint group for SpiralPipe
 _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
+_SPIRAL_INPUT_TENSOR_CKPT_GROUPS = {}
+
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = None
 _DATA_PARALLEL_GROUP_GLOO = None
@@ -290,7 +292,9 @@ def initialize_model_parallel(
     global _SPIRAL_INPUT_TENSOR_CKPT_GROUP
     assert _SPIRAL_INPUT_TENSOR_CKPT_GROUP is None, \
         'spiral inpute tensor checkpoint group is already initialized'
-
+    global _SPIRAL_INPUT_TENSOR_CKPT_GROUPS
+    # assert _SPIRAL_INPUT_TENSOR_CKPT_GROUPS is None, \
+    #     'spiral inpute tensor checkpoint group is already initialized'
     for i in range(num_pipeline_model_parallel_groups):
         ranks = range(i, world_size, num_pipeline_model_parallel_groups)
         group = torch.distributed.new_group(ranks)
@@ -376,6 +380,19 @@ def initialize_model_parallel(
                 # in order to use batch_isend_recv
                 # https://pytorch.org/docs/2.0/distributed.html#:~:text=Note%20that%20when,group%20are%20allowed.
                 torch.distributed.barrier(group=group)
+
+            ### TODO: Junyeol temp code
+            from itertools import combinations
+            for comb in combinations(ranks, 2):
+                group = torch.distributed.new_group(comb)
+                if rank in comb:
+                    _SPIRAL_INPUT_TENSOR_CKPT_GROUPS[f"{comb[0]}:{comb[1]}"] = group
+                    _SPIRAL_INPUT_TENSOR_CKPT_GROUPS[f"{comb[1]}:{comb[0]}"] = group
+                    # NOTE (SpiralPipe)
+                    # Perform an entire-rank-participating collective call to init the group
+                    # in order to use batch_isend_recv
+                    # https://pytorch.org/docs/2.0/distributed.html#:~:text=Note%20that%20when,group%20are%20allowed.
+                    torch.distributed.barrier(group=group)
 
 
     # Build the FP8 groups.
@@ -503,6 +520,10 @@ def get_spiral_input_tensor_ckpt_group():
     assert _SPIRAL_INPUT_TENSOR_CKPT_GROUP is not None, \
         'SpiralPipe input tensor checkpoint group is not initialized'
     return _SPIRAL_INPUT_TENSOR_CKPT_GROUP
+
+
+def get_spiral_input_tensor_ckpt_groups(other_rank):
+    return _SPIRAL_INPUT_TENSOR_CKPT_GROUPS[f"{get_pipeline_model_parallel_rank()}:{other_rank}"]
 
 
 def get_amax_reduction_group():
@@ -1000,6 +1021,9 @@ def destroy_model_parallel():
 
     global _SPIRAL_INPUT_TENSOR_CKPT_GROUP
     _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
+
+    global _SPIRAL_INPUT_TENSOR_CKPT_GROUP_SECOND
+    _SPIRAL_INPUT_TENSOR_CKPT_GROUP_SECOND = None
 
     global _SPIRAL_INTRA_RANK
     _SPIRAL_INTRA_RANK = None

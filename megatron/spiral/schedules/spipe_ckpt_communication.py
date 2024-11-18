@@ -2,12 +2,14 @@ import nvtx
 from typing import List, Union
 
 import torch
+import torch.distributed
 
 import megatron.spiral.build_state as sbs
 from megatron.core import mpu
 from megatron.spiral.build_state import bwd_phase2local_stage_phase
 from megatron.spiral.debug import spiral_print
 from .spipe_ckpt_schedule import CkptSendRecvType
+from megatron.spiral.initialize import get_thunder_cuda_manager
 
 
 # Types
@@ -42,10 +44,11 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
 
     for idx, op in enumerate(schedule):
 
-        phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_id)
-        local_stage_id, local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_id)
+        if not op.comm_type == CkptSendRecvType.SDRV:
+            phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_id)
+            local_stage_id, local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_id)
 
-        _prefix = str(schedule[idx])
+            _prefix = str(schedule[idx])
 
         if op.comm_type == CkptSendRecvType.RECV:
             assert (
@@ -91,8 +94,13 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                     else op.rank
                 )
                 reqs.append(
+                    # torch.distributed.irecv(
+                    #     et, src=src, group=mpu.get_spiral_input_tensor_ckpt_group()
+                    # )
+
+                    # TODO: Junyeol temp code
                     torch.distributed.irecv(
-                        et, src=src, group=mpu.get_spiral_input_tensor_ckpt_group()
+                        et, src=src, group=mpu.get_spiral_input_tensor_ckpt_groups(src)
                     )
                 )
                 recvs.append(et)
@@ -124,10 +132,40 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                     else op.rank
                 )
                 reqs.append(
+                    # torch.distributed.isend(
+                    #     input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_group()
+                    # )
+
+                    # TODO: Junyeol temp code
                     torch.distributed.isend(
-                        input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_group()
+                        input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst)
                     )
                 )
+
+        elif op.comm_type == CkptSendRecvType.SDRV:
+            sd_phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_ids[0])
+            sd_local_stage_id, sd_local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_ids[0])
+
+            rv_phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_ids[1])
+            rv_local_stage_id, rv_local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_ids[1])
+
+            input_ckpt_ = (
+                model[sd_local_stage_id]
+                .module[sd_local_phase_id]
+                .spiral_input_tensors.popleft()
+            )
+            dst = (
+                mpu.translate_pp_rank_to_cm_rank(op.rank)
+                if mpu.is_spiral_cross_mapping()
+                else op.rank
+            )
+            et = _get_empty_tensor(tensor_shape, dtype)
+            src = dst
+            sd = torch.distributed.P2POp(torch.distributed.isend, input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst))
+            rv = torch.distributed.P2POp(torch.distributed.irecv, et, src, group=mpu.get_spiral_input_tensor_ckpt_groups(src))
+            _req = torch.distributed.batch_isend_irecv([sd, rv])
+            reqs.append(_req)
+            recvs.append(et)
 
         else:
             raise RuntimeError(f"Invalid comm type {op.comm_type}")
@@ -137,9 +175,12 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
         for recv, (req, op) in zip(
             recvs,
             filter(
-                lambda x: x[1].comm_type == CkptSendRecvType.RECV,
+                lambda x: x[1].comm_type == CkptSendRecvType.RECV or x[1].comm_type == CkptSendRecvType.SDRV,
                 zip(reqs, schedule),
             ),
         ):
-            bid, _ = bwd_phase2local_stage_phase(op.phase_id)
+            if op.comm_type == CkptSendRecvType.RECV:
+                bid, _ = bwd_phase2local_stage_phase(op.phase_id)
+            elif op.comm_type == CkptSendRecvType.SDRV:
+                bid, _ = bwd_phase2local_stage_phase(op.phase_ids[1])
             ckpt_recvs[bid].append((recv, [req]))
