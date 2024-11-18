@@ -108,9 +108,9 @@ else
 fi
 
 if [[ "$ACTV_P2P" == "1" ]]; then
-    SPIRAL_P2P=YES
+    SPIRAL_ACTV_P2P=YES
 else
-    SPIRAL_P2P=NO
+    SPIRAL_ACTV_P2P=NO
 fi
 
 # config for interleaving

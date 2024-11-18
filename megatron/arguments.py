@@ -1144,7 +1144,7 @@ def _add_distributed_args(parser):
     group.add_argument('--spiral-sync-ckpt-communication', action='store_true',
                         help='Disable SpiralPipe asynchronous checkpoint communication. Asynchronous '
                         'checkpoint communication typically improves performance by overlapping transmission')
-    group.add_argument('--spiral-p2p', action='store_true',
+    group.add_argument('--spiral-actv-p2p', action='store_true',
                         help='Enable SpiralPipe p2p activation communication')
 
     return parser
