@@ -148,13 +148,20 @@ def spipe_schedule(
     def _wait_reqs(reqs: List[Work]):
         if reqs is not None:
             for req in reqs:
-                req.wait()
+                if isinstance(req, list):
+                    for r in req:
+                        r.wait()
+                else:
+                    req.wait()
 
     # Init input ckpt send recv schedule
     ckpt_send_recv_schedule = None  # placeholder
     sync_ckpt_comm = get_args().spiral_sync_ckpt_communication
     if not forward_only:
-        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm)
+        # ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm)
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm, use_batch_p2p=True)
+        if mpu.get_pipeline_model_parallel_rank() == 0:
+            spiral_print(f"ckpt_send_recv_schedule: {ckpt_send_recv_schedule}")
 
     # Data structures for training
     forward_data_store = []
@@ -187,6 +194,9 @@ def spipe_schedule(
         if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
             raise RuntimeError("record_event failed")
         prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
+
+    # TODO: Junyeol temp code
+    ts = 0
 
     # pre-pipeline non-compute timesteps
     __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
@@ -229,7 +239,10 @@ def spipe_schedule(
                     ckpt_recvs,
                     tensor_shape,
                     dtype,
+                    ts,
                 )
+
+        ts += 1
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
@@ -398,9 +411,12 @@ def spipe_schedule(
                         ckpt_recvs,
                         tensor_shape,
                         dtype,
+                        ts,
                     )
 
             torch.cuda.nvtx.range_pop()
+
+            ts += 1
         # end fwd microbatches
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
@@ -614,9 +630,12 @@ def spipe_schedule(
                     ckpt_recvs,
                     tensor_shape,
                     dtype,
+                    ts,
                 )
 
             torch.cuda.nvtx.range_pop()
+
+            ts += 1
         # end bwd microbatches
 
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
@@ -716,7 +735,10 @@ def spipe_schedule(
                         ckpt_recvs,
                         tensor_shape,
                         dtype,
+                        ts,
                     )
+
+            ts += 1
 
     # cleanup schedule events
     if (

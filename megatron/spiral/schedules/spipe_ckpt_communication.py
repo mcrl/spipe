@@ -37,7 +37,7 @@ def _get_empty_tensor(tensor_shape: Shape, dtype: torch.dtype) -> torch.Tensor:
 
 
 @nvtx.annotate("comm_ckpt", color="darkgreen")
-def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dtype):
+def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dtype, ts: int):
     if _DEBUG_CKPT_COMMUNICATION:
         spiral_print(f"comm: {schedule}")
 
@@ -102,7 +102,8 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                             dist.irecv,
                             et,
                             src,
-                            group=mpu.get_spiral_input_tensor_ckpt_group(),
+                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
+                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
                     reqs.append(NOP_Wait) # dummy
@@ -152,7 +153,8 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                             dist.isend,
                             input_ckpt_,
                             dst,
-                            group=mpu.get_spiral_input_tensor_ckpt_group(),
+                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
+                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
                     reqs.append(NOP_Wait) # dummy

@@ -28,6 +28,7 @@ _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
 # Input tensor checkpoint group for SpiralPipe
 _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
 _SPIRAL_INPUT_TENSOR_CKPT_GROUPS = {}
+_SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS = []
 
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = None
@@ -295,6 +296,7 @@ def initialize_model_parallel(
     global _SPIRAL_INPUT_TENSOR_CKPT_GROUPS
     # assert _SPIRAL_INPUT_TENSOR_CKPT_GROUPS is None, \
     #     'spiral inpute tensor checkpoint group is already initialized'
+    global _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS
     for i in range(num_pipeline_model_parallel_groups):
         ranks = range(i, world_size, num_pipeline_model_parallel_groups)
         group = torch.distributed.new_group(ranks)
@@ -392,6 +394,13 @@ def initialize_model_parallel(
                     # Perform an entire-rank-participating collective call to init the group
                     # in order to use batch_isend_recv
                     # https://pytorch.org/docs/2.0/distributed.html#:~:text=Note%20that%20when,group%20are%20allowed.
+                    torch.distributed.barrier(group=group)
+
+            # TODO: Junyeol temp code
+            for _ in range(35):
+                group = torch.distributed.new_group(ranks)
+                if rank in ranks:
+                    _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS.append(group)
                     torch.distributed.barrier(group=group)
 
 
@@ -524,6 +533,10 @@ def get_spiral_input_tensor_ckpt_group():
 
 def get_spiral_input_tensor_ckpt_groups(other_rank):
     return _SPIRAL_INPUT_TENSOR_CKPT_GROUPS[f"{get_pipeline_model_parallel_rank()}:{other_rank}"]
+
+
+def get_spiral_input_tensor_ckpt_group_ts(ts):
+    return _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS[ts]
 
 
 def get_amax_reduction_group():
