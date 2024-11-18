@@ -122,7 +122,7 @@ def spipe_schedule(
             "Spiral is not supported with a different decoder sequence length."
         )
 
-    use_batch_p2p_comm = not get_args().spiral_p2p
+    use_batch_p2p_comm = not get_args().spiral_actv_p2p
 
     offload_grad_after_bwd_stage = get_args().spiral_overlap_offload_grad
     optimize_after_bwd_stage = offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer
