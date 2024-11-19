@@ -27,8 +27,19 @@ fi
 . $(dirname "${SCRIPT_PATH}")/extra_args/${JOB_TYPE}.sh
 
 # Remove Megatron lockfile
-if [ -n "$FUSED_KERNEL_LOCK" ] && [ -f "${FUSED_KERNEL_LOCK}" ]; then
-    rm "${FUSED_KERNEL_LOCK}" 2>/dev/null || true # Ignore timing issue
+if [ -n "${FUSED_KERNEL_LOCK}" ]; then
+    max_attempts=30
+    attempts=0
+
+    while [ -f "${FUSED_KERNEL_LOCK}" ]; do
+        attempts=$((attempts + 1))
+        echo "Waiting for ${FUSED_KERNEL_LOCK} to be removed... Attempt ${attempts}/${max_attempts}"
+        sleep 10
+        if [ "${attempts}" -ge "${max_attempts}" ] && [ -f "${FUSED_KERNEL_LOCK}" ]; then
+            echo "File ${FUSED_KERNEL_LOCK} still exists after ${max_attempts} attempts. Force remove."
+            rm "${FUSED_KERNEL_LOCK}" 2>/dev/null || true
+        fi
+    done
 fi
 
 if [ -n "${SPIRAL_SHMEM_NAME}" ] && [ -e "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
