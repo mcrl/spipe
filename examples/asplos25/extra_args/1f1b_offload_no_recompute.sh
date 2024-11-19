@@ -7,6 +7,7 @@ EXTRA_ARGS="
     --spiral-backward-virtual-size $SPIRAL_FWD \
     --spiral-overlap-offload-grad \
     --overlap-p2p-communication \
+    --spiral-actv-p2p \
     --megatron-mpi
 "
 

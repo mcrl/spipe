@@ -455,6 +455,8 @@ def validate_args(args, defaults={}):
         if (args.spiral_remap and args.spiral_1f1b) or (args.spiral_remap and args.spiral_mobius) or (args.spiral_1f1b and args.spiral_mobius):
             raise RuntimeError(
                 "SpiralPipe does not support remapping/1f1b/mobius together")
+        if args.spiral_1f1b and not args.spiral_actv_p2p:
+            raise RuntimeError("Interleaved 1f1b offload currently only implements p2pops-based activation communication")
 
     # GQA
     if args.num_key_value_heads is None:
