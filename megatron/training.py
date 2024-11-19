@@ -1012,8 +1012,14 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
     batch_size = args.micro_batch_size * args.data_parallel_size * \
         get_num_microbatches()
 
-    total_iterations = total_loss_dict[advanced_iters_key] + \
-                       total_loss_dict[skipped_iters_key]
+    if args.no_refresh_btw_log_intervals:
+        total_iterations = total_loss_dict[advanced_iters_key] + \
+                        total_loss_dict[skipped_iters_key] + \
+                        args.total_advanced_iters + \
+                        args.total_skipped_iters
+    else:
+        total_iterations = total_loss_dict[advanced_iters_key] + \
+                        total_loss_dict[skipped_iters_key]
 
     # Tensorboard values.
     # Timer requires all the ranks to call.
@@ -1073,7 +1079,7 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             )
 
     if iteration % args.log_interval == 0:
-        elapsed_time = timers("interval-time").elapsed(barrier=True)
+        elapsed_time = timers("interval-time").elapsed(barrier=True, reset=not args.no_refresh_btw_log_intervals)
 
         # NOTE (SpiralPipe) Skip iter 0 timing
         invalidate_timing = False
@@ -1087,6 +1093,11 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             else:
                 decrement_total_iterations_by_one = True
             args.skipped_train_iter_zero_timing = True
+        if (
+            args.no_refresh_btw_log_intervals and
+            args.skipped_train_iter_zero_timing == True
+        ):
+            decrement_total_iterations_by_one = True
 
         if invalidate_timing:
             elapsed_time_per_iteration = None
@@ -1143,10 +1154,21 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
             log_string += ' num zeros: {:.1f} |'.format(num_zeros_in_grad)
         if params_norm is not None:
             log_string += ' params norm: {:.3f} |'.format(params_norm)
-        log_string += ' number of skipped iterations: {:3d} |'.format(
-            total_loss_dict[skipped_iters_key])
-        log_string += ' number of nan iterations: {:3d} |'.format(
-            total_loss_dict[nan_iters_key])
+
+        if args.no_refresh_btw_log_intervals:
+            args.total_advanced_iters += total_loss_dict[advanced_iters_key]
+            args.total_skipped_iters += total_loss_dict[skipped_iters_key]
+            args.total_nan_iters += total_loss_dict[nan_iters_key]
+            log_string += ' number of skipped iterations: {:3d} |'.format(
+                args.total_skipped_iters)
+            log_string += ' number of nan iterations: {:3d} |'.format(
+                args.total_nan_iters)
+        else:
+            log_string += ' number of skipped iterations: {:3d} |'.format(
+                total_loss_dict[skipped_iters_key])
+            log_string += ' number of nan iterations: {:3d} |'.format(
+                total_loss_dict[nan_iters_key])
+
         total_loss_dict[advanced_iters_key] = 0
         total_loss_dict[skipped_iters_key] = 0
         total_loss_dict[nan_iters_key] = 0
