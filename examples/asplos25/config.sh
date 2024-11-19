@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:o:v:w:x:y:z:" opt
+while getopts "j:n:s:t:l:f:b:m:g:o:v:x:y:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -14,10 +14,8 @@ do
         g ) GBS="$OPTARG" ;;
         o ) OPTIMIZER="$OPTARG" ;;
         v ) ACTV_P2P="$OPTARG" ;;
-        w ) INIT_LOSS_SCALE="$OPTARG" ;;
         x ) CROSS_MAPPING="$OPTARG" ;;
         y ) SYNC_CKPT_COMMUNICATION="$OPTARG" ;;
-        z ) SEQ="$OPTARG" ;;
     esac
 done
 
@@ -69,9 +67,6 @@ JOB_NAME=${JOB_NAME:="opt"}
 MBS=${MBS:=1}
 GBS=${GBS:=$(( $MBS * $NP ))}
 
-# Sequence length
-SEQ=${SEQ:=4096}
-
 # iteration
 TRAIN_ITER=${TRAIN_ITER:=100}
 LOG_ITER=${LOG_ITER:=10}
@@ -82,8 +77,7 @@ EVAL_ITER=0
 SPIRAL_FWD=${FWD_STAGE:=2}
 SPIRAL_BWD=${BWD_STAGE:=2}
 SPIRAL_SHMEM_NAME=/spiral-${USER}
-SPIRAL_SHMEM_BUFFER_SIZE=${SHMEM_BUFFER_SIZE:=$(( 32 * 2**30 ))}
-# SPIRAL_SHMEM_BUFFER_SIZE=${SHMEM_BUFFER_SIZE:=$(( 4 * 2**30 ))}
+SPIRAL_SHMEM_BUFFER_SIZE=${SHMEM_BUFFER_SIZE:=$(( 64 * 2**30 ))}
 SPIRAL_SHMEM_HEADER_SIZE=$(( 1 * 2**30 ))
 SPIRAL_DEBUG_BACKEND=NO
 
