@@ -28,10 +28,9 @@ fi
 
 # Remove Megatron lockfile
 if [ -n "$FUSED_KERNEL_LOCK" ] && [ -f "${FUSED_KERNEL_LOCK}" ]; then
-    rm ${FUSED_KERNEL_LOCK}
+    rm "${FUSED_KERNEL_LOCK}" 2>/dev/null || true # Ignore timing issue
 fi
 
-# Remove spiral shmem file
 if [ -n "${SPIRAL_SHMEM_NAME}" ] && [ -e "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
     if [ ! -r "/dev/shm${SPIRAL_SHMEM_NAME}" ] || [ ! -w "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
         echo "Permission error: /dev/shm${SPIRAL_SHMEM_NAME} exists already and is not readable/writable"
