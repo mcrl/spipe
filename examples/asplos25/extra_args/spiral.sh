@@ -40,3 +40,7 @@ fi
 if [ ${SPIRAL_SYNC_CKPT_COMMUNICATION} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-sync-ckpt-communication"
 fi
+
+if [ ${SPIRAL_ACTV_P2P} == "YES" ]; then
+    EXTRA_ARGS+=" --spiral-actv-p2p"
+fi

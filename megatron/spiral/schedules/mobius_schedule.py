@@ -333,6 +333,7 @@ def mobius_schedule(
                 overlap_p2p_comm=overlap_p2p_comm,
                 batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
+                omit_send_reqs=not batch_p2p_comm,
             )
 
             torch.cuda.nvtx.range_pop()
@@ -516,6 +517,7 @@ def mobius_schedule(
                 overlap_p2p_comm=overlap_p2p_comm,
                 batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
+                omit_send_reqs=not batch_p2p_comm,
             )
 
             torch.cuda.nvtx.range_pop()

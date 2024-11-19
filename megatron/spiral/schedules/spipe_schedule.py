@@ -340,6 +340,7 @@ def spipe_schedule(
                 overlap_p2p_comm=overlap_p2p_comm,
                 batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
+                omit_send_reqs=not batch_p2p_comm,
             )
             # sdrv ckpt
             if not forward_only:
@@ -520,6 +521,7 @@ def spipe_schedule(
                 overlap_p2p_comm=overlap_p2p_comm,
                 batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
+                omit_send_reqs=not batch_p2p_comm,
             )
             # sdrv ckpt
             comm_ckpt(
