@@ -213,14 +213,15 @@ def spipe_schedule(
             # use current form.
             # NOTE Moving this out of current for loop, or merging with fwd_init_recvs in the fwd for loop will
             # definitely lead to deadlock.
-            fwd_pre_pipeline_init_recvs(
-                recvs,
-                dtype,
-                tensor_shape,
-                overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=use_batch_p2p_comm,
-                timers=timers,
-            )
+            with torch.cuda.stream(get_thunder_cuda_manager().Stream("actv_comm")):
+                fwd_pre_pipeline_init_recvs(
+                    recvs,
+                    dtype,
+                    tensor_shape,
+                    overlap_p2p_comm=overlap_p2p_comm,
+                    batch_p2p_comm=use_batch_p2p_comm,
+                    timers=timers,
+                )
         # endif
         if not forward_only:
             # comm_ckpt(

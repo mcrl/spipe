@@ -29,6 +29,7 @@ _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
 _SPIRAL_INPUT_TENSOR_CKPT_GROUP = None
 _SPIRAL_INPUT_TENSOR_CKPT_GROUPS = {}
 _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS = []
+_TS_THRESH = 8
 
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = None
@@ -397,7 +398,8 @@ def initialize_model_parallel(
                     torch.distributed.barrier(group=group)
 
             # TODO: Junyeol temp code
-            for _ in range(35):
+            global _TS_THRESH
+            for _ in range(_TS_THRESH):
                 group = torch.distributed.new_group(ranks)
                 if rank in ranks:
                     _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS.append(group)
@@ -536,7 +538,7 @@ def get_spiral_input_tensor_ckpt_groups(other_rank):
 
 
 def get_spiral_input_tensor_ckpt_group_ts(ts):
-    return _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS[ts]
+    return _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_TS[ts%_TS_THRESH]
 
 
 def get_amax_reduction_group():
