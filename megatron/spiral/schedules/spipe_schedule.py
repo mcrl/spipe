@@ -32,6 +32,7 @@ Shape = Union[List[int], torch.Size]
 # Constants
 _DEBUG_SCHEDULE = True
 
+
 def spipe_schedule(
     *,
     forward_step_func,
