@@ -122,8 +122,6 @@ def spipe_schedule(
             "Spiral is not supported with a different decoder sequence length."
         )
 
-    use_batch_p2p_comm = not get_args().spiral_actv_p2p
-
     offload_grad_after_bwd_stage = get_args().spiral_overlap_offload_grad
     optimize_after_bwd_stage = offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer
     if get_args().spiral_stage_optimizer:
@@ -208,7 +206,7 @@ def spipe_schedule(
                 dtype,
                 tensor_shape,
                 overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=use_batch_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
             )
         # endif
@@ -339,9 +337,9 @@ def spipe_schedule(
                 tensor_shape,
                 dtype,
                 overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=use_batch_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
-                omit_send_reqs=not use_batch_p2p_comm,
+                omit_send_reqs=not batch_p2p_comm,
             )
             # sdrv ckpt
             if not forward_only:
@@ -520,9 +518,9 @@ def spipe_schedule(
                 tensor_shape,
                 dtype,
                 overlap_p2p_comm=overlap_p2p_comm,
-                batch_p2p_comm=use_batch_p2p_comm,
+                batch_p2p_comm=batch_p2p_comm,
                 timers=timers,
-                omit_send_reqs=not use_batch_p2p_comm,
+                omit_send_reqs=not batch_p2p_comm,
             )
             # sdrv ckpt
             comm_ckpt(

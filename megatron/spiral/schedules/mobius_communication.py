@@ -39,6 +39,7 @@ def comm_activation(
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = False,
     timers: Callable = None,
+    omit_send_reqs: bool = False,
 ):
     """Communicate activation.
 
@@ -98,6 +99,7 @@ def comm_activation(
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
             timers=timers,
+            omit_send_reqs=omit_send_reqs,
         )
     elif case_color == CaseColor.Red:
         recv, reqs = spiral_p2p.recv_prev(
@@ -116,6 +118,7 @@ def comm_activation(
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
             timers=timers,
+            omit_send_reqs=omit_send_reqs,
         )
         recvs.append((recv, reqs))
     else:
@@ -134,6 +137,7 @@ def comm_activation_grad(
     overlap_p2p_comm: bool = False,
     batch_p2p_comm: bool = False,
     timers: Callable = None,
+    omit_send_reqs: bool = False,
 ):
     """Communicate activation gradients.
 
@@ -192,6 +196,7 @@ def comm_activation_grad(
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
             timers=timers,
+            omit_send_reqs=omit_send_reqs,
         )
     elif case_color == CaseColor.Red:
         recv, reqs = spiral_p2p.recv_next(
@@ -210,6 +215,7 @@ def comm_activation_grad(
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
             timers=timers,
+            omit_send_reqs=omit_send_reqs,
         )
         recvs.append((recv, reqs))
     else:

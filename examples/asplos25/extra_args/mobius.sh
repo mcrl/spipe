@@ -29,3 +29,7 @@ fi
 if [ ${SPIRAL_OFFLOAD_OPTIMIZER} == "YES" ]; then
     EXTRA_ARGS+=" --spiral-offload-optimizer"
 fi
+
+if [ ${SPIRAL_ACTV_P2P} == "YES" ]; then
+    EXTRA_ARGS+=" --spiral-actv-p2p"
+fi
