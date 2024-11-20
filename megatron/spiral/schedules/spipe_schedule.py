@@ -173,6 +173,7 @@ def spipe_schedule(
     compute_event_queries = {}
     offload_event_queries = {}
     free_event_queries = {}
+    actv_comm_event_queries = {}
 
     # Placeholders
     recv_reqs: List[Work] = []
@@ -222,6 +223,15 @@ def spipe_schedule(
                     batch_p2p_comm=use_batch_p2p_comm,
                     timers=timers,
                 )
+
+                actv_comm_microbatch = get_thunder_cuda_manager().Event(
+                    "actv_comm",
+                    "ckpt_comm",
+                    tag="actv_comm:pre_pipeline",
+                )
+                if get_thunder_cuda_manager().record_event(actv_comm_microbatch) == -1:
+                    raise RuntimeError("record_event failed")
+                actv_comm_event_queries[actv_comm_microbatch.tag] = actv_comm_microbatch
         # endif
         if not forward_only:
             # comm_ckpt(
@@ -234,6 +244,12 @@ def spipe_schedule(
 
             # TODO: Junyeol temp code
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("ckpt_comm")):
+                if ppnct == __num_pre_pipeline_non_compute_ts - 1:
+                    if (
+                        get_thunder_cuda_manager().wait_event(actv_comm_event_queries.pop("actv_comm:pre_pipeline")) == -1
+                    ):
+                        raise RuntimeError("wait_event failed")
+
                 comm_ckpt(
                     next(ckpt_send_recv_schedule),
                     model,
@@ -379,11 +395,12 @@ def spipe_schedule(
 
             # TODO: Junyeol temp code
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("actv_comm")):
-                # if (
-                #     get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{m_i}"))
-                #     == -1
-                # ):
-                #     raise RuntimeError("wait_event failed")
+                if (
+                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{m_i}"))
+                    == -1
+                ):
+                    raise RuntimeError("wait_event failed")
+
                 # sdrv activation
                 comm_activation(
                     output_tensor,
@@ -398,12 +415,23 @@ def spipe_schedule(
                     timers=timers,
                     omit_send_reqs=not use_batch_p2p_comm,
                 )
+
+                actv_comm_microbatch = get_thunder_cuda_manager().Event(
+                    "actv_comm",
+                    "ckpt_comm",
+                    tag=f"actv_comm:f{fwd_stage_id}m{m_i}",
+                )
+                if get_thunder_cuda_manager().record_event(actv_comm_microbatch) == -1:
+                    raise RuntimeError("record_event failed")
+                actv_comm_event_queries[actv_comm_microbatch.tag] = actv_comm_microbatch
+
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("ckpt_comm")):
                 if (
-                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{m_i}"))
+                    get_thunder_cuda_manager().wait_event(actv_comm_event_queries.pop(f"actv_comm:f{fwd_stage_id}m{m_i}"))
                     == -1
                 ):
                     raise RuntimeError("wait_event failed")
+
                 # sdrv ckpt
                 if not forward_only:
                     comm_ckpt(
@@ -599,11 +627,12 @@ def spipe_schedule(
 
             # TODO: Junyeol temp code
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("actv_comm")):
-                # if (
-                #     get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{m_i}"))
-                #     == -1
-                # ):
-                #     raise RuntimeError("wait_event failed")
+                if (
+                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{m_i}"))
+                    == -1
+                ):
+                    raise RuntimeError("wait_event failed")
+
                 # sdrv activation grad
                 comm_activation_grad(
                     input_tensor_grad,
@@ -618,12 +647,23 @@ def spipe_schedule(
                     timers=timers,
                     omit_send_reqs=not use_batch_p2p_comm,
                 )
+
+                actv_grad_comm_microbatch = get_thunder_cuda_manager().Event(
+                    "actv_comm",
+                    "ckpt_comm",
+                    tag=f"actv_grad_comm:b{bwd_stage_id}m{m_i}",
+                )
+                if get_thunder_cuda_manager().record_event(actv_grad_comm_microbatch) == -1:
+                    raise RuntimeError("record_event failed")
+                actv_comm_event_queries[actv_grad_comm_microbatch.tag] = actv_grad_comm_microbatch
+
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("ckpt_comm")):
                 if (
-                    get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{m_i}"))
+                    get_thunder_cuda_manager().wait_event(actv_comm_event_queries.pop(f"actv_grad_comm:b{bwd_stage_id}m{m_i}"))
                     == -1
                 ):
                     raise RuntimeError("wait_event failed")
+
                 # sdrv ckpt
                 comm_ckpt(
                     next(ckpt_send_recv_schedule),
