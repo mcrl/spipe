@@ -16,7 +16,7 @@ from megatron.spiral.initialize import get_thunder_cuda_manager
 Shape = Union[List[int], torch.Size]
 
 # Constants
-_DEBUG_CKPT_COMMUNICATION = True
+_DEBUG_CKPT_COMMUNICATION = False
 _USE_BATCH_P2P = True
 
 
@@ -106,17 +106,15 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                             group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
-                    reqs.append(NOP_Wait) # dummy
+                    reqs.append(NOP_Wait) # dummy req, will be replaced later
                     batch_ops_reqs_idx.append(idx)
                 else:
                     reqs.append(
-                        # dist.irecv(
-                        #     et, src=src, group=mpu.get_spiral_input_tensor_ckpt_group()
-                        # )
-
-                        # TODO: Junyeol temp code
                         dist.irecv(
-                            et, src=src, group=mpu.get_spiral_input_tensor_ckpt_groups(src)
+                            et,
+                            src=src,
+                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
+                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
                 recvs.append(et)
@@ -157,44 +155,17 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                             group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
-                    reqs.append(NOP_Wait) # dummy
+                    reqs.append(NOP_Wait) # dummy req, will be replaced later
                     batch_ops_reqs_idx.append(idx)
                 else:
                     reqs.append(
-                        # dist.isend(
-                        #     input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_group()
-                        # )
-
-                        # TODO: Junyeol temp code
                         dist.isend(
-                            input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst)
+                            input_ckpt_,
+                            dst,
+                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
+                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
-
-        elif op.comm_type == CkptSendRecvType.SDRV:
-            sd_phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_ids[0])
-            sd_local_stage_id, sd_local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_ids[0])
-
-            rv_phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_ids[1])
-            rv_local_stage_id, rv_local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_ids[1])
-
-            input_ckpt_ = (
-                model[sd_local_stage_id]
-                .module[sd_local_phase_id]
-                .spiral_input_tensors.popleft()
-            )
-            dst = (
-                mpu.translate_pp_rank_to_cm_rank(op.rank)
-                if mpu.is_spiral_cross_mapping()
-                else op.rank
-            )
-            et = _get_empty_tensor(tensor_shape, dtype)
-            src = dst
-            sd = dist.P2POp(dist.isend, input_ckpt_, dst, group=mpu.get_spiral_input_tensor_ckpt_groups(dst))
-            rv = dist.P2POp(dist.irecv, et, src, group=mpu.get_spiral_input_tensor_ckpt_groups(src))
-            _req = dist.batch_isend_irecv([sd, rv])
-            reqs.append(_req)
-            recvs.append(et)
 
         else:
             raise RuntimeError(f"Invalid comm type {op.comm_type}")
@@ -214,8 +185,5 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                 zip(reqs, schedule),
             ),
         ):
-            if op.comm_type == CkptSendRecvType.RECV:
-                bid, _ = bwd_phase2local_stage_phase(op.phase_id)
-            elif op.comm_type == CkptSendRecvType.SDRV:
-                bid, _ = bwd_phase2local_stage_phase(op.phase_ids[1])
+            bid, _ = bwd_phase2local_stage_phase(op.phase_id)
             ckpt_recvs[bid].append((recv, [req]))

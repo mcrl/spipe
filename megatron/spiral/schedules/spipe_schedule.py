@@ -32,6 +32,7 @@ Shape = Union[List[int], torch.Size]
 # Constants
 _DEBUG_SCHEDULE = True
 
+
 def spipe_schedule(
     *,
     forward_step_func,
@@ -158,10 +159,9 @@ def spipe_schedule(
     ckpt_send_recv_schedule = None  # placeholder
     sync_ckpt_comm = get_args().spiral_sync_ckpt_communication
     if not forward_only:
-        # ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm)
-        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm, use_batch_p2p=True)
-        if mpu.get_pipeline_model_parallel_rank() == 0:
-            spiral_print(f"ckpt_send_recv_schedule: {ckpt_send_recv_schedule}")
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(
+            num_microbatches=num_microbatches, use_sync=sync_ckpt_comm
+        )
 
     # Data structures for training
     forward_data_store = []
