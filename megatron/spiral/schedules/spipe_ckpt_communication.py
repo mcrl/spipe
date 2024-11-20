@@ -9,7 +9,6 @@ from megatron.core import mpu
 from megatron.spiral.build_state import bwd_phase2local_stage_phase
 from megatron.spiral.debug import spiral_print
 from .spipe_ckpt_schedule import CkptSendRecvType
-from megatron.spiral.initialize import get_thunder_cuda_manager
 
 
 # Types

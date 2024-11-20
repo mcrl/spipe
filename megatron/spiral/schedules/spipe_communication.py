@@ -56,15 +56,6 @@ def comm_activation(
             timers=timers,
         )
         recvs.append((recv, reqs))
-
-        # TODO: Junyeol temp code
-        # tmp_recv = torch.empty(
-        #     tensor_shape,
-        #     requires_grad=True,
-        #     device=torch.cuda.current_device(),
-        #     dtype=dtype,
-        # )
-        # recvs.append((tmp_recv, [NOP_Wait]))
     elif skip_recv:
         spiral_p2p.send_next(
             output_tensor,
@@ -73,9 +64,6 @@ def comm_activation(
             timers=timers,
             omit_send_reqs=omit_send_reqs,
         )
-
-        # TODO: Junyeol temp code
-        # pass
     else:
         recv, reqs = spiral_p2p.send_next_recv_prev(
             output_tensor,
@@ -87,15 +75,6 @@ def comm_activation(
             omit_send_reqs=omit_send_reqs,
         )
         recvs.append((recv, reqs))
-
-        # TODO: Junyeol temp code
-        # tmp_recv = torch.empty(
-        #     tensor_shape,
-        #     requires_grad=True,
-        #     device=torch.cuda.current_device(),
-        #     dtype=dtype,
-        # )
-        # recvs.append((tmp_recv, [NOP_Wait]))
 
 
 def comm_activation_grad(
@@ -136,15 +115,6 @@ def comm_activation_grad(
             timers=timers,
         )
         recvs.append((recv, reqs))
-
-        # TODO: Junyeol temp code
-        # tmp_recv = torch.empty(
-        #     tensor_shape,
-        #     requires_grad=True,
-        #     device=torch.cuda.current_device(),
-        #     dtype=dtype,
-        # )
-        # recvs.append((tmp_recv, [NOP_Wait]))
     elif skip_recv:
         spiral_p2p.send_next(
             input_tensor_grad,
@@ -153,9 +123,6 @@ def comm_activation_grad(
             timers=timers,
             omit_send_reqs=omit_send_reqs,
         )
-
-        # TODO: Junyeol temp code
-        # pass
     else:
         recv, reqs = spiral_p2p.send_next_recv_prev(
             input_tensor_grad,
@@ -167,15 +134,6 @@ def comm_activation_grad(
             omit_send_reqs=omit_send_reqs,
         )
         recvs.append((recv, reqs))
-
-        # TODO: Junyeol temp code
-        # tmp_recv = torch.empty(
-        #     tensor_shape,
-        #     requires_grad=True,
-        #     device=torch.cuda.current_device(),
-        #     dtype=dtype,
-        # )
-        # recvs.append((tmp_recv, [NOP_Wait]))
 
 
 def fwd_pre_pipeline_init_recvs(
@@ -195,15 +153,6 @@ def fwd_pre_pipeline_init_recvs(
             timers=timers,
         )
         recvs.insert(0, (recv, reqs))
-
-        # TODO: Junyeol temp code
-        # tmp_recv = torch.empty(
-        #     tensor_shape,
-        #     requires_grad=True,
-        #     device=torch.cuda.current_device(),
-        #     dtype=dtype,
-        # )
-        # recvs.insert(0, (tmp_recv, [NOP_Wait]))
 
 
 def fwd_init_recvs(recvs: List[Tuple[torch.Tensor, List[Work]]]):
