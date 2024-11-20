@@ -28,7 +28,8 @@ DATA_ARGS="
     --vocab-file $VOCAB_FILE \
     --merge-file $MERGE_FILE \
     --data-impl mmap \
-    --split 949,50,1
+    --split 949,50,1 \
+    --num-workers 0
 "
 
 MIXED_PRECISION_ARGS="

@@ -207,7 +207,8 @@ def _initialize_distributed():
                                           args.spiral_remap,
                                           args.spiral_forward_virtual_size,
                                           args.spiral_backward_virtual_size,
-                                          args.spiral_cross_mapping,)
+                                          args.spiral_cross_mapping,
+                                          args.spiral_ckpt_comm_threshold,)
             if args.rank == 0:
                 print(f'> initialized tensor model parallel with size '
                       f'{mpu.get_tensor_model_parallel_world_size()}')

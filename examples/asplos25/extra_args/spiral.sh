@@ -10,6 +10,7 @@ EXTRA_ARGS="
     --spiral-backward-virtual-size $SPIRAL_BWD \
     --spiral-overlap-offload-grad \
     --spiral-recompute-activations \
+    --spiral-ckpt-comm-threshold 2 \
     --overlap-p2p-communication \
     --megatron-mpi
 "

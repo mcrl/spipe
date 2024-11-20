@@ -153,7 +153,10 @@ def spipe_schedule(
     ckpt_send_recv_schedule = None  # placeholder
     sync_ckpt_comm = get_args().spiral_sync_ckpt_communication
     if not forward_only:
-        ckpt_send_recv_schedule = CkptSendRecvSchedule(num_microbatches=num_microbatches, use_sync=sync_ckpt_comm)
+        ckpt_send_recv_schedule = CkptSendRecvSchedule(
+            num_microbatches=num_microbatches, use_sync=sync_ckpt_comm
+        )
+    use_ckpt_batch_p2p_comm = not get_args().spiral_ckpt_p2p
 
     # Data structures for training
     forward_data_store = []
@@ -187,6 +190,9 @@ def spipe_schedule(
             raise RuntimeError("record_event failed")
         prefetch_event_queries[prefetch_f0.tag] = prefetch_f0
 
+    # TODO: Junyeol temp code
+    ts = 0
+
     # pre-pipeline non-compute timesteps
     __num_pre_pipeline_non_compute_ts = mpu.get_pipeline_model_parallel_rank()
     for ppnct in range(__num_pre_pipeline_non_compute_ts):
@@ -218,7 +224,12 @@ def spipe_schedule(
                 ckpt_recvs,
                 tensor_shape,
                 dtype,
+                ts,
+                batch_p2p_comm=use_ckpt_batch_p2p_comm,
             )
+        # endif
+        ts += 1
+    # end pre-pipeline non-compute timesteps
 
     # fwd
     for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
@@ -322,13 +333,14 @@ def spipe_schedule(
                     compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
             # end compute stream
 
-            # sd/rv output/input tensor
+            # wait compute end before communicate
             if (
                 get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:f{fwd_stage_id}m{m_i}"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-            # sdrv activation
+
+            # sdrv output/input tensor
             comm_activation(
                 output_tensor,
                 recvs,
@@ -342,6 +354,7 @@ def spipe_schedule(
                 timers=timers,
                 omit_send_reqs=not batch_p2p_comm,
             )
+
             # sdrv ckpt
             if not forward_only:
                 comm_ckpt(
@@ -350,8 +363,11 @@ def spipe_schedule(
                     ckpt_recvs,
                     tensor_shape,
                     dtype,
+                    ts,
+                    batch_p2p_comm=use_ckpt_batch_p2p_comm,
                 )
 
+            ts += 1
             torch.cuda.nvtx.range_pop()
         # end fwd microbatches
 
@@ -503,13 +519,14 @@ def spipe_schedule(
                     compute_event_queries[compute_microbatches_end.tag] = compute_microbatches_end
             # end compute stream
 
-            # sd/rv input/output tensor grad
+            # wait compute end before communicate
             if (
                 get_thunder_cuda_manager().wait_event(compute_event_queries.pop(f"compute:b{bwd_stage_id}m{m_i}"))
                 == -1
             ):
                 raise RuntimeError("wait_event failed")
-            # sdrv activation grad
+
+            # sdrv input/output tensor grad
             comm_activation_grad(
                 input_tensor_grad,
                 recvs,
@@ -523,6 +540,7 @@ def spipe_schedule(
                 timers=timers,
                 omit_send_reqs=not batch_p2p_comm,
             )
+
             # sdrv ckpt
             comm_ckpt(
                 next(ckpt_send_recv_schedule),
@@ -530,8 +548,11 @@ def spipe_schedule(
                 ckpt_recvs,
                 tensor_shape,
                 dtype,
+                ts,
+                batch_p2p_comm=use_ckpt_batch_p2p_comm,
             )
 
+            ts += 1
             torch.cuda.nvtx.range_pop()
         # end bwd microbatches
 
@@ -616,13 +637,17 @@ def spipe_schedule(
         )
         for _ in range(__num_post_pipeline_non_compute_ts):
             if not forward_only:
+                # sdrv ckpt
                 comm_ckpt(
                     next(ckpt_send_recv_schedule),
                     model,
                     ckpt_recvs,
                     tensor_shape,
                     dtype,
+                    ts,
+                    batch_p2p_comm=use_ckpt_batch_p2p_comm,
                 )
+            ts += 1
 
     # cleanup schedule events
     if (
