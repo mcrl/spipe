@@ -17,7 +17,6 @@ Shape = Union[List[int], torch.Size]
 
 # Constants
 _DEBUG_CKPT_COMMUNICATION = False
-_USE_BATCH_P2P = True
 
 
 # Handle for self send/recv
@@ -37,7 +36,15 @@ def _get_empty_tensor(tensor_shape: Shape, dtype: torch.dtype) -> torch.Tensor:
 
 
 @nvtx.annotate("comm_ckpt", color="darkgreen")
-def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dtype, ts: int):
+def comm_ckpt(
+    schedule,
+    model,
+    ckpt_recvs,
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    ts: int,
+    batch_p2p_comm: bool = False,
+):
     if _DEBUG_CKPT_COMMUNICATION:
         spiral_print(f"comm: {schedule}")
 
@@ -47,11 +54,10 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
 
     for idx, op in enumerate(schedule):
 
-        if not op.comm_type == CkptSendRecvType.SDRV:
-            phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_id)
-            local_stage_id, local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_id)
+        phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_id)
+        local_stage_id, local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_id)
 
-            _prefix = str(schedule[idx])
+        _prefix = str(schedule[idx])
 
         if op.comm_type == CkptSendRecvType.RECV:
             assert (
@@ -96,13 +102,12 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                     if mpu.is_spiral_cross_mapping()
                     else op.rank
                 )
-                if _USE_BATCH_P2P:
+                if batch_p2p_comm:
                     batch_ops.append(
                         dist.P2POp(
                             dist.irecv,
                             et,
                             src,
-                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
                             group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
@@ -113,7 +118,6 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                         dist.irecv(
                             et,
                             src=src,
-                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
                             group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
@@ -145,13 +149,12 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                     if mpu.is_spiral_cross_mapping()
                     else op.rank
                 )
-                if _USE_BATCH_P2P:
+                if batch_p2p_comm:
                     batch_ops.append(
                         dist.P2POp(
                             dist.isend,
                             input_ckpt_,
                             dst,
-                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
                             group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
@@ -162,7 +165,6 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
                         dist.isend(
                             input_ckpt_,
                             dst,
-                            # group=mpu.get_spiral_input_tensor_ckpt_group(),
                             group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
                         )
                     )
@@ -170,7 +172,7 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
         else:
             raise RuntimeError(f"Invalid comm type {op.comm_type}")
 
-    if _USE_BATCH_P2P:
+    if batch_p2p_comm:
         if len(batch_ops) > 0:
             [batch_reqs] = dist.batch_isend_irecv(batch_ops)
             for _idx in batch_ops_reqs_idx:
@@ -181,7 +183,7 @@ def comm_ckpt(schedule, model, ckpt_recvs, tensor_shape: Shape, dtype: torch.dty
         for recv, (req, op) in zip(
             recvs,
             filter(
-                lambda x: x[1].comm_type == CkptSendRecvType.RECV or x[1].comm_type == CkptSendRecvType.SDRV,
+                lambda x: x[1].comm_type == CkptSendRecvType.RECV,
                 zip(reqs, schedule),
             ),
         ):

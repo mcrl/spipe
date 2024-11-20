@@ -1154,7 +1154,10 @@ def _add_distributed_args(parser):
                         'checkpoint communication typically improves performance by overlapping transmission')
     group.add_argument('--spiral-actv-p2p', action='store_true',
                         help='Enable SpiralPipe p2p activation communication')
-
+    group.add_argument('--spiral-ckpt-p2p', action='store_true',
+                        help='Enable SpiralPipe p2p checkpoint communication')
+    group.add_argument('--spiral-ckpt-comm-threshold', type=int, default=2,
+                        help='Number of separate checkpoint communication communicators')
     return parser
 
 
