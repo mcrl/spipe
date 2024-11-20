@@ -840,7 +840,7 @@ def train_step(forward_step_func, data_iterator,
         grad_scaler=getattr(optimizer, "scale_loss", None),
         sequence_parallel=args.sequence_parallel,
         overlap_p2p_comm=args.overlap_p2p_comm,
-        batch_p2p_comm=not args.overlap_p2p_comm or not args.spiral_actv_p2p,
+        batch_p2p_comm=not args.spiral_actv_p2p if args.spiral else not args.overlap_p2p_comm,
         forward_only=False,
         timers=fwd_bwd_timers,
         **kwargs)

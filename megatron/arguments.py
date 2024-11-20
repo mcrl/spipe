@@ -412,6 +412,9 @@ def validate_args(args, defaults={}):
         if args.spiral_forward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
             raise RuntimeError(
                 "SpiralPipe requires forward virtual size <= num_layers // pipeline_model_parallel_size")
+        if args.num_layers % (args.pipeline_model_parallel_size * args.spiral_forward_virtual_size) != 0:
+            raise RuntimeError(
+                "SpiralPipe requires num_layers to be divisible by pipeline_model_parallel_size * spiral_forward_virtual_size")
         if args.spiral_backward_virtual_size is None:
             raise RuntimeError(
                 "SpiralPipe requires setting backward virtual size")
@@ -421,6 +424,9 @@ def validate_args(args, defaults={}):
         if args.spiral_backward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
             raise RuntimeError(
                 "SpiralPipe requires backward virtual size <= num_layers // pipeline_model_parallel_size")
+        if args.num_layers % (args.pipeline_model_parallel_size * args.spiral_backward_virtual_size) != 0:
+            raise RuntimeError(
+                "SpiralPipe requires num_layers to be divisible by pipeline_model_parallel_size * spiral_backward_virtual_size")
         if args.spiral_remap:
             if not args.spiral_recompute_activations:
                 raise RuntimeError(
@@ -455,6 +461,8 @@ def validate_args(args, defaults={}):
         if (args.spiral_remap and args.spiral_1f1b) or (args.spiral_remap and args.spiral_mobius) or (args.spiral_1f1b and args.spiral_mobius):
             raise RuntimeError(
                 "SpiralPipe does not support remapping/1f1b/mobius together")
+        if args.spiral_1f1b and not args.spiral_actv_p2p:
+            raise RuntimeError("Interleaved 1f1b offload currently only implements p2pops-based activation communication")
 
     # GQA
     if args.num_key_value_heads is None:
