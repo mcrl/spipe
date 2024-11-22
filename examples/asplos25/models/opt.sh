@@ -57,8 +57,6 @@ else
     HEAD=16
 fi
 
-SEQ=2048
-
 MODEL_ARGS="
     --no-initialization \
     --untie-embeddings-and-output-weights \
@@ -83,5 +81,6 @@ MODEL_ARGS="
     --attention-dropout 0.0 \
     --hidden-dropout 0.0 \
     --no-gradient-accumulation-fusion \
-    --no-contiguous-buffers-in-local-ddp
+    --no-contiguous-buffers-in-local-ddp \
+    --initial-loss-scale $INIT_LOSS_SCALE
 "

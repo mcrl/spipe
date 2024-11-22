@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:o:v:x:y:" opt
+while getopts "j:n:s:t:l:f:b:m:g:o:v:w:x:y:z:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -14,8 +14,10 @@ do
         g ) GBS="$OPTARG" ;;
         o ) OPTIMIZER="$OPTARG" ;;
         v ) ACTV_P2P="$OPTARG" ;;
+        w ) INIT_LOSS_SCALE="$OPTARG" ;;
         x ) CROSS_MAPPING="$OPTARG" ;;
         y ) SYNC_CKPT_COMMUNICATION="$OPTARG" ;;
+        z ) SEQ="$OPTARG" ;;
     esac
 done
 
@@ -66,6 +68,10 @@ JOB_NAME=${JOB_NAME:="opt"}
 # Micro Batch size
 MBS=${MBS:=1}
 GBS=${GBS:=$(( $MBS * $NP ))}
+
+# Training configs
+SEQ=${SEQ:=4096}
+INIT_LOSS_SCALE=${INIT_LOSS_SCALE:=4294967296}
 
 # iteration
 TRAIN_ITER=${TRAIN_ITER:=100}
