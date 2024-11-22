@@ -14,7 +14,7 @@ do
         g ) GBS="$OPTARG" ;;
         o ) OPTIMIZER="$OPTARG" ;;
         v ) ACTV_P2P="$OPTARG" ;;
-        w ) INIT_LOSS_SCALE="$OPTARG" ;;
+        w ) INIT_LOSS_SCALE_POWER="$OPTARG" ;;
         x ) CROSS_MAPPING="$OPTARG" ;;
         y ) SYNC_CKPT_COMMUNICATION="$OPTARG" ;;
         z ) SEQ="$OPTARG" ;;
@@ -71,7 +71,7 @@ GBS=${GBS:=$(( $MBS * $NP ))}
 
 # Training configs
 SEQ=${SEQ:=4096}
-INIT_LOSS_SCALE=${INIT_LOSS_SCALE:=4294967296}
+INIT_LOSS_SCALE_POWER=${INIT_LOSS_SCALE_POWER:=32}
 
 # iteration
 TRAIN_ITER=${TRAIN_ITER:=100}
