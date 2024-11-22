@@ -59,26 +59,18 @@ def get_thunder_cuda_manager():
     return SPIRAL_BACKEND.thunder_cuda_manager
 
 
-def get_node_cpu_affinity():
+def get_available_cpu_affinity():
     global SPIRAL_BACKEND
     assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
-    return SPIRAL_BACKEND.node_cpu_affinity
+    return SPIRAL_BACKEND.available_cpu_affinity
 
 
-def set_node_cpu_affinity():
-    """Share CPU affinity only with ranks on the same node."""
-    node_group = torch.distributed.new_group(mpu.get_spiral_local_ranks())
-    os.sched_setaffinity(0, {psutil.Process().cpu_num()}) # set current process affinity to current cpu
-    affinity = os.sched_getaffinity(0)
-    node_affinity = torch.tensor(
-        [1 if i in affinity else 0 for i in range(os.cpu_count())],
-        dtype=torch.int32,
-        device="cuda",
-    )
-    torch.distributed.all_reduce(node_affinity, op=torch.distributed.ReduceOp.SUM, group=node_group)
-    assert torch.sum(node_affinity) == torch.distributed.get_world_size(group=node_group)
-    assert torch.max(node_affinity) == 1, "CPU affinity conflict between ranks on the same node"
-    SPIRAL_BACKEND.node_cpu_affinity = node_affinity.tolist()
+def set_cpu_affinity():
+    cpu_affinity = psutil.Process().cpu_affinity()
+    curr_cpu_num = psutil.Process().cpu_num()
+    os.sched_setaffinity(0, {curr_cpu_num}) # set current process affinity to current cpu
+    cpu_affinity.remove(curr_cpu_num)
+    SPIRAL_BACKEND.available_cpu_affinity = cpu_affinity
 
 
 @dataclass(frozen=True)
