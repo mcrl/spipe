@@ -21,7 +21,8 @@ cat <<EOT > $DS_CONFIG
     "contiguous_gradients": true
   },
   "fp16": {
-    "enabled": true
+    "enabled": true,
+    "initial_scale_power": $INIT_LOSS_SCALE_POWER
   },
   "bf16": {
     "enabled": false

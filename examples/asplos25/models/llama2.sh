@@ -15,13 +15,27 @@ elif [ $MODEL_SIZE -eq 7 ]; then
     FFN_HIDDEN=11008
     HEAD=32
     NUM_KV_HEADS=32
+elif [ $MODEL_SIZE -eq 10 ]; then
+    # 10B
+    LAYER=48
+    HIDDEN=4096
+    FFN_HIDDEN=13564
+    HEAD=2
+    NUM_KV_HEADS=2
 elif [ $MODEL_SIZE -eq 13 ]; then
     # 13B
     LAYER=40
+    HIDDEN=4096
+    FFN_HIDDEN=13564
+    HEAD=2
+    NUM_KV_HEADS=2
+elif [ $MODEL_SIZE -eq 15 ]; then
+    # 15B
+    LAYER=48
     HIDDEN=5120
-    FFN_HIDDEN=13824
-    HEAD=40
-    NUM_KV_HEADS=40
+    FFN_HIDDEN=13564
+    HEAD=2
+    NUM_KV_HEADS=2
 elif [ $MODEL_SIZE -eq 58 ]; then
     # 58B
     LAYER=128
@@ -57,6 +71,13 @@ elif [ $MODEL_SIZE -eq 162 ]; then
     FFN_HIDDEN=32768
     HEAD=8
     NUM_KV_HEADS=8
+elif [ $MODEL_SIZE -eq 154 ]; then
+    # 154B
+    LAYER=192
+    HIDDEN=8192
+    FFN_HIDDEN=27648
+    HEAD=16
+    NUM_KV_HEADS=16
 elif [ $MODEL_SIZE -eq 196 ]; then
     # 196B
     LAYER=128
@@ -79,7 +100,6 @@ else
     NUM_KV_HEADS=16
 fi
 
-SEQ=4096
 LR=3e-4
 MIN_LR=3e-5
 LR_WARMUP_STEPS=20
@@ -126,7 +146,8 @@ LLAMA_ARGS="
     --num-key-value-heads $NUM_KV_HEADS \
     --optimizer adam \
     --adam-beta1 0.9 \
-    --adam-beta2 0.95
+    --adam-beta2 0.95 \
+    --initial-loss-scale $((2**$INIT_LOSS_SCALE_POWER))
 "
 
 MODEL_ARGS="${MODEL_ARGS} ${LLAMA_ARGS}"
