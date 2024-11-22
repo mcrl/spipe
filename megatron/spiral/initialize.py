@@ -9,6 +9,8 @@ import torch
 
 import spiral_helper
 
+from megatron.spiral.debug import spiral_print
+
 SPIRAL_BACKEND = None
 
 
@@ -68,6 +70,7 @@ def set_cpu_affinity():
     cpu_affinity = psutil.Process().cpu_affinity()
     curr_cpu_num = psutil.Process().cpu_num()
     os.sched_setaffinity(0, {curr_cpu_num}) # set current process affinity to current cpu
+    spiral_print(f"pt_main_thread cpu core id = {curr_cpu_num}")
     cpu_affinity.remove(curr_cpu_num)
     SPIRAL_BACKEND.available_cpu_affinity = cpu_affinity
 

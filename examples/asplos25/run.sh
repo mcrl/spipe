@@ -58,7 +58,7 @@ if [ ${NSYS_ENABLE} == "YES" ]; then
 fi
 
 # Configure numactl
-EXEC_CMD="numactl --cpunodebind \$OMPI_COMM_WORLD_LOCAL_RANK --membind \$OMPI_COMM_WORLD_LOCAL_RANK ${EXEC_CMD}"
+EXEC_CMD="numactl --cpunodebind \$((3 - \$OMPI_COMM_WORLD_LOCAL_RANK)) --membind \$((3 - \$OMPI_COMM_WORLD_LOCAL_RANK)) ${EXEC_CMD}"
 
 # Remove newline
 EXEC_CMD=$(echo "$EXEC_CMD" | tr '\n' ' ')
