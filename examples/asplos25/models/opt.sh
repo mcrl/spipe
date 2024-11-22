@@ -82,5 +82,5 @@ MODEL_ARGS="
     --hidden-dropout 0.0 \
     --no-gradient-accumulation-fusion \
     --no-contiguous-buffers-in-local-ddp \
-    --initial-loss-scale-power $INIT_LOSS_SCALE_POWER
+    --initial-loss-scale $((2**$INIT_LOSS_SCALE_POWER))
 "

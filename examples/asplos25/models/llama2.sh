@@ -147,7 +147,7 @@ LLAMA_ARGS="
     --optimizer adam \
     --adam-beta1 0.9 \
     --adam-beta2 0.95 \
-    --initial-loss-scale-power $INIT_LOSS_SCALE_POWER
+    --initial-loss-scale $((2**$INIT_LOSS_SCALE_POWER))
 "
 
 MODEL_ARGS="${MODEL_ARGS} ${LLAMA_ARGS}"

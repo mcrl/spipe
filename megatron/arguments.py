@@ -374,12 +374,6 @@ def validate_args(args, defaults={}):
                     retro_args.retro_gpt_chunk_length
                 set_retro_args(retro_args)
 
-    # Mixed precision training.
-    if args.initial_loss_scale != pow(2, args.initial_loss_scale_power):
-        args.initial_loss_scale = pow(2, args.initial_loss_scale_power)
-    if args.rank == 0:
-        print('setting initial loss scale to {}'.format(args.initial_loss_scale))
-
     # SpiralPipe
     if args.spiral:
         if args.standalone_embedding_stage:
@@ -1017,10 +1011,6 @@ def _add_mixed_precision_args(parser):
                        'loss scaling is used.')
     group.add_argument('--initial-loss-scale', type=float, default=2**32,
                        help='Initial loss-scale for dynamic loss scaling.')
-    group.add_argument('--initial-loss-scale-power', type=int, default=32,
-                       help='Initial loss-scale power for dynamic loss scaling. '
-                       'If initial-loss-scale and 2**(initial-loss-scale-power) are '
-                       'different,the latter will be used.')
     group.add_argument('--min-loss-scale', type=float, default=1.0,
                        help='Minimum loss scale for dynamic loss scale.')
     group.add_argument('--loss-scale-window', type=float, default=1000,
