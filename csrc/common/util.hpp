@@ -1,9 +1,6 @@
 #pragma once
 
 #include <cassert>
-#include <vector>
-#include <algorithm>
-#include <sched.h>
 
 #define CHECK_CUDA(call)                                                       \
   do {                                                                         \
@@ -58,21 +55,3 @@
       assert(false);                                                           \
     }                                                                          \
   } while (0)
-
-void set_cpu_affinity(const std::vector<int> &cpu_affinity = {})
-{
-  // By default, assign the CPU affinity of the main thread
-  if (cpu_affinity.empty()){
-    return;
-  }
-
-  cpu_set_t cpu_set;
-  CPU_ZERO(&cpu_set);
-  for (int cpu_id : cpu_affinity){
-    if (cpu_id >= 0 && cpu_id < CPU_SETSIZE) {
-      CPU_SET(cpu_id, &cpu_set); // Add this CPU to the set
-    }
-  }
-
-  assert(sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) == 0);
-}

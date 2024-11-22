@@ -15,9 +15,28 @@
 #include <mutex>
 #include <thread>
 #include <unistd.h>
+#include <sched.h>
 #include <nvToolsExt.h>
 
 #define _DEBUG_OPTIMIZER false // for debugging Tensor values
+
+void set_cpu_affinity(const std::vector<int> &cpu_affinity = {})
+{
+  // By default, assign the CPU affinity of the main thread
+  if (cpu_affinity.empty()){
+    return;
+  }
+
+  cpu_set_t cpu_set;
+  CPU_ZERO(&cpu_set);
+  for (int cpu_id : cpu_affinity){
+    if (cpu_id >= 0 && cpu_id < CPU_SETSIZE) {
+      CPU_SET(cpu_id, &cpu_set); // Add this CPU to the set
+    }
+  }
+
+  assert(sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) == 0);
+}
 
 struct ThreadSafeOptimizer {
   std::unordered_map<int, std::shared_ptr<void>>
@@ -310,6 +329,8 @@ int _spiral_adam_rollback(int optimizer_id,
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
+
+  set_cpu_affinity(ts_opt->cpu_affinity);
 
   if (ev_long == 0) {
     throw std::runtime_error("Event is not recorded");
