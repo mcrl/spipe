@@ -59,31 +59,20 @@
     }                                                                          \
   } while (0)
 
-void set_affinity(const std::vector<int>& excluded_cpus = {}) {
+void set_cpu_affinity(const std::vector<int> &cpu_affinity = {})
+{
+  // By default, assign the CPU affinity of the main thread
+  if (cpu_affinity.empty()){
+    return;
+  }
+
   cpu_set_t cpu_set;
   CPU_ZERO(&cpu_set);
-
-  for (int i = 0; i < CPU_SETSIZE; ++i) {
-    if (std::find(excluded_cpus.begin(), excluded_cpus.end(), i) == excluded_cpus.end()) {
-      CPU_SET(i, &cpu_set);
+  for (int cpu_id : cpu_affinity){
+    if (cpu_id >= 0 && cpu_id < CPU_SETSIZE) {
+      CPU_SET(cpu_id, &cpu_set); // Add this CPU to the set
     }
   }
 
   assert(sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) == 0);
-}
-
-std::vector<int> get_affinity() {
-  std::vector<int> cpu_affinity;
-
-  cpu_set_t cpu_set;
-  CPU_ZERO(&cpu_set);
-  assert(sched_getaffinity(0, sizeof(cpu_set_t), &cpu_set) == 0);
-
-  for (int i = 0; i < CPU_SETSIZE; ++i) {
-    if (CPU_ISSET(i, &cpu_set)) {
-      cpu_affinity.push_back(i);
-    }
-  }
-
-  return cpu_affinity;
 }
