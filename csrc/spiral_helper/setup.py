@@ -23,7 +23,7 @@ setup(
                 os.path.join(os.environ['MPI_BUILD_DIR'], 'lib'),
                 os.path.join(os.environ['CUDA_BUILD_DIR'], 'lib64'),
             ],
-            libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart', 'nvToolsExt'],
+            libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart', 'nvToolsExt', 'numa'],
             extra_compile_args=['-g', '-fvisibility=hidden']
         )
     ],

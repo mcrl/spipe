@@ -9,6 +9,7 @@
 #include <list>
 #include <memory>
 #include <mpi.h>
+#include <numa.h>
 #include <nvToolsExt.h>
 #include <pybind11/numpy.h>
 #include <semaphore.h>
@@ -175,7 +176,8 @@ public:
        const char* shared_memory_name,
        const size_t kCpuBufferSize,
        const size_t kCpuBufferHeaderSize,
-       const size_t alignment);
+       const size_t alignment,
+       const int cpu_id);
   Comm(const Comm&) = delete;            // copy ctor
   Comm(Comm&&) = delete;                 // move ctor
   Comm& operator=(const Comm&) = delete; // copy assign
@@ -268,7 +270,8 @@ Comm::Comm(std::vector<int> ranks,
            const char* shared_memory_name,
            const size_t kCpuBufferSize,
            const size_t kCpuBufferHeaderSize,
-           const size_t alignment)
+           const size_t alignment,
+           const int cpu_id)
 {
   if (Comm::debug)
     spdlog::info("Creating SpiralPipe Comm");
@@ -379,6 +382,18 @@ Comm::Comm(std::vector<int> ranks,
   assert(kCpuBufferHeaderSize % comm_info_.mpi_size_ == 0);
   if (comm_info_.intra_rank_ == 0) {
     memset(param_mapping_tbl_, 0, kCpuBufferHeaderSize);
+  }
+
+  // Set NUMA
+  if (Comm::debug)
+    spdlog::info("NUMA node ID = {}", numa_node_of_cpu(cpu_id));
+  numa_tonode_memory((void*)GetBase(comm_info_.mpi_rank_), kCpuBufferSize / comm_info_.intra_size_, numa_node_of_cpu(cpu_id));
+
+  // Check NUMA
+  {
+    int mode;
+    assert(get_mempolicy(&mode, NULL, 0, GetBase(comm_info_.mpi_rank_), MPOL_F_NODE | MPOL_F_ADDR) == 0);
+    assert(mode == numaIdx);
   }
 
   // Initialize allocator
@@ -745,7 +760,7 @@ PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
         "SpiralPipeBackend LazyConfigure (C++)");
   py::class_<Comm>(m, "Comm")
       .def(py::init<std::vector<int>, const int, const bool, const char*,
-                    const size_t, const size_t, const size_t>())
+                    const size_t, const size_t, const size_t, const int>())
       .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
       .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
       .def("RemapLocalParamData", &Comm::RemapLocalParamData)
