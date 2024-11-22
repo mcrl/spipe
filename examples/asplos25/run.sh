@@ -5,6 +5,7 @@
 #SBATCH --mem=0
 #SBATCH --exclusive
 #SBATCH --gres=gpu:4
+#SBATCH --output=slurm-%j-%x.out
 
 ulimit -v unlimited
 
@@ -53,10 +54,17 @@ fi
 EXEC_CMD="python ${MEGATRON_PATH}/pretrain_gpt.py ${EXTRA_ARGS} ${DISTRIBUTED_ARGS} ${MODEL_ARGS} ${DATA_ARGS} ${MIXED_PRECISION_ARGS} ${LOGGING_ARGS}"
 
 if [ ${NSYS_ENABLE} == "YES" ]; then
-    EXEC_CMD="${NSYS} profile -t cuda,nvtx -o ${NSYS_OUTPUT}_%q{OMPI_COMM_WORLD_RANK} --force-overwrite true ${EXEC_CMD}"
+    EXEC_CMD="${NSYS} profile -t cuda,nvtx -o ${NSYS_OUTPUT}_\$OMPI_COMM_WORLD_RANK --force-overwrite true ${EXEC_CMD}"
 fi
 
+# Configure numactl
+EXEC_CMD="numactl --cpunodebind \$OMPI_COMM_WORLD_LOCAL_RANK --membind \$OMPI_COMM_WORLD_LOCAL_RANK ${EXEC_CMD}"
+
+# Remove newline
+EXEC_CMD=$(echo "$EXEC_CMD" | tr '\n' ' ')
+
 # Run script
-${MPIRUN} --bind-to none --report-bindings -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS ${EXEC_CMD}
+mpirun --bind-to none --report-bindings -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS -x OMP_NUM_THREADS=8 \
+    bash -c "${EXEC_CMD}"
 
 exit 0
