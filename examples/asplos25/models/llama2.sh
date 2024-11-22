@@ -4,8 +4,8 @@
 if [ $MODEL_SIZE -eq 1 ]; then
     # 1.3B
     LAYER=24
-    HIDDEN=1024
-    FFN_HIDDEN=3072
+    HIDDEN=2048
+    FFN_HIDDEN=5504
     HEAD=16
     NUM_KV_HEADS=16
 elif [ $MODEL_SIZE -eq 7 ]; then
