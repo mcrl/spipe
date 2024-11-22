@@ -7,8 +7,6 @@ import psutil
 
 import torch
 
-from megatron.core import mpu
-
 import spiral_helper
 
 SPIRAL_BACKEND = None
