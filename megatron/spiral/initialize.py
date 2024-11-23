@@ -2,10 +2,14 @@ from typing import Optional, Union, Tuple
 from collections import deque
 from dataclasses import dataclass
 import atexit
+import os
+import psutil
 
 import torch
 
 import spiral_helper
+
+from megatron.spiral.debug import spiral_print
 
 SPIRAL_BACKEND = None
 
@@ -29,6 +33,7 @@ class SpiralBackend:
             shared_memory_buffer_size,
             shared_memory_header_size,
             alignment,
+            psutil.Process().cpu_num(),
         )
         self.thunder_cuda_manager = SpiralCUDAManager()
         global SPIRAL_BACKEND
@@ -53,6 +58,21 @@ def get_thunder_cuda_manager():
     global SPIRAL_BACKEND
     assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
     return SPIRAL_BACKEND.thunder_cuda_manager
+
+
+def get_available_cpu_affinity():
+    global SPIRAL_BACKEND
+    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
+    return SPIRAL_BACKEND.available_cpu_affinity
+
+
+def set_cpu_affinity():
+    cpu_affinity = psutil.Process().cpu_affinity()
+    curr_cpu_num = psutil.Process().cpu_num()
+    os.sched_setaffinity(0, {curr_cpu_num}) # set current process affinity to current cpu
+    spiral_print(f"pt_main_thread cpu core id = {curr_cpu_num}")
+    cpu_affinity.remove(curr_cpu_num)
+    SPIRAL_BACKEND.available_cpu_affinity = cpu_affinity
 
 
 @dataclass(frozen=True)

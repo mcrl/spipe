@@ -4,6 +4,7 @@ from megatron import get_args
 
 from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
+from megatron.spiral import get_available_cpu_affinity
 
 from .cpu_adam_builder import SpiralCPUAdamBuilder
 
@@ -127,6 +128,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             weight_decay,
             adamw_mode,
             should_log_le("info"),
+            get_available_cpu_affinity()
         )
         self.inv_scale = 0
         self.ev_long = -1

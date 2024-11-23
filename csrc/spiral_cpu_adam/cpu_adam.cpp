@@ -15,9 +15,28 @@
 #include <mutex>
 #include <thread>
 #include <unistd.h>
+#include <sched.h>
 #include <nvToolsExt.h>
 
 #define _DEBUG_OPTIMIZER false // for debugging Tensor values
+
+void set_cpu_affinity(const std::vector<int> &cpu_affinity = {})
+{
+  // By default, assign the CPU affinity of the main thread
+  if (cpu_affinity.empty()){
+    return;
+  }
+
+  cpu_set_t cpu_set;
+  CPU_ZERO(&cpu_set);
+  for (int cpu_id : cpu_affinity){
+    if (cpu_id >= 0 && cpu_id < CPU_SETSIZE) {
+      CPU_SET(cpu_id, &cpu_set); // Add this CPU to the set
+    }
+  }
+
+  assert(sched_setaffinity(0, sizeof(cpu_set_t), &cpu_set) == 0);
+}
 
 struct ThreadSafeOptimizer {
   std::unordered_map<int, std::shared_ptr<void>>
@@ -31,15 +50,17 @@ struct ThreadSafeOptimizer {
   std::mutex m;
   std::vector<std::shared_ptr<torch::Tensor>> fp32_param_list;
   std::vector<float> found_inf_list;
+  std::vector<int> cpu_affinity;
 
   ThreadSafeOptimizer(
       std::unordered_map<int, std::shared_ptr<void>> group_s_opts,
       const int nparams,
       const int pool_size,
       const bool half_precision,
-      const bool should_log)
+      const bool should_log,
+      const std::vector<int>& cpu_affinity)
     : group_s_opts(group_s_opts), pool(pool_size), nparams(nparams),
-      nparams_submitted(0), should_log(should_log)
+      nparams_submitted(0), should_log(should_log), cpu_affinity(cpu_affinity)
   {
     if (half_precision)
       fp32_param_list.resize(nparams);
@@ -60,7 +81,8 @@ int spiral_create_adam_optimizer(int optimizer_id,
                                  float eps,
                                  float weight_decay,
                                  bool adamw_mode,
-                                 bool should_log)
+                                 bool should_log,
+                                 std::vector<int> cpu_affinity)
 {
   /*
    * Each backward stage has a ThreadSafeOptimizer and a ThreadPool.
@@ -80,7 +102,7 @@ int spiral_create_adam_optimizer(int optimizer_id,
     throw std::runtime_error("Invalid thread pool size");
 
   s_optimizers[optimizer_id] = std::make_shared<ThreadSafeOptimizer>(
-      group_s_opts, nparams, pool_size, half_precision, should_log);
+      group_s_opts, nparams, pool_size, half_precision, should_log, cpu_affinity);
 
   if (should_log) {
     printf("[%ld] ThreadSafeOptimizer #%d is created with %d threads for %d "
@@ -145,6 +167,9 @@ int _spiral_adam_step(int optimizer_id,
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
+  
+  // Set thread cpu affinity to not use the main thread cpu
+  set_cpu_affinity(ts_opt->cpu_affinity);
 
   if (ev_long == 0) {
     throw std::runtime_error("Event is not recorded");
@@ -304,6 +329,8 @@ int _spiral_adam_rollback(int optimizer_id,
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
+
+  set_cpu_affinity(ts_opt->cpu_affinity);
 
   if (ev_long == 0) {
     throw std::runtime_error("Event is not recorded");
