@@ -697,9 +697,8 @@ def spipe_schedule(
 
     # end GPU latency timer
     if log_gpu_pipeline_latency:
+        torch.cuda.synchronize()
         backward_pass_end_event.record()
-
-    if log_gpu_pipeline_latency:
         forward_pass_start_event.synchronize()
         backward_pass_end_event.synchronize()
         get_gpu_latency_list().append(forward_pass_start_event.elapsed_time(backward_pass_end_event))
