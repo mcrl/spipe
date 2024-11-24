@@ -1160,7 +1160,7 @@ def _add_distributed_args(parser):
                         help='Number of separate checkpoint communication communicators')
     group.add_argument('--spiral-log-gpu-pipeline-latency', action='store_true',
                         help='Log GPU pipeline latency. Measure elapsed time from first prefetch to last offload. '
-                        'This is incompatible with hetero or chunked optimizer, or without overlap offload grad')
+                        'This is incompatible with stage, hetero, or chunked optimizer, or without overlap offload grad')
     return parser
 
 
