@@ -52,7 +52,7 @@ from megatron.spiral import (
 )
 import megatron.spiral.build_state as sbs
 from megatron.spiral.module import SpiralPhaseList
-from megatron.spiral.utils import is_spiral_param
+from megatron.spiral.utils import is_spiral_param, create_gpu_latency_list, get_gpu_latency_list
 from megatron.spiral.debug import (
     spiral_print,
     debug_param2id_shape_status,
@@ -198,6 +198,9 @@ def pretrain(train_valid_test_dataset_provider,
     timers.log(['model-and-optimizer-setup',
                 'train/valid/test-data-iterators-setup'], barrier=True)
     print_rank_0('training ...')
+
+    if args.spiral_log_gpu_pipeline_latency:
+        create_gpu_latency_list()
 
     iteration = 0
 
@@ -1137,6 +1140,15 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 if writer:
                     writer.add_scalar("throughput", throughput, iteration)
 
+        if args.spiral_log_gpu_pipeline_latency:
+            __lat = get_gpu_latency_list().get_avg()
+            if __lat:
+                log_string += f" max GPU pipeline latency (ms): {__lat:.1f} |"
+            else:
+                log_string += " max GPU pipeline latency (ms): N/A |"
+            if not args.no_refresh_btw_log_intervals:
+                get_gpu_latency_list().clear()
+
         log_string += ' learning rate: {:.3E} |'.format(learning_rate)
         log_string += ' global batch size: {:5d} |'.format(batch_size)
         for key in total_loss_dict:
@@ -1242,6 +1254,8 @@ def train(forward_step_func, model, optimizer, opt_param_scheduler,
             if iteration == 0:
                 timers('interval-time').reset()
                 timers('interval-time').start(barrier=True)
+                if args.spiral_log_gpu_pipeline_latency:
+                    get_gpu_latency_list().clear()
         iteration += 1
         args.consumed_train_samples += mpu.get_data_parallel_world_size() * \
                                        args.micro_batch_size * \
