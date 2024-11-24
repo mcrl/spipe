@@ -1131,15 +1131,6 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
         else:
             log_string += " elapsed time per iteration (ms): N/A |"
 
-        if throughput:
-            log_string += f" throughput per GPU (TFLOP/s/GPU): {throughput:.2f} |"
-        else:
-            log_string += " throughput per GPU (TFLOP/s/GPU): N/A |"
-
-            if args.log_timers_to_tensorboard:
-                if writer:
-                    writer.add_scalar("throughput", throughput, iteration)
-
         if args.spiral_log_gpu_pipeline_latency:
             __lat = get_gpu_latency_list().get_avg()
             if __lat:
@@ -1148,6 +1139,15 @@ def training_log(loss_dict, total_loss_dict, learning_rate, iteration,
                 log_string += " max GPU pipeline latency (ms): N/A |"
             if not args.no_refresh_btw_log_intervals:
                 get_gpu_latency_list().clear()
+
+        if throughput:
+            log_string += f" throughput per GPU (TFLOP/s/GPU): {throughput:.2f} |"
+        else:
+            log_string += " throughput per GPU (TFLOP/s/GPU): N/A |"
+
+            if args.log_timers_to_tensorboard:
+                if writer:
+                    writer.add_scalar("throughput", throughput, iteration)
 
         log_string += ' learning rate: {:.3E} |'.format(learning_rate)
         log_string += ' global batch size: {:5d} |'.format(batch_size)
