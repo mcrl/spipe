@@ -15,6 +15,7 @@ from megatron.spiral.initialize import get_thunder_cuda_manager
 from megatron.spiral.debug import spiral_print
 from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
 from megatron.spiral.generic import ContextManagers
+from megatron.spiral.utils import get_gpu_latency_list
 
 from .mobius_communication import (
     comm_activation,
@@ -178,7 +179,17 @@ def mobius_schedule(
     # Placeholders
     recv_reqs: List[Work] = []
 
+    # GPU latency event
+    log_gpu_pipeline_latency = get_args().spiral_log_gpu_pipeline_latency
+    if log_gpu_pipeline_latency:
+        forward_pass_start_event = torch.cuda.Event(enable_timing=True)
+        backward_pass_end_event = torch.cuda.Event(enable_timing=True)
+
     """ Start training """
+
+    # start GPU latency timer
+    if log_gpu_pipeline_latency:
+        forward_pass_start_event.record()
 
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
@@ -627,4 +638,11 @@ def mobius_schedule(
                         raise RuntimeError("wait_event failed")
 
     _cleanup()
+
+    # end GPU latency timer
+    if log_gpu_pipeline_latency:
+        backward_pass_end_event.record()
+        torch.cuda.synchronize()
+        get_gpu_latency_list().append(forward_pass_start_event.elapsed_time(backward_pass_end_event))
+
     return forward_data_store

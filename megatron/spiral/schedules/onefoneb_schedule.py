@@ -12,6 +12,7 @@ from megatron.core.pipeline_parallel import forward_step, backward_step, p2p_com
 from megatron.spiral.initialize import get_thunder_cuda_manager
 from megatron.spiral.debug import spiral_print
 from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
+from megatron.spiral.utils import get_gpu_latency_list
 
 
 class PHASE(Enum):
@@ -98,6 +99,12 @@ def onefoneb_schedule(
     output_tensor = None
     fwd_wait_handles = None
     bwd_wait_handles = None
+
+    # GPU latency event
+    log_gpu_pipeline_latency = get_args().spiral_log_gpu_pipeline_latency
+    if log_gpu_pipeline_latency:
+        forward_pass_start_event = torch.cuda.Event(enable_timing=True)
+        backward_pass_end_event = torch.cuda.Event(enable_timing=True)
 
     """Offload grads and optimizer related"""
     offload_grad_after_bwd_stage = get_args().spiral_overlap_offload_grad
@@ -691,6 +698,10 @@ def onefoneb_schedule(
     """ Start training """
     ####################################################################################################
 
+    # start GPU latency timer
+    if log_gpu_pipeline_latency:
+        forward_pass_start_event.record()
+
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
         if _DEBUG_SCHEDULE:
@@ -707,6 +718,10 @@ def onefoneb_schedule(
         if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
             raise RuntimeError("record_event failed")
         prefetch_events.append(prefetch_f0)
+
+        # start GPU latency timer
+        if log_gpu_pipeline_latency:
+            forward_pass_start_event.record()
 
     ##### warmup
     _PHASE = PHASE.WARMUP
@@ -823,4 +838,11 @@ def onefoneb_schedule(
             raise RuntimeError("wait_event failed")
 
     _cleanup()
+
+    # end GPU latency timer
+    if log_gpu_pipeline_latency:
+        backward_pass_end_event.record()
+        torch.cuda.synchronize()
+        get_gpu_latency_list().append(forward_pass_start_event.elapsed_time(backward_pass_end_event))
+
     return forward_data_store

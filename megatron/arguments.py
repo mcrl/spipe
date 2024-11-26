@@ -1158,6 +1158,9 @@ def _add_distributed_args(parser):
                         help='Enable SpiralPipe p2p checkpoint communication')
     group.add_argument('--spiral-ckpt-comm-threshold', type=int, default=1,
                         help='Number of separate checkpoint communication communicators')
+    group.add_argument('--spiral-log-gpu-pipeline-latency', action='store_true',
+                        help='Log GPU pipeline latency. Measure elapsed time from first prefetch to last offload. '
+                        'This is incompatible with stage, hetero, or chunked optimizer, or without overlap offload grad')
     return parser
 
 
