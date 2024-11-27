@@ -4,11 +4,13 @@ from dataclasses import dataclass
 import atexit
 import os
 import psutil
+import subprocess
 
 import torch
 
 import spiral_helper
 
+from megatron import get_args
 from megatron.spiral.debug import spiral_print
 
 SPIRAL_BACKEND = None
@@ -25,6 +27,8 @@ class SpiralBackend:
         shared_memory_header_size,
         alignment,
     ):
+        self._set_numa() # NOTE: Currently does nothing but added to later pass numa ID directly to Comm
+        self._set_cpu_affinity()
         self.thunder_group = spiral_helper.Comm(
             sorted(ranks),
             device,
@@ -41,6 +45,31 @@ class SpiralBackend:
 
         # NOTE (SpiralPipe) Below enforces invocation of destructor for all objects in SpiralBackend when the program exits, either normally or abnormally. This is especially critical for spiral_helper.Comm, which allocates a hugh shared memory.
         atexit.register(self.__del__)
+
+    def _set_numa(self):
+        cpu_numa_bindings = {}
+        lscpu_output = subprocess.check_output(["lscpu", "--parse=CPU,NODE"]).decode()
+        for line in lscpu_output.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            cpu, node = map(int, line.split(","))
+            cpu_numa_bindings[cpu] = node
+        self.numa = {cpu_numa_bindings[cpu] for cpu in psutil.Process().cpu_affinity()}
+        spiral_print(f"SpiralBackend numa nodes: {self.numa}")
+
+    def _set_cpu_affinity(self):
+        # NOTE: StageOptimizer requires separting cores for main and optimizer threads
+        affinity_cores = psutil.Process().cpu_affinity()
+        if get_args().spiral_stage_optimizer:
+            curr_cpu_num = psutil.Process().cpu_num()
+            hyper_cpu_num = curr_cpu_num + 32 if curr_cpu_num < 32 else curr_cpu_num - 32 # TODO: this is hardcoded for 64-core machine
+            os.sched_setaffinity(0, {curr_cpu_num, hyper_cpu_num})
+            self.cpu_affinity = [curr_cpu_num, hyper_cpu_num]
+            self.available_cpus = list(filter(lambda x: x != curr_cpu_num and x != hyper_cpu_num, affinity_cores))
+        else:
+            self.cpu_affinity = affinity_cores
+            self.available_cpus = affinity_cores
+        spiral_print(f"SpiralBackend cpu affinity: {self.cpu_affinity}")
 
     def __del__(self):
         global SPIRAL_BACKEND
@@ -60,19 +89,10 @@ def get_thunder_cuda_manager():
     return SPIRAL_BACKEND.thunder_cuda_manager
 
 
-def get_available_cpu_affinity():
+def get_available_cpus():
     global SPIRAL_BACKEND
     assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
-    return SPIRAL_BACKEND.available_cpu_affinity
-
-
-def set_cpu_affinity():
-    cpu_affinity = psutil.Process().cpu_affinity()
-    curr_cpu_num = psutil.Process().cpu_num()
-    os.sched_setaffinity(0, {curr_cpu_num}) # set current process affinity to current cpu
-    spiral_print(f"pt_main_thread cpu core id = {curr_cpu_num}")
-    cpu_affinity.remove(curr_cpu_num)
-    SPIRAL_BACKEND.available_cpu_affinity = cpu_affinity
+    return SPIRAL_BACKEND.available_cpus
 
 
 @dataclass(frozen=True)
