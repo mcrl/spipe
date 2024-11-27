@@ -7,6 +7,7 @@ EXTRA_ARGS="
     --spiral-backward-virtual-size $SPIRAL_FWD \
     --spiral-recompute-activations \
     --spiral-overlap-offload-grad \
+    --spiral-log-gpu-pipeline-latency \
     --overlap-p2p-communication \
     --megatron-mpi
 "
@@ -18,8 +19,7 @@ fi
 if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
     EXTRA_ARGS+="
     --spiral-stage-optimizer \
-    --spiral-stage-optimizer-pool-size 0
-    "
+    --spiral-stage-optimizer-pool-size $SPIRAL_STAGE_OPTIMIZER_POOL_SIZE"
 fi
 
 if [ ${SPIRAL_HETERO_OPTIMIZER} == "YES" ]; then
