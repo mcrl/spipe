@@ -24,7 +24,7 @@ setup(
                 os.path.join(os.environ['CUDA_BUILD_DIR'], 'lib64'),
             ],
             libraries=['mpi', 'rt', 'pthread', 'cuda', 'cudart', 'nvToolsExt', 'numa'],
-            extra_compile_args=['-g', '-fvisibility=hidden']
+            extra_compile_args=['-g', '-fvisibility=hidden', '-UNDEBUG'] # remove -UNDEBUG on release
         )
     ],
     cmdclass={
