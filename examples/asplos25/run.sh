@@ -64,7 +64,7 @@ EXEC_CMD="numactl --cpunodebind \$((3 - \$OMPI_COMM_WORLD_LOCAL_RANK)) --membind
 EXEC_CMD=$(echo "$EXEC_CMD" | tr '\n' ' ')
 
 # Run script
-mpirun --bind-to none --report-bindings -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS -x OMP_NUM_THREADS=8 \
+mpirun --bind-to none --report-bindings -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS -x OMP_NUM_THREADS=$OMP_NUM_THREADS \
     bash -c "${EXEC_CMD}"
 
 exit 0

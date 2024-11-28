@@ -2,8 +2,7 @@ from .initialize import (
     SpiralBackend,
     get_thunder_group,
     get_thunder_cuda_manager,
-    get_available_cpu_affinity,
-    set_cpu_affinity,
+    get_available_cpus,
 )
 from .init_context import SpiralInitContext, SpiralParamStatus
 from .wrapper_init_context import SpiralWrapperInitContext

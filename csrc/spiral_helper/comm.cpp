@@ -1,6 +1,6 @@
 #include "allocator.hpp"
-#include "util.hpp"
 #include "gdr.hpp"
+#include "util.hpp"
 #include <c10/cuda/CUDAStream.h>
 #include <cassert>
 #include <cstddef>
@@ -10,6 +10,7 @@
 #include <memory>
 #include <mpi.h>
 #include <numa.h>
+#include <numaif.h>
 #include <nvToolsExt.h>
 #include <pybind11/numpy.h>
 #include <semaphore.h>
@@ -188,10 +189,10 @@ public:
   void UnsetSpiralCPUAllocator();
 
   void RemapLocalParamData(torch::Tensor& tensor,
-                          const unsigned int param_id,
-                          const c10::IntArrayRef sizes,
-                          const c10::IntArrayRef strides,
-                          const int64_t storage_offset);
+                           const unsigned int param_id,
+                           const c10::IntArrayRef sizes,
+                           const c10::IntArrayRef strides,
+                           const int64_t storage_offset);
   void SetParamDataInfo(const unsigned int param_id,
                         const uintptr_t dataptr,
                         const size_t size_bytes);
@@ -204,7 +205,7 @@ public:
 
   const py::dict GetCommInfo() const;
   template <typename T>
-  void AllGather(py::array_t<T> &tgt, py::array_t<T> &src) const;
+  void AllGather(py::array_t<T>& tgt, py::array_t<T>& src) const;
 
   inline uintptr_t GetBase(const int mpi_rank) const;
 
@@ -335,7 +336,7 @@ Comm::Comm(std::vector<int> ranks,
     if (Comm::debug)
       spdlog::info("Shared memory created name = {} fd = {} sz = {}",
                    shared_memory_name_, fd_, sb.st_size);
-    assert(sb.st_size == shared_memory_size_);
+    assert((size_t)sb.st_size == shared_memory_size_);
   }
 
   CHECK_MPI(MPI_Barrier(intra_comm_));
@@ -349,10 +350,12 @@ Comm::Comm(std::vector<int> ranks,
     if (Comm::debug)
       spdlog::info("Shared memory opened name = {} fd = {} sz = {}",
                    shared_memory_name_, fd_, sb.st_size);
-    assert(sb.st_size == shared_memory_size_);
+    assert((size_t)sb.st_size == shared_memory_size_);
   }
+  // shared_ptr_ = mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE,
+  //                    MAP_SHARED | MAP_POPULATE, fd_, 0);
   shared_ptr_ = mmap(NULL, shared_memory_size_, PROT_READ | PROT_WRITE,
-                     MAP_SHARED | MAP_POPULATE, fd_, 0);
+                     MAP_SHARED, fd_, 0);
   assert(shared_ptr_ != MAP_FAILED);
   close(fd_);
 
@@ -384,15 +387,22 @@ Comm::Comm(std::vector<int> ranks,
     memset(param_mapping_tbl_, 0, kCpuBufferHeaderSize);
   }
 
-  // Set NUMA
-  if (Comm::debug)
-    spdlog::info("NUMA node ID = {}", numa_node_of_cpu(cpu_id));
-  numa_tonode_memory((void*)GetBase(comm_info_.mpi_rank_), kCpuBufferSize / comm_info_.intra_size_, numa_node_of_cpu(cpu_id));
-
-  // Check NUMA
   {
+    // Set NUMA
+    int numaIdx = numa_node_of_cpu(cpu_id);
+    assert(numaIdx >= 0);
+    if (Comm::debug)
+      spdlog::info("NUMA node of cpu_id = {} is {}", cpu_id, numaIdx);
+    void* partition = (void*)(GetBase(comm_info_.mpi_rank_) +
+                              kCpuBufferSize / comm_info_.intra_size_ *
+                                  comm_info_.intra_rank_);
+    numa_tonode_memory(partition, kCpuBufferSize / comm_info_.intra_size_,
+                       numaIdx);
+
+    // Check NUMA
     int mode;
-    assert(get_mempolicy(&mode, NULL, 0, GetBase(comm_info_.mpi_rank_), MPOL_F_NODE | MPOL_F_ADDR) == 0);
+    assert(get_mempolicy(&mode, NULL, 0, partition,
+                         MPOL_F_NODE | MPOL_F_ADDR) == 0);
     assert(mode == numaIdx);
   }
 
@@ -463,7 +473,7 @@ Comm::~Comm()
   if (shared_memory_size_ == 0)
     return;
 
-  // Distroy memory window
+  // Destroy memory window
   CHECK_MPI(MPI_Win_free(&window_));
 
   // NOTE: since allocator is designed to be a singleton,
@@ -519,10 +529,10 @@ void Comm::UnsetSpiralCPUAllocator()
 }
 
 void Comm::RemapLocalParamData(torch::Tensor& tensor,
-                          const unsigned int param_id,
-                          const c10::IntArrayRef sizes,
-                          const c10::IntArrayRef strides,
-                          const int64_t storage_offset)
+                               const unsigned int param_id,
+                               const c10::IntArrayRef sizes,
+                               const c10::IntArrayRef strides,
+                               const int64_t storage_offset)
 {
   uintptr_t addr = param_mapping_tbl_[param_id].dataptr_;
   std::ptrdiff_t offset =
@@ -541,12 +551,14 @@ void Comm::RemapLocalParamData(torch::Tensor& tensor,
     assert(attributes.type == cudaMemoryTypeHost); // assert already pinned
     // skip pin for assigned bwd param
   } else {
-    assert(attributes.type == cudaMemoryTypeUnregistered);
+    if (Comm::debug)
+      spdlog::info("Param = {} pointer type = {}", param_id, attributes.type);
+    // assert(attributes.type == cudaMemoryTypeUnregistered);
     // pin as readonly for remapped fwd param
     //    CHECK_CUDA(cudaHostRegister(srcptr,
     //                                param_mapping_tbl_[param_id].size_bytes_,
     //                                cudaHostRegisterReadOnly));
-    additional_pinned_ptrs_.push_back(srcptr);
+    // additional_pinned_ptrs_.push_back(srcptr);
   }
 
   // change tensor metadata
@@ -586,7 +598,8 @@ bool Comm::IsParamDataLocal(const unsigned int param_id) const
   return param_mapping_tbl_[param_id].inter_rank_ == comm_info_.inter_rank_;
 }
 
-void Comm::SyncParamDataInfo() {
+void Comm::SyncParamDataInfo()
+{
   MPI_Barrier(MPI_COMM_WORLD);
 
   if (comm_info_.intra_rank_ == 0) {
@@ -653,7 +666,7 @@ void Comm::FetchRemoteParam(const unsigned int param_id,
   int rank = comm_info_.mpi_rank_;
   int target_rank = param_mapping_tbl_[param_id].mpi_rank_;
   size_t size = param_mapping_tbl_[param_id].size_bytes_;
-  assert(size_bytes_ <= ULONG_MAX);
+  assert(size <= ULONG_MAX);
 
   MPI_Aint base_disp =
       param_mapping_tbl_[param_id].dataptr_ - GetBase(target_rank);
@@ -701,7 +714,7 @@ void Comm::FetchRemoteParam(const unsigned int param_id,
                                     args));
     }
   } else {
-    FetchRemoteArgs *args = (FetchRemoteArgs *)malloc(sizeof(FetchRemoteArgs));
+    FetchRemoteArgs* args = (FetchRemoteArgs*)malloc(sizeof(FetchRemoteArgs));
     assert(args != nullptr);
     args->param_id = param_id;
     args->staged_copy = false;
@@ -733,13 +746,14 @@ const py::dict Comm::GetCommInfo() const
 }
 
 template <typename T>
-void Comm::AllGather(py::array_t<T> &tgt, py::array_t<T> &src) const {
+void Comm::AllGather(py::array_t<T>& tgt, py::array_t<T>& src) const
+{
   py::buffer_info buf = src.request();
   py::ssize_t ag_numel =
       std::reduce(buf.shape.begin(), buf.shape.end(), 1, std::multiplies<>());
 
-  auto *tgt_buf = (T *)tgt.mutable_data();
-  auto *src_buf = (T *)src.mutable_data();
+  auto* tgt_buf = (T*)tgt.mutable_data();
+  auto* src_buf = (T*)src.mutable_data();
   CHECK_MPI(MPI_Allgather(src_buf, ag_numel, MPI_UNSIGNED, tgt_buf, ag_numel,
                           MPI_UNSIGNED, mpi_comm_));
 }

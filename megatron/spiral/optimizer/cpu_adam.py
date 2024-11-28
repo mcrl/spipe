@@ -4,7 +4,7 @@ from megatron import get_args
 
 from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
-from megatron.spiral import get_available_cpu_affinity
+from megatron.spiral import get_available_cpus
 
 from .cpu_adam_builder import SpiralCPUAdamBuilder
 
@@ -128,7 +128,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             weight_decay,
             adamw_mode,
             should_log_le("info"),
-            get_available_cpu_affinity()
+            get_available_cpus()
         )
         self.inv_scale = 0
         self.ev_long = -1
@@ -243,7 +243,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
     @torch.no_grad()
     def rollback(self, sync=False):
         """Rollback the model parameters.
-        
+
         Args:
             sync: wait until all parameter rollbacks are completed.
                 Defaults to ``False``.
