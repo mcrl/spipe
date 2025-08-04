@@ -23,9 +23,9 @@ typedef unsigned short ds_half_precision_t;
   void Rollback_##SPAN(float* _params, float* grads, float* _exp_avg,          \
                        float* _exp_avg_sq, size_t _param_size);
 
-class SpiralAdamOptimizer {
+class SPipeAdamOptimizer {
 public:
-  SpiralAdamOptimizer(float alpha = 1e-3,
+  SPipeAdamOptimizer(float alpha = 1e-3,
                         float betta1 = 0.9,
                         float betta2 = 0.999,
                         float eps = 1e-8,
@@ -36,7 +36,7 @@ public:
       _adamw_mode(adamw_mode)
   {
   }
-  ~SpiralAdamOptimizer() {}
+  ~SPipeAdamOptimizer() {}
 
 #if defined(__AVX512__) or defined(__AVX256__)
   template <int span>
@@ -118,7 +118,7 @@ private:
 
 #if defined(__AVX512__) or defined(__AVX256__)
 template <int span>
-void SpiralAdamOptimizer::Step_AVX(size_t* rounded_size,
+void SPipeAdamOptimizer::Step_AVX(size_t* rounded_size,
                                    float* _params,
                                    float* grads,
                                    float* _exp_avg,
@@ -203,7 +203,7 @@ void SpiralAdamOptimizer::Step_AVX(size_t* rounded_size,
 }
 #endif
 
-void SpiralAdamOptimizer::Step_1(float* _params,
+void SPipeAdamOptimizer::Step_1(float* _params,
                                    float* grads,
                                    float* _exp_avg,
                                    float* _exp_avg_sq,
@@ -257,7 +257,7 @@ void SpiralAdamOptimizer::Step_1(float* _params,
   }
 }
 
-void SpiralAdamOptimizer::Step_4(float* _params,
+void SPipeAdamOptimizer::Step_4(float* _params,
                                    float* grads,
                                    float* _exp_avg,
                                    float* _exp_avg_sq,
@@ -273,7 +273,7 @@ void SpiralAdamOptimizer::Step_4(float* _params,
            (_param_size - rounded_size));
 }
 
-void SpiralAdamOptimizer::Step_8(float* _params,
+void SPipeAdamOptimizer::Step_8(float* _params,
                                    float* grads,
                                    float* _exp_avg,
                                    float* _exp_avg_sq,
@@ -291,7 +291,7 @@ void SpiralAdamOptimizer::Step_8(float* _params,
 
 #if defined(__AVX512__) or defined(__AVX256__)
 template <int span>
-void SpiralAdamOptimizer::Rollback_AVX(size_t* rounded_size,
+void SPipeAdamOptimizer::Rollback_AVX(size_t* rounded_size,
                                        float* _params,
                                        float* grads,
                                        float* _exp_avg,
@@ -383,7 +383,7 @@ void SpiralAdamOptimizer::Rollback_AVX(size_t* rounded_size,
 }
 #endif
 
-void SpiralAdamOptimizer::Rollback_1(float* _params,
+void SPipeAdamOptimizer::Rollback_1(float* _params,
                                      float* grads,
                                      float* _exp_avg,
                                      float* _exp_avg_sq,
@@ -443,7 +443,7 @@ void SpiralAdamOptimizer::Rollback_1(float* _params,
   }
 }
 
-void SpiralAdamOptimizer::Rollback_4(float* _params,
+void SPipeAdamOptimizer::Rollback_4(float* _params,
                                      float* grads,
                                      float* _exp_avg,
                                      float* _exp_avg_sq,
@@ -459,7 +459,7 @@ void SpiralAdamOptimizer::Rollback_4(float* _params,
                (_param_size - rounded_size));
 }
 
-void SpiralAdamOptimizer::Rollback_8(float* _params,
+void SPipeAdamOptimizer::Rollback_8(float* _params,
                                      float* grads,
                                      float* _exp_avg,
                                      float* _exp_avg_sq,

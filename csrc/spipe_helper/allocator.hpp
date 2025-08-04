@@ -9,10 +9,10 @@
 
 namespace c10 {
 
-class SpiralCPUAllocator : public at::Allocator {
+class SPipeCPUAllocator : public at::Allocator {
 public:
-  static SpiralCPUAllocator* instance();
-  static SpiralCPUAllocator*
+  static SPipeCPUAllocator* instance();
+  static SPipeCPUAllocator*
   instance(uintptr_t base, size_t offset, size_t size, size_t align);
 
   DataPtr allocate(size_t nbytes) override;
@@ -20,7 +20,7 @@ public:
   at::DeleterFnPtr raw_deleter() const override;
   void* malloc(size_t nbytes);
   void copy_data(void* dest, const void* src, std::size_t count) const override {}; // not implemented
-  static constexpr bool debug = false; // TODO (SpiralPipe) remove when release
+  static constexpr bool debug = false; // TODO (SPipe) remove when release
 
 private:
   struct Block {
@@ -54,14 +54,14 @@ private:
     }
   };
 
-  SpiralCPUAllocator() = default; // for lazy initialization
+  SPipeCPUAllocator() = default; // for lazy initialization
   void lazy_init(uintptr_t base, size_t offset, size_t size, size_t align);
-  virtual ~SpiralCPUAllocator() override;
+  virtual ~SPipeCPUAllocator() override;
 
   void PrintSummary_(std::string prefix = "");
   void MergeLR(Block* center);
 
-  static SpiralCPUAllocator* instance_;
+  static SPipeCPUAllocator* instance_;
 
   // base_ is virtual address of host shared memory
   // base_ + offset_ is virtual address of allocator
