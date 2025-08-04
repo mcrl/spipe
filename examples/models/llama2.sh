@@ -1,98 +1,64 @@
 #!/bin/bash
 
 # Model spec
-if [ $MODEL_SIZE -eq 1 ]; then
-    # 1.3B
-    LAYER=24
-    HIDDEN=2048
-    FFN_HIDDEN=5504
-    HEAD=16
-    NUM_KV_HEADS=16
-elif [ $MODEL_SIZE -eq 7 ]; then
-    # 7B
-    LAYER=32
-    HIDDEN=4096
-    FFN_HIDDEN=11008
-    HEAD=32
-    NUM_KV_HEADS=32
-elif [ $MODEL_SIZE -eq 10 ]; then
+if [ $MODEL_SIZE -eq 10 ]; then
     # 10B
     LAYER=48
     HIDDEN=4096
-    FFN_HIDDEN=13564
+    FFN_HIDDEN=11008
     HEAD=2
     NUM_KV_HEADS=2
-elif [ $MODEL_SIZE -eq 13 ]; then
-    # 13B
-    LAYER=40
-    HIDDEN=4096
-    FFN_HIDDEN=13564
-    HEAD=2
-    NUM_KV_HEADS=2
-elif [ $MODEL_SIZE -eq 15 ]; then
-    # 15B
+elif [ $MODEL_SIZE -eq 19 ]; then
+    # 19B
     LAYER=48
+    HIDDEN=5632
+    FFN_HIDDEN=13312
+    HEAD=4
+    NUM_KV_HEADS=4
+elif [ $MODEL_SIZE -eq 30 ]; then
+    # 30B
+    LAYER=96
     HIDDEN=5120
-    FFN_HIDDEN=13564
-    HEAD=2
-    NUM_KV_HEADS=2
-elif [ $MODEL_SIZE -eq 58 ]; then
-    # 58B
-    LAYER=128
+    FFN_HIDDEN=12800
+    HEAD=4
+    NUM_KV_HEADS=4
+elif [ $MODEL_SIZE -eq 40 ]; then
+    # 40B
+    LAYER=96
+    HIDDEN=5888
+    FFN_HIDDEN=15360
+    HEAD=4
+    NUM_KV_HEADS=4
+elif [ $MODEL_SIZE -eq 52 ]; then
+    # 52B
+    LAYER=96
+    HIDDEN=6656
+    FFN_HIDDEN=17920
+    HEAD=8
+    NUM_KV_HEADS=8
+elif [ $MODEL_SIZE -eq 69 ]; then
+    # 69B
+    LAYER=96
+    HIDDEN=7680
+    FFN_HIDDEN=20480
+    HEAD=8
+    NUM_KV_HEADS=8
+elif [ $MODEL_SIZE -eq 88 ]; then
+    # 88B
+    LAYER=192
     HIDDEN=6144
     FFN_HIDDEN=16384
-    HEAD=4
-    NUM_KV_HEADS=4
-elif [ $MODEL_SIZE -eq 80 ]; then
-    # 80B
-    LAYER=128
-    HIDDEN=7168
-    FFN_HIDDEN=18944
-    HEAD=4
-    NUM_KV_HEADS=4
-elif [ $MODEL_SIZE -eq 103 ]; then
-    # 103B
-    LAYER=128
-    HIDDEN=8192
-    FFN_HIDDEN=27648
-    HEAD=8
-    NUM_KV_HEADS=8
-elif [ $MODEL_SIZE -eq 131 ]; then
-    # 131B
-    LAYER=128
-    HIDDEN=9216
-    FFN_HIDDEN=30208
-    HEAD=8
-    NUM_KV_HEADS=8
-elif [ $MODEL_SIZE -eq 162 ]; then
-    # 162B
-    LAYER=128
-    HIDDEN=10240
-    FFN_HIDDEN=32768
-    HEAD=8
-    NUM_KV_HEADS=8
-elif [ $MODEL_SIZE -eq 154 ]; then
-    # 154B
+    HEAD=16
+    NUM_KV_HEADS=16
+elif [ $MODEL_SIZE -eq 110 ]; then
+    # 110B
     LAYER=192
-    HIDDEN=8192
-    FFN_HIDDEN=27648
-    HEAD=16
-    NUM_KV_HEADS=16
-elif [ $MODEL_SIZE -eq 196 ]; then
-    # 196B
-    LAYER=128
-    HIDDEN=11264
-    FFN_HIDDEN=35840
-    HEAD=16
-    NUM_KV_HEADS=16
-elif [ $MODEL_SIZE -eq 233 ]; then
-    # 233B
-    LAYER=128
-    HIDDEN=12288
-    FFN_HIDDEN=39424
+    HIDDEN=6912
+    FFN_HIDDEN=18432
     HEAD=16
     NUM_KV_HEADS=16
 else
+    echo "Unsupported model size"
     HIDDEN=2048 
     FFN_HIDDEN=5504
     LAYER=24

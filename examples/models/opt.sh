@@ -1,59 +1,80 @@
 #!/bin/bash
 
 # Model spec
-if [ $MODEL_SIZE -eq 0 ]; then
-    # 350M
-    LAYER=24
-    HIDDEN=1024
-    HEAD=16
-elif [ $MODEL_SIZE -eq 1 ]; then
-    # 1.3B
-    LAYER=24
-    HIDDEN=2048
-    HEAD=32
-elif [ $MODEL_SIZE -eq 2 ]; then
-    # 2.7B
-    LAYER=32
-    HIDDEN=2560
-    HEAD=32
-elif [ $MODEL_SIZE -eq 6 ]; then
-    # 6.7B
-    LAYER=32
+if [ $MODEL_SIZE -eq 10 ]; then
+    # 10B
+    LAYER=48
     HIDDEN=4096
     HEAD=32
-elif [ $MODEL_SIZE -eq 13 ]; then
-    # 13B
-    LAYER=40
-    HIDDEN=5120
-    HEAD=40
+elif [ $MODEL_SIZE -eq 19 ]; then
+    # 19B
+    LAYER=48
+    HIDDEN=5632
+    HEAD=44
 elif [ $MODEL_SIZE -eq 30 ]; then
     # 30B
-    LAYER=48
-    HIDDEN=7168
-    HEAD=56
+    LAYER=96
+    HIDDEN=5120
+    HEAD=40
+elif [ $MODEL_SIZE -eq 35 ]; then
+    # 35B
+    LAYER=96
+    HIDDEN=5504
+    HEAD=32
+elif [ $MODEL_SIZE -eq 40 ]; then
+    # 40B
+    LAYER=96
+    HIDDEN=5888
+    HEAD=46
 elif [ $MODEL_SIZE -eq 52 ]; then
     # 52B
-    LAYER=64
-    HIDDEN=8192
-    HEAD=64
-elif [ $MODEL_SIZE -eq 81 ]; then
-    # 81B
-    LAYER=64
-    HIDDEN=10240
-    HEAD=64
-elif [ $MODEL_SIZE -eq 121 ]; then
-    # 121B
     LAYER=96
-    HIDDEN=10240
-    HEAD=96
-elif [ $MODEL_SIZE -eq 175 ]; then
-    # 175B
+    HIDDEN=6656
+    HEAD=52
+elif [ $MODEL_SIZE -eq 60 ]; then
+    # 60B
     LAYER=96
-    HIDDEN=12288
-    HEAD=96
+    HIDDEN=7168
+    HEAD=56
+elif [ $MODEL_SIZE -eq 67 ]; then
+    # 67B
+    LAYER=192
+    HIDDEN=5376
+    HEAD=48
+elif [ $MODEL_SIZE -eq 69 ]; then
+    # 69B
+    LAYER=96
+    HIDDEN=7680
+    HEAD=48
+elif [ $MODEL_SIZE -eq 74 ]; then
+    # 74B
+    LAYER=192
+    HIDDEN=5632
+    HEAD=44
+elif [ $MODEL_SIZE -eq 77 ]; then
+    # 77B
+    LAYER=192
+    HIDDEN=5760
+    HEAD=48
+elif [ $MODEL_SIZE -eq 80 ]; then
+    # 88B
+    LAYER=192
+    HIDDEN=5888
+    HEAD=46
+elif [ $MODEL_SIZE -eq 88 ]; then
+    # 88B
+    LAYER=192
+    HIDDEN=6144
+    HEAD=48
+elif [ $MODEL_SIZE -eq 110 ]; then
+    # 110B
+    LAYER=192
+    HIDDEN=6912
+    HEAD=54
 else
-    LAYER=32
-    HIDDEN=1024
+    echo "Unsupported model size"
+    HIDDEN=2048 
+    LAYER=24
     HEAD=16
 fi
 
