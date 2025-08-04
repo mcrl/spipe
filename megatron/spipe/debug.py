@@ -36,10 +36,10 @@ def debug_module2name(module):
 
 
 def debug_module2name_id(module):
-    if hasattr(module, "spiral_forward_stage_id") and hasattr(
-        module, "spiral_backward_stage_id"
+    if hasattr(module, "spipe_forward_stage_id") and hasattr(
+        module, "spipe_backward_stage_id"
     ):
-        return f"name={debug_module2name(module)} fid={module.spiral_forward_stage_id} bid={module.spiral_backward_stage_id}"
+        return f"name={debug_module2name(module)} fid={module.spipe_forward_stage_id} bid={module.spipe_backward_stage_id}"
     else:
         return f"name={debug_module2name(module)} id={module.id}"
 
@@ -49,10 +49,10 @@ def debug_module2name_class(module):
 
 
 def debug_module2class_id(module):
-    if hasattr(module, "spiral_forward_stage_id") and hasattr(
-        module, "spiral_backward_stage_id"
+    if hasattr(module, "spipe_forward_stage_id") and hasattr(
+        module, "spipe_backward_stage_id"
     ):
-        return f"class={module.__class__.__name__} fid={module.spiral_forward_stage_id} bid={module.spiral_backward_stage_id}"
+        return f"class={module.__class__.__name__} fid={module.spipe_forward_stage_id} bid={module.spipe_backward_stage_id}"
     else:
         return f"class={module.__class__.__name__} id={module.id}"
 
@@ -65,39 +65,39 @@ def debug_param2name(param):
 
 
 def debug_param2name_id(param):
-    return f"name={debug_param2name(param)} id={param.spiral_id}"
+    return f"name={debug_param2name(param)} id={param.spipe_id}"
 
 
 def debug_param2name_id_shape(param):
     return (
-        f"name={debug_param2name(param)} id={param.spiral_id} shape={param.data.shape}"
+        f"name={debug_param2name(param)} id={param.spipe_id} shape={param.data.shape}"
     )
 
 
 def debug_param2name_id_shape_device(param):
-    return f"name={debug_param2name(param)} id={param.spiral_id} shape={param.data.shape} device={param.device}"
+    return f"name={debug_param2name(param)} id={param.spipe_id} shape={param.data.shape} device={param.device}"
 
 
 def debug_param2name_id_numel(param):
-    return f"name={debug_param2name(param)} id={param.spiral_id} numel={param.numel()}"
+    return f"name={debug_param2name(param)} id={param.spipe_id} numel={param.numel()}"
 
 
 def debug_param2name_id_shape_status(param):
-    return f"name={debug_param2name(param)} id={param.spiral_id} shape={param.data.shape} status={param.spiral_status}"
+    return f"name={debug_param2name(param)} id={param.spipe_id} shape={param.data.shape} status={param.spipe_status}"
 
 
 def debug_param2id_shape_status(param):
-    return f"id={param.spiral_id} gpu_shape={param.data.shape} cpu_shape={param.spiral_tensor.shape} status={param.spiral_status}"
+    return f"id={param.spipe_id} gpu_shape={param.data.shape} cpu_shape={param.spipe_tensor.shape} status={param.spipe_status}"
 
 
 def debug_param2id_numel_dataptr(param):
-    msg = f"id={param.spiral_id} numel={param.numel()} spiral_tensor.numel={param.spiral_tensor.numel()}"
+    msg = f"id={param.spipe_id} numel={param.numel()} spipe_tensor.numel={param.spipe_tensor.numel()}"
     if hasattr(param, "grad") and param.grad is not None:
         msg += f" grad.numel={param.grad.numel()} grad.data_ptr={hex(param.grad.data_ptr())}"
     if hasattr(param, "main_grad") and param.main_grad is not None:
         msg += f" main_grad.numel={param.main_grad.numel()} main_grad.data_ptr={hex(param.main_grad.data_ptr())}"
-    if hasattr(param.spiral_tensor, "grad") and param.spiral_tensor.grad is not None:
-        msg += f" spiral_tensor.grad.numel={param.spiral_tensor.grad.numel()} spiral_tensor.grad.data_ptr={hex(param.spiral_tensor.grad.data_ptr())}"
+    if hasattr(param.spipe_tensor, "grad") and param.spipe_tensor.grad is not None:
+        msg += f" spipe_tensor.grad.numel={param.spipe_tensor.grad.numel()} spipe_tensor.grad.data_ptr={hex(param.spipe_tensor.grad.data_ptr())}"
     return msg
 
 
@@ -187,16 +187,16 @@ def print_backward_tensors(tensor):
         _print_bwd_tensors(tensor.grad_fn)
 
 
-def spiral_print(message):
+def spipe_print(message):
     _DEBUG_PID = False
 
     if torch.distributed.is_initialized():
-        prefix = f"[Spiral] " + f"[{torch.distributed.get_rank()}] "
+        prefix = f"[spipe] " + f"[{torch.distributed.get_rank()}] "
         if _DEBUG_PID:
             prefix += f"[pid={os.getpid()}] "
         message = prefix + message
     else:
-        prefix = f"[Spiral] "
+        prefix = f"[spipe] "
         if _DEBUG_PID:
             prefix += f"[pid={os.getpid()}] "
         message = prefix + message
@@ -210,8 +210,8 @@ def spiral_print(message):
         fh.flush()
 
 
-def spiral_report_memory(message, gpu=True, cpu=True):
-    """SpiralPipe memory report"""
+def spipe_report_memory(message, gpu=True, cpu=True):
+    """SPipe memory report"""
     giga_bytes = 1024**3
 
     string = message
@@ -225,4 +225,4 @@ def spiral_report_memory(message, gpu=True, cpu=True):
     if cpu:
         rss_used = psutil.Process(os.getpid()).memory_info().rss
         string += " | CPU: {} GB".format(round(rss_used / giga_bytes, 2))
-    spiral_print(string)
+    spipe_print(string)

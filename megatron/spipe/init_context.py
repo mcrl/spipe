@@ -13,22 +13,22 @@ from torch import Tensor
 from torch.nn import Module, Parameter
 
 from megatron import get_args
-from megatron.spiral import get_thunder_group
-from megatron.spiral.initialize import get_thunder_cuda_manager
-from megatron.spiral.debug import (
-    spiral_print,
-    spiral_report_memory,
+from megatron.spipe import get_thunder_group
+from megatron.spipe.initialize import get_thunder_cuda_manager
+from megatron.spipe.debug import (
+    spipe_print,
+    spipe_report_memory,
     debug_module2class_id,
 )
-from megatron.spiral.utils import is_spiral_param
-import megatron.spiral.build_state as sbs
+from megatron.spipe.utils import is_spipe_param
+import megatron.spipe.build_state as sbs
 
 
-spiral_init_context = 0
+spipe_init_context = 0
 top_level_context = None
 
 
-class SpiralParamStatus(Enum):
+class SPipeParamStatus(Enum):
     # parameter is fully present on local device and ready for use
     GPU = 1
 
@@ -53,8 +53,8 @@ def get_all_subclasses(cls):
 # Inserts _post_init_method at the end of init method
 # for all sub classes of torch.nn.Module
 class InsertPostInitMethodToModuleSubClasses(object):
-    num_spiral_parameters = 0
-    num_spiral_elements = 0
+    num_spipe_parameters = 0
+    num_spipe_elements = 0
 
     def __init__(self, enabled=True, dtype=None):
         """A context to enable massive model construction for training with PP.
@@ -77,32 +77,32 @@ class InsertPostInitMethodToModuleSubClasses(object):
         if not self.enabled:
             return
 
-        global spiral_init_context
-        if spiral_init_context == 0:
+        global spipe_init_context
+        if spipe_init_context == 0:
             self.patch_init_and_builtins()
             global top_level_context
             top_level_context = self
-        spiral_init_context += 1
+        spipe_init_context += 1
 
     def __exit__(self, exc_type, exc_value, traceback):
         if not self.enabled:
             return
 
-        global spiral_init_context
-        spiral_init_context -= 1
+        global spipe_init_context
+        spipe_init_context -= 1
 
         # Exiting the top level context
-        if spiral_init_context == 0:
+        if spipe_init_context == 0:
             self.unpatch_init_and_builtins()
             global top_level_context
             top_level_context = None
 
             billion_elems = (
-                InsertPostInitMethodToModuleSubClasses.num_spiral_elements / 1e9
+                InsertPostInitMethodToModuleSubClasses.num_spipe_elements / 1e9
             )
-            num_params = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
-            spiral_print(
-                f"finished initializing spiral params = {num_params}, elems = {billion_elems:.2f}B"
+            num_params = InsertPostInitMethodToModuleSubClasses.num_spipe_parameters
+            spipe_print(
+                f"finished initializing spipe params = {num_params}, elems = {billion_elems:.2f}B"
             )
 
         # Now that we cleaned up the metaclass injection, raise the exception.
@@ -121,7 +121,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
                     params_to_apply_fn_to: Iterable[Parameter] = [
                         p
                         for p in module_to_apply_fn_to.parameters(recurse=False)
-                        if is_spiral_param(p)
+                        if is_spipe_param(p)
                     ]
 
                     # Copy parameters to local device
@@ -147,24 +147,24 @@ class InsertPostInitMethodToModuleSubClasses(object):
             @functools.wraps(f)
             def wrapper(module, *args, **kwargs):
                 is_child_module = False
-                if not hasattr(module, "_spiral_child_entered"):
+                if not hasattr(module, "_spipe_child_entered"):
                     # child's __init__ was called, since parents all see the same object they can now skip post_init
                     is_child_module = True
-                    setattr(module, "_spiral_child_entered", True)
+                    setattr(module, "_spipe_child_entered", True)
 
-                    # attach spiral module recurse attributes
-                    num_module_spiral_parameters_before = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
+                    # attach spipe module recurse attributes
+                    num_module_spipe_parameters_before = InsertPostInitMethodToModuleSubClasses.num_spipe_parameters
 
                 f(module, *args, **kwargs)
 
                 if is_child_module:
                     # child's __init__ is done, now we can run a single post_init on the child object
-                    delattr(module, "_spiral_child_entered")
+                    delattr(module, "_spipe_child_entered")
                     self._post_init_method(module)
 
-                    # attach spiral module recurse attributes
-                    num_module_spiral_parameters_after = InsertPostInitMethodToModuleSubClasses.num_spiral_parameters
-                    setattr(module, "num_spiral_params_recurse", num_module_spiral_parameters_after - num_module_spiral_parameters_before)
+                    # attach spipe module recurse attributes
+                    num_module_spipe_parameters_after = InsertPostInitMethodToModuleSubClasses.num_spipe_parameters
+                    setattr(module, "num_spipe_params_recurse", num_module_spipe_parameters_after - num_module_spipe_parameters_before)
 
             return wrapper
 
@@ -189,7 +189,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
         # Replace .__init__() for future subclasses of torch.nn.Module
         torch.nn.modules.module.Module.__init_subclass__ = classmethod(_init_subclass)
-        if SpiralInitContext.override_module_apply:
+        if SPipeInitContext.override_module_apply:
             torch.nn.modules.module.Module.apply = apply(
                 torch.nn.modules.module.Module._old_apply
             )
@@ -209,7 +209,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
             torch.nn.modules.module.Module.__init_subclass__ = (
                 torch.nn.modules.module.Module._old_init_subclass
             )
-            if SpiralInitContext.override_module_apply:
+            if SPipeInitContext.override_module_apply:
                 torch.nn.modules.module.Module.apply = (
                     torch.nn.modules.module.Module._old_apply
                 )
@@ -221,7 +221,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
         pass
 
 
-class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
+class SPipeInitContext(InsertPostInitMethodToModuleSubClasses):
     override_module_apply = False  # unused but kept for future
 
     def __init__(
@@ -242,171 +242,171 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
         super().__init__(enabled=enabled, dtype=dtype)
 
     def _post_init_method(self, module):
-        num_spiral_params = 0
+        num_spipe_params = 0
 
-        # Attach spiral stage attribute
+        # Attach spipe stage attribute
         from megatron.core import mpu
 
-        if not hasattr(module, "spiral_forward_stage_id"):
+        if not hasattr(module, "spipe_forward_stage_id"):
             setattr(
                 module,
-                "spiral_forward_stage_id",
-                mpu.get_spiral_forward_virtual_rank(),
+                "spipe_forward_stage_id",
+                mpu.get_spipe_forward_virtual_rank(),
             )
-        if not hasattr(module, "spiral_backward_stage_id"):
+        if not hasattr(module, "spipe_backward_stage_id"):
             setattr(
                 module,
-                "spiral_backward_stage_id",
-                mpu.get_spiral_backward_virtual_rank(),
+                "spipe_backward_stage_id",
+                mpu.get_spipe_backward_virtual_rank(),
             )
         assert (
-            module.spiral_forward_stage_id is not None
-            or module.spiral_backward_stage_id is not None
+            module.spipe_forward_stage_id is not None
+            or module.spipe_backward_stage_id is not None
         ), f"{module.__class__.__name__} is neither forward nor backward stage"
 
         # Convert module's parameters
         for param in module.parameters(recurse=False):
-            # TODO (SpiralPipe) Currently, all params are converted to spiral params.
-            # Modify this when selectively converting params to spiral params is required
-            if not is_spiral_param(param):
-                self._convert_to_spiral_param(param)
+            # TODO (SPipe) Currently, all params are converted to spipe params.
+            # Modify this when selectively converting params to spipe params is required
+            if not is_spipe_param(param):
+                self._convert_to_spipe_param(param)
 
-            if is_spiral_param(param):
-                num_spiral_params += 1
+            if is_spipe_param(param):
+                num_spipe_params += 1
 
-            if get_args().spiral_remap:
+            if get_args().spipe_remap:
                 # Conditionally ordered offload and free
-                # fwd stage: free; since its spiral_tensor will be re-mapped
+                # fwd stage: free; since its spipe_tensor will be re-mapped
                 # bwd stage: offload -> free; its data will be used
-                if is_spiral_param(param):
-                    if module.spiral_forward_stage_id is not None:
+                if is_spipe_param(param):
+                    if module.spipe_forward_stage_id is not None:
                         param.free()
-                    elif module.spiral_backward_stage_id is not None:
+                    elif module.spipe_backward_stage_id is not None:
                         param.offload()
                         param.free()
             else:
                 param.offload()
                 param.free()
 
-        # Attach spiral module methods
-        module.spiral_fetch = lambda *args, **kwargs: self._fetch_module(
+        # Attach spipe module methods
+        module.spipe_fetch = lambda *args, **kwargs: self._fetch_module(
             module, *args, **kwargs
         )
-        module.spiral_offload = lambda *args, **kwargs: self._offload_module(
+        module.spipe_offload = lambda *args, **kwargs: self._offload_module(
             module, *args, **kwargs
         )
-        module.spiral_free = lambda *args, **kwargs: self._free_module(
+        module.spipe_free = lambda *args, **kwargs: self._free_module(
             module, *args, **kwargs
         )
-        module.spiral_offload_grad = lambda *args, **kwargs: self._offload_grad_module(
+        module.spipe_offload_grad = lambda *args, **kwargs: self._offload_grad_module(
             module, *args, **kwargs
         )
-        module.spiral_free_grad = lambda *args, **kwargs: self._free_grad_module(
+        module.spipe_free_grad = lambda *args, **kwargs: self._free_grad_module(
             module, *args, **kwargs
         )
-        module.spiral_save_params_info = lambda *args, **kwargs: self._save_module_params_info(
+        module.spipe_save_params_info = lambda *args, **kwargs: self._save_module_params_info(
             module, *args, **kwargs
         )
-        module.spiral_remap = lambda *args, **kwargs: self._remap_module(
+        module.spipe_remap = lambda *args, **kwargs: self._remap_module(
             module, *args, **kwargs
         )
-        module.spiral_assert_free_grad = lambda *args, **kwargs: self._assert_free_grad_module(
+        module.spipe_assert_free_grad = lambda *args, **kwargs: self._assert_free_grad_module(
             module, *args, **kwargs
         )
 
-        # Attach spiral module attributes
-        setattr(module, "num_spiral_params", num_spiral_params)
+        # Attach spipe module attributes
+        setattr(module, "num_spipe_params", num_spipe_params)
 
-    def _convert_to_spiral_param(self, param):
-        """Converts a parameter to a SpiralPipe parameter.
+    def _convert_to_spipe_param(self, param):
+        """Converts a parameter to a SPipe parameter.
 
-        NOTE (SpiralPipe) .to() changes dataptr while .copy_() preserves. .empty() also changes dataptr
+        NOTE (SPipe) .to() changes dataptr while .copy_() preserves. .empty() also changes dataptr
                     Be aware not to allocate redundant memory and provoke unnecessary garbage collection for allocators
 
-        NOTE (SpiralPipe) Currently, all spiral_tensor is pinned by default.
-                    This is because Spiral allocator memory is registered as pinned memory.
+        NOTE (SPipe) Currently, all spipe_tensor is pinned by default.
+                    This is because spipe allocator memory is registered as pinned memory.
                     As a result, pin_memory argument should not be passed to Tensor creation APIs.
                     Although there is no max pinned memory limit in CUDA, there are possible overheads(https://stackoverflow.com/questions/22300100/about-pinned-memory-in-cuda-is-there-an-upper-limit-on-it)
         """
-        InsertPostInitMethodToModuleSubClasses.num_spiral_parameters += 1
-        InsertPostInitMethodToModuleSubClasses.num_spiral_elements += param.numel()
+        InsertPostInitMethodToModuleSubClasses.num_spipe_parameters += 1
+        InsertPostInitMethodToModuleSubClasses.num_spipe_elements += param.numel()
 
-        param.spiral_id = sbs.get_add_spiral_next_param_number_to_build()
-        param.spiral_status = SpiralParamStatus.GPU if param.is_cuda else SpiralParamStatus.CPU
-        param.spiral_shape = param.shape
-        param.spiral_stride = param.stride()
-        param.spiral_storage_offset = param.storage_offset()
-        param.spiral_numel = param.numel()
-        param.spiral_tensor = torch.empty(
+        param.spipe_id = sbs.get_add_spipe_next_param_number_to_build()
+        param.spipe_status = SPipeParamStatus.GPU if param.is_cuda else SPipeParamStatus.CPU
+        param.spipe_shape = param.shape
+        param.spipe_stride = param.stride()
+        param.spipe_storage_offset = param.storage_offset()
+        param.spipe_numel = param.numel()
+        param.spipe_tensor = torch.empty(
             0,
             dtype=param.dtype,
             device=self.remote_device,
-            # NOTE (SpiralPipe) pin_memory arg should not be passed
+            # NOTE (SPipe) pin_memory arg should not be passed
         )
 
         def _free_data(param: Parameter) -> None:
             """Free weight data of a parameter."""
             param.data = torch.empty(0, dtype=param.dtype, device=self.local_device)
-            param.spiral_status = SpiralParamStatus.CPU
+            param.spipe_status = SPipeParamStatus.CPU
 
         def _offload_data(param, non_blocking=False):
             """Offload weight data of a parameter to remote device."""
-            assert param.spiral_tensor is not None, "Offload tensor is None"
+            assert param.spipe_tensor is not None, "Offload tensor is None"
 
-            if param.spiral_tensor.numel() == 0:
-                if get_args().spiral_remap:
-                    assert sbs.get_spiral_backward_stage_build_phase() is not None, \
-                        "Offloading to empty spiral tensor should be executed only once during SpiralPipe with remapping backward stage build phase"
-                    # NOTE (SpiralPipe) pin_memory arg should not be passed when offloading to shared memory, since it transfers the data to pinned memory region
-                    param.spiral_tensor = torch.empty(param.spiral_shape, device=self.remote_device, dtype=param.dtype)
+            if param.spipe_tensor.numel() == 0:
+                if get_args().spipe_remap:
+                    assert sbs.get_spipe_backward_stage_build_phase() is not None, \
+                        "Offloading to empty spipe tensor should be executed only once during SPipe with remapping backward stage build phase"
+                    # NOTE (SPipe) pin_memory arg should not be passed when offloading to shared memory, since it transfers the data to pinned memory region
+                    param.spipe_tensor = torch.empty(param.spipe_shape, device=self.remote_device, dtype=param.dtype)
                 else:
-                    assert sbs.get_spiral_forward_stage_build_phase() is not None, \
-                        "Offloading to empty spiral tensor should be executed only once during SpiralPipe w/o remapping forward stage build phase"
-                    # NOTE (SpiralPipe) pin_memory arg can be passed, since it is not offloading to shared memory
-                    param.spiral_tensor = torch.empty(param.spiral_shape, device=self.remote_device, dtype=param.dtype, pin_memory=True)
-                param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
+                    assert sbs.get_spipe_forward_stage_build_phase() is not None, \
+                        "Offloading to empty spipe tensor should be executed only once during SPipe w/o remapping forward stage build phase"
+                    # NOTE (SPipe) pin_memory arg can be passed, since it is not offloading to shared memory
+                    param.spipe_tensor = torch.empty(param.spipe_shape, device=self.remote_device, dtype=param.dtype, pin_memory=True)
+                param.spipe_tensor.copy_(param.data, non_blocking=non_blocking)
             else:
                 assert (
-                    param.spiral_tensor.shape == param.data.shape
-                ), f"Offload tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
-                param.spiral_tensor.copy_(param.data, non_blocking=non_blocking)
+                    param.spipe_tensor.shape == param.data.shape
+                ), f"Offload tensor shape mismatch ({param.spipe_tensor.shape} != {param.data.shape})"
+                param.spipe_tensor.copy_(param.data, non_blocking=non_blocking)
 
         def _fetch_data(param, non_blocking=False):
             # If parameter is already in gpu memory, skip fetch.
-            # NOTE: Most cases should naturally fetch from CPU in spiral case.
-            if param.spiral_status == SpiralParamStatus.GPU:
+            # NOTE: Most cases should naturally fetch from CPU in spipe case.
+            if param.spipe_status == SPipeParamStatus.GPU:
                 return
 
-            assert param.spiral_tensor is not None, "Fetch tensor is None"
+            assert param.spipe_tensor is not None, "Fetch tensor is None"
 
             if param.numel() == 0:
-                if not get_args().spiral_remap or get_thunder_group().IsParamDataLocal(param.spiral_id):
-                    param.data = param.spiral_tensor.to(
+                if not get_args().spipe_remap or get_thunder_group().IsParamDataLocal(param.spipe_id):
+                    param.data = param.spipe_tensor.to(
                         device=self.local_device, non_blocking=non_blocking
-                    ).view(param.spiral_shape)
+                    ).view(param.spipe_shape)
                 else:
-                    param.data = torch.empty(param.spiral_shape, device=self.local_device, dtype=param.dtype)
+                    param.data = torch.empty(param.spipe_shape, device=self.local_device, dtype=param.dtype)
                     get_thunder_group().FetchRemoteParam(
-                        param.spiral_id,
+                        param.spipe_id,
                         non_blocking,
                         param.data.data_ptr()
                     )
             else:
                 assert (
-                    param.spiral_tensor.shape == param.data.shape
-                ), f"Fetch tensor shape mismatch ({param.spiral_tensor.shape} != {param.data.shape})"
-                if not get_args().spiral_remap or get_thunder_group().IsParamDataLocal(param.spiral_id):
-                    param.data.copy_(param.spiral_tensor, non_blocking=non_blocking)
+                    param.spipe_tensor.shape == param.data.shape
+                ), f"Fetch tensor shape mismatch ({param.spipe_tensor.shape} != {param.data.shape})"
+                if not get_args().spipe_remap or get_thunder_group().IsParamDataLocal(param.spipe_id):
+                    param.data.copy_(param.spipe_tensor, non_blocking=non_blocking)
                 else:
-                    param.data = torch.empty(param.spiral_shape, device=self.local_device, dtype=param.dtype)
+                    param.data = torch.empty(param.spipe_shape, device=self.local_device, dtype=param.dtype)
                     get_thunder_group().FetchRemoteParam(
-                        param.spiral_id,
+                        param.spipe_id,
                         non_blocking,
                         param.data.data_ptr()
                     )
             if not non_blocking:
-                # NOTE: for non-blocking fetch, spiral_status should be changed after waiting in the caller
-                param.spiral_status = SpiralParamStatus.GPU
+                # NOTE: for non-blocking fetch, spipe_status should be changed after waiting in the caller
+                param.spipe_status = SPipeParamStatus.GPU
 
         def _offload_grad(param, non_blocking=False):
             """Offload a gradient to remote device."""
@@ -416,47 +416,47 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
             if get_args().DDP_impl == "local":
                 params_have_main_grad = True
 
-            # Always offload param.grad/param.main_grad into param.spiral_tensor.grad
+            # Always offload param.grad/param.main_grad into param.spipe_tensor.grad
             if params_have_main_grad:
                 assert hasattr(param, "main_grad") and getattr(param, "main_grad") is not None
 
                 if (
-                    hasattr(param.spiral_tensor, "grad")
-                    and getattr(param.spiral_tensor, "grad") is not None
+                    hasattr(param.spipe_tensor, "grad")
+                    and getattr(param.spipe_tensor, "grad") is not None
                 ):
-                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=False`
-                    # NOTE (SpiralPipe) Only check for numel, since main_grad shape "may" differ on GPU and CPU depending on optimizer
+                    # NOTE (SPipe) Corresponds to when optimizer sets `set_to_none=False`
+                    # NOTE (SPipe) Only check for numel, since main_grad shape "may" differ on GPU and CPU depending on optimizer
                     assert (
-                        param.main_grad.numel() == param.spiral_tensor.grad.numel()
-                    ), "param.main_grad and param.spiral_tensor.grad numel mismatch"
-                    param.spiral_tensor.grad.copy_(
+                        param.main_grad.numel() == param.spipe_tensor.grad.numel()
+                    ), "param.main_grad and param.spipe_tensor.grad numel mismatch"
+                    param.spipe_tensor.grad.copy_(
                         param.main_grad, non_blocking=non_blocking
                     )
                 else:
-                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=True`
-                    param.spiral_tensor.grad = torch.empty(param.main_grad.shape, device=self.remote_device, dtype=param.main_grad.dtype, pin_memory=True)
-                    param.spiral_tensor.grad.copy_(
+                    # NOTE (SPipe) Corresponds to when optimizer sets `set_to_none=True`
+                    param.spipe_tensor.grad = torch.empty(param.main_grad.shape, device=self.remote_device, dtype=param.main_grad.dtype, pin_memory=True)
+                    param.spipe_tensor.grad.copy_(
                         param.main_grad, non_blocking=non_blocking
                     )
             else:
                 assert hasattr(param, "grad") and getattr(param, "grad") is not None
 
                 if (
-                    hasattr(param.spiral_tensor, "grad")
-                    and getattr(param.spiral_tensor, "grad") is not None
+                    hasattr(param.spipe_tensor, "grad")
+                    and getattr(param.spipe_tensor, "grad") is not None
                 ):
-                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=False`
-                    # NOTE (SpiralPipe) Only check for numel, since grad shape "may" differ on GPU and CPU depending on optimizer
+                    # NOTE (SPipe) Corresponds to when optimizer sets `set_to_none=False`
+                    # NOTE (SPipe) Only check for numel, since grad shape "may" differ on GPU and CPU depending on optimizer
                     assert (
-                        param.grad.numel() == param.spiral_tensor.grad.numel()
-                    ), "param.grad and param.spiral_tensor.grad numel mismatch"
-                    param.spiral_tensor.grad.copy_(
+                        param.grad.numel() == param.spipe_tensor.grad.numel()
+                    ), "param.grad and param.spipe_tensor.grad numel mismatch"
+                    param.spipe_tensor.grad.copy_(
                         param.grad, non_blocking=non_blocking
                     )
                 else:
-                    # NOTE (SpiralPipe) Corresponds to when optimizer sets `set_to_none=True`
-                    param.spiral_tensor.grad = torch.empty(param.grad.shape, device=self.remote_device, dtype=param.grad.dtype, pin_memory=True)
-                    param.spiral_tensor.grad.copy_(
+                    # NOTE (SPipe) Corresponds to when optimizer sets `set_to_none=True`
+                    param.spipe_tensor.grad = torch.empty(param.grad.shape, device=self.remote_device, dtype=param.grad.dtype, pin_memory=True)
+                    param.spipe_tensor.grad.copy_(
                         param.grad, non_blocking=non_blocking
                     )
 
@@ -505,113 +505,113 @@ class SpiralInitContext(InsertPostInitMethodToModuleSubClasses):
 
     @nvtx.annotate("fetch_module", color="orange")
     def _fetch_module(self, module, non_blocking=False):
-        spiral_report_memory(f"before fetch module {debug_module2class_id(module)}")
+        spipe_report_memory(f"before fetch module {debug_module2class_id(module)}")
         for param in module.parameters(recurse=True):
-            if is_spiral_param(param):
+            if is_spipe_param(param):
                 param.fetch(non_blocking=non_blocking)
-        spiral_report_memory(f"after fetch module {debug_module2class_id(module)}")
+        spipe_report_memory(f"after fetch module {debug_module2class_id(module)}")
 
     @nvtx.annotate("offload_module", color="yellow")
     def _offload_module(self, module, non_blocking=False):
-        spiral_report_memory(f"before offload module {debug_module2class_id(module)}")
+        spipe_report_memory(f"before offload module {debug_module2class_id(module)}")
         for param in module.parameters(recurse=True):
-            if is_spiral_param(param):
+            if is_spipe_param(param):
                 param.offload(non_blocking=non_blocking)
-        spiral_report_memory(f"after offload module {debug_module2class_id(module)}")
+        spipe_report_memory(f"after offload module {debug_module2class_id(module)}")
 
     @nvtx.annotate("free_module", color="darkgreen")
     def _free_module(self, module):
-        spiral_report_memory(f"before free module {debug_module2class_id(module)}")
+        spipe_report_memory(f"before free module {debug_module2class_id(module)}")
         for param in module.parameters(recurse=True):
-            if is_spiral_param(param):
+            if is_spipe_param(param):
                 param.free()
-        spiral_report_memory(f"after free module {debug_module2class_id(module)}")
+        spipe_report_memory(f"after free module {debug_module2class_id(module)}")
 
     @nvtx.annotate("offload_grad_module", color="white")
     def _offload_grad_module(self, module, non_blocking=False):
-        spiral_report_memory(
+        spipe_report_memory(
             f"before offload grad module {debug_module2class_id(module)}"
         )
         for param in module.parameters(recurse=True):
-            if is_spiral_param(param):
+            if is_spipe_param(param):
                 param.offload_grad(non_blocking=non_blocking)
-        spiral_report_memory(
+        spipe_report_memory(
             f"after offload grad module {debug_module2class_id(module)}"
         )
 
     @nvtx.annotate("free_grad_module", color="white")
     def _free_grad_module(self, module):
-        spiral_report_memory(
+        spipe_report_memory(
             f"before free grad module {debug_module2class_id(module)}"
         )
         for param in module.parameters(recurse=True):
-            if is_spiral_param(param):
+            if is_spipe_param(param):
                 param.free_grad()
-        spiral_report_memory(
+        spipe_report_memory(
             f"after free grad module {debug_module2class_id(module)}"
         )
 
     def _assert_free_grad_module(self, module):
         for param in module.parameters(recurse=True):
-            if is_spiral_param(param):
+            if is_spipe_param(param):
                 param.assert_free_grad()
 
-    # NOTE (SpiralPipe) Building w/o remapping skips this function call, as it does not remap param data, hence no need to save param data info
+    # NOTE (SPipe) Building w/o remapping skips this function call, as it does not remap param data, hence no need to save param data info
     def _save_module_params_info(self, module):
         for param in module.parameters(recurse=True):
-            if is_spiral_param(param):
+            if is_spipe_param(param):
                 get_thunder_group().SetParamDataInfo(
-                    param.spiral_id,
+                    param.spipe_id,
                     (
-                        param.spiral_tensor.data_ptr()
-                        if isinstance(param.spiral_tensor, torch.Tensor)
-                        else param.spiral_tensor.data.ptr
+                        param.spipe_tensor.data_ptr()
+                        if isinstance(param.spipe_tensor, torch.Tensor)
+                        else param.spipe_tensor.data.ptr
                     ),
-                    param.spiral_tensor.numel() * param.spiral_tensor.element_size(),
+                    param.spipe_tensor.numel() * param.spipe_tensor.element_size(),
                 )
 
-    # NOTE (SpiralPipe) Prior to call, must reset spiral build state's "forward number of spiral params allocated". (Look at training.py for example)
-    # If reset_spiral_forward_stage_build_phase_num_spiral_params_allocated() hasn't been called, spiral_ids will be incorrectly reassigned.
+    # NOTE (SPipe) Prior to call, must reset spipe build state's "forward number of spipe params allocated". (Look at training.py for example)
+    # If reset_spipe_forward_stage_build_phase_num_spipe_params_allocated() hasn't been called, spipe_ids will be incorrectly reassigned.
     def _remap_module(self, module):
-        if get_args().spiral_remap:
+        if get_args().spipe_remap:
             for param in module.parameters(recurse=True):
-                if is_spiral_param(param):
-                    param.spiral_id = (
-                        sbs.get_add_spiral_next_param_number_to_build()
+                if is_spipe_param(param):
+                    param.spipe_id = (
+                        sbs.get_add_spipe_next_param_number_to_build()
                     )
-                    if get_thunder_group().IsParamDataLocal(param.spiral_id):
+                    if get_thunder_group().IsParamDataLocal(param.spipe_id):
                         get_thunder_group().RemapLocalParamData(
-                            param.spiral_tensor,
-                            param.spiral_id,
-                            param.spiral_shape,
-                            param.spiral_stride,
-                            param.spiral_storage_offset,
+                            param.spipe_tensor,
+                            param.spipe_id,
+                            param.spipe_shape,
+                            param.spipe_stride,
+                            param.spipe_storage_offset,
                         )
-                    param.spiral_status = SpiralParamStatus.CPU
+                    param.spipe_status = SPipeParamStatus.CPU
         else:
             for param in module.parameters(recurse=True):
-                if is_spiral_param(param):
-                    param.spiral_id = sbs.get_add_spiral_next_param_number_to_build()
+                if is_spipe_param(param):
+                    param.spipe_id = sbs.get_add_spipe_next_param_number_to_build()
 
 
 @contextmanager
 def patch_extra_repr():
-    """A context to patch the ``extra_repr`` method of all subclasses of ``torch.nn.Module`` to include spiral information of the module.
+    """A context to patch the ``extra_repr`` method of all subclasses of ``torch.nn.Module`` to include spipe information of the module.
     """
     try:
         def _extra_repr(self):
-            spiral_id_generator = (
-                p.spiral_id for p in self.parameters(recurse=False) if is_spiral_param(p)
+            spipe_id_generator = (
+                p.spipe_id for p in self.parameters(recurse=False) if is_spipe_param(p)
             )
-            first_spiral_id = next(spiral_id_generator, None)
-            last_spiral_id = None if first_spiral_id is None else first_spiral_id + self.num_spiral_params - 1
+            first_spipe_id = next(spipe_id_generator, None)
+            last_spipe_id = None if first_spipe_id is None else first_spipe_id + self.num_spipe_params - 1
             return (
-                f"fid={self.spiral_forward_stage_id}"
-                + f", bid={self.spiral_backward_stage_id}"
+                f"fid={self.spipe_forward_stage_id}"
+                + f", bid={self.spipe_backward_stage_id}"
                 + (f", lid={self.layer_number}" if hasattr(self, "layer_number") else "")
-                # + f", spiral_params={self.num_spiral_params}"
-                # + f", spiral_params_recurse={self.num_spiral_params_recurse}"
-                + f", spiral_ids={first_spiral_id}..{last_spiral_id}"
+                # + f", spipe_params={self.num_spipe_params}"
+                # + f", spipe_params_recurse={self.num_spipe_params_recurse}"
+                + f", spipe_ids={first_spipe_id}..{last_spipe_id}"
             )
 
         for subclass in get_all_subclasses(torch.nn.modules.module.Module):
@@ -624,8 +624,8 @@ def patch_extra_repr():
             del subclass._old_extra_repr
 
 
-def set_module_spiral_status(module, status: SpiralParamStatus):
+def set_module_spipe_status(module, status: SPipeParamStatus):
     for param in module.parameters(recurse=True):
-        if is_spiral_param(param):
-            assert hasattr(param, "spiral_status"), "spiral_status not found in param"
-            setattr(param, "spiral_status", status)
+        if is_spipe_param(param):
+            assert hasattr(param, "spipe_status"), "spipe_status not found in param"
+            setattr(param, "spipe_status", status)

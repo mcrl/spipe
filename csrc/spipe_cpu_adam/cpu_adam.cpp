@@ -70,7 +70,7 @@ struct ThreadSafeOptimizer {
 
 static std::unordered_map<int, std::shared_ptr<void>> s_optimizers;
 
-int spiral_create_adam_optimizer(int optimizer_id,
+int spipe_create_adam_optimizer(int optimizer_id,
                                  int ngroups,
                                  int nparams,
                                  int pool_size,
@@ -86,13 +86,13 @@ int spiral_create_adam_optimizer(int optimizer_id,
 {
   /*
    * Each backward stage has a ThreadSafeOptimizer and a ThreadPool.
-   * - ThreadSafeOptimizer has a SpiralCPUAdamOptimizer for each parameter group
+   * - ThreadSafeOptimizer has a SPipeCPUAdamOptimizer for each parameter group
    * (mainly a weight group and a bias group).
    * - ThreadPool is shared between all ThreadSafeOptimizers.
    */
   std::unordered_map<int, std::shared_ptr<void>> group_s_opts;
   for (int i = 0; i < ngroups; i++) {
-    group_s_opts[i] = std::make_shared<SpiralAdamOptimizer>(
+    group_s_opts[i] = std::make_shared<SPipeAdamOptimizer>(
         alpha, betta1, betta2, eps, weight_decay, adamw_mode);
   }
 
@@ -131,7 +131,7 @@ int spiral_create_adam_optimizer(int optimizer_id,
   return 0;
 }
 
-int spiral_destroy_adam_optimizer(int optimizer_id)
+int spipe_destroy_adam_optimizer(int optimizer_id)
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
@@ -147,7 +147,7 @@ int spiral_destroy_adam_optimizer(int optimizer_id)
   return 0;
 }
 
-int _spiral_adam_step(int optimizer_id,
+int _spipe_adam_step(int optimizer_id,
                       int group_id,
                       int param_id,
                       size_t step,
@@ -243,11 +243,11 @@ int _spiral_adam_step(int optimizer_id,
            exp_avg_sq_c.numel());
   }
 
-  auto group_s_opt = std::static_pointer_cast<SpiralAdamOptimizer>(
+  auto group_s_opt = std::static_pointer_cast<SPipeAdamOptimizer>(
       ts_opt->group_s_opts[group_id]);
 
   // Modifying the states of group_s_opt is safe, since param_group shares the
-  // same state value refer to megatron/spiral/cpu_adam.py step()
+  // same state value refer to megatron/spipe/cpu_adam.py step()
   group_s_opt->IncrementStep(step, beta1, beta2);
   group_s_opt->update_state(lr, epsilon, weight_decay, bias_correction);
   group_s_opt->Step_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr, params_c.numel());
@@ -270,7 +270,7 @@ int _spiral_adam_step(int optimizer_id,
   return 0;
 }
 
-int spiral_adam_step(int optimizer_id,
+int spipe_adam_step(int optimizer_id,
                      int group_id,
                      int param_id,
                      size_t step,
@@ -301,7 +301,7 @@ int spiral_adam_step(int optimizer_id,
   }
 
   ts_opt->futures.emplace_back(
-      ts_opt->pool.submit(_spiral_adam_step, optimizer_id, group_id, param_id, step, lr,
+      ts_opt->pool.submit(_spipe_adam_step, optimizer_id, group_id, param_id, step, lr,
                           beta1, beta2, epsilon, weight_decay, bias_correction,
                           params, grads, exp_avg, exp_avg_sq, inv_scale, half_precision, ev_long));
   ts_opt->nparams_submitted++;
@@ -309,7 +309,7 @@ int spiral_adam_step(int optimizer_id,
   return 0;
 }
 
-int _spiral_adam_rollback(int optimizer_id,
+int _spipe_adam_rollback(int optimizer_id,
                           int group_id,
                           int param_id,
                           size_t step,
@@ -392,11 +392,11 @@ int _spiral_adam_rollback(int optimizer_id,
     }
   }
 
-  auto group_s_opt = std::static_pointer_cast<SpiralAdamOptimizer>(
+  auto group_s_opt = std::static_pointer_cast<SPipeAdamOptimizer>(
       ts_opt->group_s_opts[group_id]);
 
   // Modifying the states of group_s_opt is safe, since param_group shares the
-  // same state value refer to megatron/spiral/cpu_adam.py step()
+  // same state value refer to megatron/spipe/cpu_adam.py step()
   group_s_opt->IncrementStep(step, beta1, beta2);
   group_s_opt->update_state(lr, epsilon, weight_decay, bias_correction);
   group_s_opt->Rollback_8(params_ptr, grads_ptr, exp_avg_ptr, exp_avg_sq_ptr, params_c.numel());
@@ -409,7 +409,7 @@ int _spiral_adam_rollback(int optimizer_id,
   return 0;
 }
 
-int spiral_adam_rollback(int optimizer_id,
+int spipe_adam_rollback(int optimizer_id,
                          int group_id,
                          int param_id,
                          size_t step,
@@ -440,7 +440,7 @@ int spiral_adam_rollback(int optimizer_id,
   }
 
   ts_opt->futures.emplace_back(
-      ts_opt->pool.submit(_spiral_adam_rollback, optimizer_id, group_id, param_id, step, lr,
+      ts_opt->pool.submit(_spipe_adam_rollback, optimizer_id, group_id, param_id, step, lr,
                           beta1, beta2, epsilon, weight_decay, bias_correction,
                           params, grads, exp_avg, exp_avg_sq, inv_scale, half_precision, ev_long));
   ts_opt->nparams_submitted++;
@@ -448,7 +448,7 @@ int spiral_adam_rollback(int optimizer_id,
   return 0;
 }
 
-void spiral_adam_synchronize(int optimizer_id, torch::Tensor& found_inf)
+void spipe_adam_synchronize(int optimizer_id, torch::Tensor& found_inf)
 {
   auto ts_opt =
       std::static_pointer_cast<ThreadSafeOptimizer>(s_optimizers[optimizer_id]);
@@ -497,9 +497,9 @@ void spiral_adam_synchronize(int optimizer_id, torch::Tensor& found_inf)
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
-  m.def("adam_update", &spiral_adam_step, "SpiralPipe CPU Adam update (C++) ");
-  m.def("adam_rollback", &spiral_adam_rollback, "SpiralPipe CPU Adam rollback (C++) ");
-  m.def("create_adam", &spiral_create_adam_optimizer, "SpiralPipe CPU Adam (C++)");
-  m.def("destroy_adam", &spiral_destroy_adam_optimizer, "SpiralPipe CPU Adam destroy (C++)");
-  m.def("adam_sync", &spiral_adam_synchronize, "SpiralPipe CPU Adam join threads (C++)");
+  m.def("adam_update", &spipe_adam_step, "SPipePipe CPU Adam update (C++) ");
+  m.def("adam_rollback", &spipe_adam_rollback, "SPipePipe CPU Adam rollback (C++) ");
+  m.def("create_adam", &spipe_create_adam_optimizer, "SPipePipe CPU Adam (C++)");
+  m.def("destroy_adam", &spipe_destroy_adam_optimizer, "SPipePipe CPU Adam destroy (C++)");
+  m.def("adam_sync", &spipe_adam_synchronize, "SPipePipe CPU Adam join threads (C++)");
 }

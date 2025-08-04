@@ -5,7 +5,7 @@ import torch
 from torch._C._distributed_c10d import Work
 
 from megatron.core import mpu
-import megatron.spiral.p2p_communication as spiral_p2p
+import megatron.spipe.p2p_communication as spipe_p2p
 
 
 # Types
@@ -56,7 +56,7 @@ def comm_activation(
         # first pipeline stage & microbatch idx < ppsize-1 -> send next
         case_color = CaseColor.Purple
     elif (
-        fid == mpu.get_spiral_forward_virtual_size() - 1
+        fid == mpu.get_spipe_forward_virtual_size() - 1
         and not mpu.is_pipeline_last_stage()
     ):
         if mid == nm - 1:
@@ -94,7 +94,7 @@ def comm_activation(
         or (case_color == CaseColor.LightGreen)
         or (case_color == CaseColor.Pink)
     ):
-        spiral_p2p.send_next(
+        spipe_p2p.send_next(
             output_tensor,
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
@@ -102,7 +102,7 @@ def comm_activation(
             omit_send_reqs=omit_send_reqs,
         )
     elif case_color == CaseColor.Red:
-        recv, reqs = spiral_p2p.recv_prev(
+        recv, reqs = spipe_p2p.recv_prev(
             tensor_shape,
             dtype,
             overlap_p2p_comm=overlap_p2p_comm,
@@ -111,7 +111,7 @@ def comm_activation(
         )
         recvs.append((recv, reqs))
     elif case_color == CaseColor.Else:
-        recv, reqs = spiral_p2p.send_next_recv_prev(
+        recv, reqs = spipe_p2p.send_next_recv_prev(
             output_tensor,
             tensor_shape,
             dtype,
@@ -191,7 +191,7 @@ def comm_activation_grad(
         or (case_color == CaseColor.LightGreen)
         or (case_color == CaseColor.Pink)
     ):
-        spiral_p2p.send_prev(
+        spipe_p2p.send_prev(
             input_tensor_grad,
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
@@ -199,7 +199,7 @@ def comm_activation_grad(
             omit_send_reqs=omit_send_reqs,
         )
     elif case_color == CaseColor.Red:
-        recv, reqs = spiral_p2p.recv_next(
+        recv, reqs = spipe_p2p.recv_next(
             tensor_shape,
             dtype,
             overlap_p2p_comm=overlap_p2p_comm,
@@ -208,7 +208,7 @@ def comm_activation_grad(
         )
         recvs.append((recv, reqs))
     elif case_color == CaseColor.Else:
-        recv, reqs = spiral_p2p.send_prev_recv_next(
+        recv, reqs = spipe_p2p.send_prev_recv_next(
             input_tensor_grad,
             tensor_shape,
             dtype,
@@ -237,7 +237,7 @@ def fwd_init_recvs(
         # Must insert to head because received tensors can precede otherwise
         recvs.insert(0, (None, [NOP_Wait]))
     elif fid == 0 and mid == 0:
-        recv, reqs = spiral_p2p.recv_prev(
+        recv, reqs = spipe_p2p.recv_prev(
             tensor_shape,
             dtype,
             overlap_p2p_comm=overlap_p2p_comm,
@@ -260,8 +260,8 @@ def bwd_init_recvs(
     if mpu.is_pipeline_last_stage():
         # Must insert to head because received tensors can precede otherwise
         recvs.insert(0, (None, [NOP_Wait]))
-    elif bid == mpu.get_spiral_backward_virtual_size() - 1 and mid == 0:
-        recv, reqs = spiral_p2p.recv_next(
+    elif bid == mpu.get_spipe_backward_virtual_size() - 1 and mid == 0:
+        recv, reqs = spipe_p2p.recv_next(
             tensor_shape,
             dtype,
             overlap_p2p_comm=overlap_p2p_comm,

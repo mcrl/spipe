@@ -2,31 +2,31 @@ import nvtx
 
 import torch
 
-from megatron.spiral.debug import spiral_print, spiral_report_memory
-from megatron.spiral import get_thunder_cuda_manager
+from megatron.spipe.debug import spipe_print, spipe_report_memory
+from megatron.spipe import get_thunder_cuda_manager
 
 
-def test_spiral_report_memory():
-    """Test spiral_report_memory
+def test_spipe_report_memory():
+    """Test spipe_report_memory
 
     Expected output:
-        [Spiral] [0] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [2] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [3] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [1] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [0] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [2] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [3] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [1] before | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
 
-        [Spiral] [0] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 2.01 GB
-        [Spiral] [1] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [2] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [3] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [0] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 2.01 GB
+        [spipe] [1] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [2] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [3] after cpu alloc | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
 
-        [Spiral] [0] after gpu transfer | GPU: 0.37 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [1] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [2] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
-        [Spiral] [3] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [0] after gpu transfer | GPU: 0.37 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [1] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [2] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
+        [spipe] [3] after gpu transfer | GPU: 0.0 GB | MAX_GPU: 0.8 GB | CPU: 1.63 GB
     """
 
-    spiral_report_memory("before", gpu=True, cpu=True)
+    spipe_report_memory("before", gpu=True, cpu=True)
 
     torch.distributed.barrier()
 
@@ -34,17 +34,17 @@ def test_spiral_report_memory():
         tmp_tensor = torch.zeros(10**8, dtype=torch.float32).cpu()
 
     torch.distributed.barrier()
-    spiral_report_memory("after cpu alloc", gpu=True, cpu=True)
+    spipe_report_memory("after cpu alloc", gpu=True, cpu=True)
 
     if torch.distributed.get_rank() == 0:
         tmp_tensor = tmp_tensor.cuda()
 
     torch.distributed.barrier()
-    spiral_report_memory("after gpu transfer", gpu=True, cpu=True)
+    spipe_report_memory("after gpu transfer", gpu=True, cpu=True)
 
 
-@nvtx.annotate("test_spiral_cuda_manager")
-def test_spiral_cuda_manager():
+@nvtx.annotate("test_spipe_cuda_manager")
+def test_spipe_cuda_manager():
     TENSOR_SHAPE = torch.Size([10**4, 10**4])
     prefetch_stream = get_thunder_cuda_manager().Stream("prefetch")
     compute_stream = get_thunder_cuda_manager().Stream("compute")
@@ -105,7 +105,7 @@ def test_spiral_cuda_manager():
     torch.cuda.nvtx.range_push("verify")
     torch.add(gpu_tensor_verify, multiplier, out=verify_answer)
     if torch.equal(answer, verify_answer):
-        spiral_print("Success")
+        spipe_print("Success")
     else:
-        spiral_print("Fail")
+        spipe_print("Fail")
     torch.cuda.nvtx.range_pop()

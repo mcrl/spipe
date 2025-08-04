@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from megatron import get_num_microbatches
 from megatron.core import mpu
-import megatron.spiral.build_state as sbs
+import megatron.spipe.build_state as sbs
 
 
 class CkptSendRecvType(Enum):
@@ -43,8 +43,8 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
     non_compute timesteps are blank timesteps in below example
 
     Example:
-    _SPIRAL_FORWARD_VIRTUAL_SIZE = 3
-    _SPIRAL_BACKWARD_VIRTUAL_SIZE = 3
+    _SPIPE_FORWARD_VIRTUAL_SIZE = 3
+    _SPIPE_BACKWARD_VIRTUAL_SIZE = 3
     _MPU_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = 4
 
         | ts0   | ts1   | ts1   | ts1   | ts1   | ts1   | ts1   | ts1   | ts1   | ts1   | ts1   |
@@ -62,8 +62,8 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
         self.num_microbatches = num_microbatches
 
         num_compute_ts = (
-            mpu.get_spiral_forward_virtual_size()
-            + mpu.get_spiral_backward_virtual_size()
+            mpu.get_spipe_forward_virtual_size()
+            + mpu.get_spipe_backward_virtual_size()
         ) * self.num_microbatches
         num_non_compute_ts = mpu.get_pipeline_model_parallel_world_size() - 1
         self.total_ts = num_compute_ts + num_non_compute_ts
@@ -91,19 +91,19 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
             num_pre_pipeline_non_compute_ts = pp_rank
             recv_start_ts = (
                 num_pre_pipeline_non_compute_ts
-                + mpu.get_spiral_forward_virtual_size() * self.num_microbatches
+                + mpu.get_spipe_forward_virtual_size() * self.num_microbatches
                 - 1
             )
             curr_ts = recv_start_ts
 
             for bwd_stage_id in range(
-                mpu.get_spiral_backward_virtual_size() - 1, -1, -1
+                mpu.get_spipe_backward_virtual_size() - 1, -1, -1
             ):
                 bwd_phases_start = (
-                    sbs.get_spiral_backward_stage_build_phase_size()
+                    sbs.get_spipe_backward_stage_build_phase_size()
                     * mpu.get_pipeline_model_parallel_world_size()
                     * bwd_stage_id
-                    + sbs.get_spiral_backward_stage_build_phase_size()
+                    + sbs.get_spipe_backward_stage_build_phase_size()
                     * (mpu.get_pipeline_model_parallel_world_size() - pp_rank - 1)
                 )
                 recv_phase = bwd_phases_start  # modify when needed
@@ -150,18 +150,18 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
             send_start_ts = num_pre_pipeline_non_compute_ts
             curr_ts = send_start_ts
 
-            for fwd_stage_id in range(mpu.get_spiral_forward_virtual_size()):
+            for fwd_stage_id in range(mpu.get_spipe_forward_virtual_size()):
                 fwd_phases_start = (
-                    sbs.get_spiral_forward_stage_build_phase_size()
+                    sbs.get_spipe_forward_stage_build_phase_size()
                     * mpu.get_pipeline_model_parallel_world_size()
                     * fwd_stage_id
-                    + sbs.get_spiral_forward_stage_build_phase_size() * pp_rank
+                    + sbs.get_spipe_forward_stage_build_phase_size() * pp_rank
                 )
                 for _ in range(self.num_microbatches):
                     for send_phase in range(
                         fwd_phases_start,
                         fwd_phases_start
-                        + sbs.get_spiral_forward_stage_build_phase_size(),
+                        + sbs.get_spipe_forward_stage_build_phase_size(),
                     ):
                         _op = CkptSendRecvOp(
                             CkptSendRecvType.SEND,
@@ -180,7 +180,7 @@ class CkptSendRecvSchedule(metaclass=CkptSendRecvScheduleMeta):
         """
         self.global_schedule = [
             [
-                [op for op in ts_schedule if (op.phase_id + 1) % sbs.get_spiral_backward_stage_build_phase_size() == 0]
+                [op for op in ts_schedule if (op.phase_id + 1) % sbs.get_spipe_backward_stage_build_phase_size() == 0]
                 for ts_schedule in pprank_schedule
             ]
             for pprank_schedule in self.global_schedule

@@ -1,47 +1,47 @@
 #!/bin/bash
 
 EXTRA_ARGS="
-    --spiral \
-    --spiral-remap \
-    --spiral-shared-memory-name $SPIRAL_SHMEM_NAME \
-    --spiral-shared-memory-buffer-size $SPIRAL_SHMEM_BUFFER_SIZE \
-    --spiral-shared-memory-header-size $SPIRAL_SHMEM_HEADER_SIZE \
-    --spiral-forward-virtual-size $SPIRAL_FWD \
-    --spiral-backward-virtual-size $SPIRAL_BWD \
-    --spiral-overlap-offload-grad \
-    --spiral-recompute-activations \
-    --spiral-ckpt-comm-threshold 3 \
-    --spiral-log-gpu-pipeline-latency \
+    --spipe \
+    --spipe-remap \
+    --spipe-shared-memory-name $SPIPE_SHMEM_NAME \
+    --spipe-shared-memory-buffer-size $SPIPE_SHMEM_BUFFER_SIZE \
+    --spipe-shared-memory-header-size $SPIPE_SHMEM_HEADER_SIZE \
+    --spipe-forward-virtual-size $SPIPE_FWD \
+    --spipe-backward-virtual-size $SPIPE_BWD \
+    --spipe-overlap-offload-grad \
+    --spipe-recompute-activations \
+    --spipe-ckpt-comm-threshold 3 \
+    --spipe-log-gpu-pipeline-latency \
     --overlap-p2p-communication \
     --megatron-mpi
 "
 
-if [ ${SPIRAL_DEBUG_BACKEND} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-debug-backend"
+if [ ${SPIPE_DEBUG_BACKEND} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-debug-backend"
 fi
 
-if [ ${SPIRAL_STAGE_OPTIMIZER} == "YES" ]; then
+if [ ${SPIPE_STAGE_OPTIMIZER} == "YES" ]; then
     EXTRA_ARGS+="
-    --spiral-stage-optimizer \
-    --spiral-stage-optimizer-pool-size $SPIRAL_STAGE_OPTIMIZER_POOL_SIZE"
+    --spipe-stage-optimizer \
+    --spipe-stage-optimizer-pool-size $SPIPE_STAGE_OPTIMIZER_POOL_SIZE"
 fi
 
-if [ ${SPIRAL_HETERO_OPTIMIZER} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-heterogeneous-optimizer"
+if [ ${SPIPE_HETERO_OPTIMIZER} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-heterogeneous-optimizer"
 fi
 
-if [ ${SPIRAL_OFFLOAD_OPTIMIZER} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-offload-optimizer"
+if [ ${SPIPE_OFFLOAD_OPTIMIZER} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-offload-optimizer"
 fi
 
-if [ ${SPIRAL_CROSS_MAPPING} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-cross-mapping"
+if [ ${SPIPE_CROSS_MAPPING} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-cross-mapping"
 fi
 
-if [ ${SPIRAL_SYNC_CKPT_COMMUNICATION} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-sync-ckpt-communication"
+if [ ${SPIPE_SYNC_CKPT_COMMUNICATION} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-sync-ckpt-communication"
 fi
 
-if [ ${SPIRAL_ACTV_P2P} == "YES" ]; then
-    EXTRA_ARGS+=" --spiral-actv-p2p"
+if [ ${SPIPE_ACTV_P2P} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-actv-p2p"
 fi

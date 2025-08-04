@@ -1,6 +1,6 @@
 #!/bin/bash
 
-#SBATCH -J spiral
+#SBATCH -J spipe
 #SBATCH --mincpus=4
 #SBATCH --mem=0
 #SBATCH --exclusive
@@ -43,9 +43,9 @@ if [ -n "${FUSED_KERNEL_LOCK}" ]; then
     done
 fi
 
-if [ -n "${SPIRAL_SHMEM_NAME}" ] && [ -e "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
-    if [ ! -r "/dev/shm${SPIRAL_SHMEM_NAME}" ] || [ ! -w "/dev/shm${SPIRAL_SHMEM_NAME}" ]; then
-        echo "Permission error: /dev/shm${SPIRAL_SHMEM_NAME} exists already and is not readable/writable"
+if [ -n "${SPIPE_SHMEM_NAME}" ] && [ -e "/dev/shm${SPIPE_SHMEM_NAME}" ]; then
+    if [ ! -r "/dev/shm${SPIPE_SHMEM_NAME}" ] || [ ! -w "/dev/shm${SPIPE_SHMEM_NAME}" ]; then
+        echo "Permission error: /dev/shm${SPIPE_SHMEM_NAME} exists already and is not readable/writable"
         exit 1
     fi
 fi

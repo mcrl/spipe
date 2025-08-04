@@ -3,10 +3,10 @@ import nvtx
 import torch
 
 from megatron.core import mpu
-from megatron.spiral.initialize import get_thunder_cuda_manager
-from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
+from megatron.spipe.initialize import get_thunder_cuda_manager
+from megatron.spipe.optimizer.cpu_adam import SPipeCPUAdam
 
-class SpiralStageOptimizer:
+class SPipeStageOptimizer:
 
     def __init__(self, optimizers, *args, **kwargs):
         self.optimizer_list = optimizers  # do not change attr name
@@ -54,7 +54,7 @@ class SpiralStageOptimizer:
             return self.grad_scaler.scale
         else:
             return self.default_scale
-    
+
     def scale_loss(self, loss):
         """Simple scaling."""
         return self.get_loss_scale() * loss
@@ -64,14 +64,14 @@ class SpiralStageOptimizer:
             optimizer.zero_grad(set_to_none)
 
     def is_cpu_optimizer(self, idx):
-        return isinstance(self.optimizer_list[idx].optimizer, SpiralCPUAdam)
+        return isinstance(self.optimizer_list[idx].optimizer, SPipeCPUAdam)
 
     @nvtx.annotate("step", color="cyan")
     def step(self, idx, event_query, args, timers):
         event_long = -1
         if event_query != None:
             event_long = get_thunder_cuda_manager().get_event(event_query).cuda_event
-        
+
         inner_opt = self.optimizer_list[idx].optimizer
         inner_opt.inv_scale = self.inv_scale_val
         inner_opt.ev_long = event_long
@@ -80,7 +80,7 @@ class SpiralStageOptimizer:
 
     @nvtx.annotate("join_step", color="red")
     def join_step(self):
-        spiral_stage_optimizer_step_returns = deque()
+        spipe_stage_optimizer_step_returns = deque()
         local_found_inf = 0
         found_inf_flag = False
 
@@ -106,9 +106,9 @@ class SpiralStageOptimizer:
             for optimizer in self.optimizer_list:
                 optimizer.rollback(sync=True)
 
-        spiral_stage_optimizer_step_returns.appendleft((not found_inf_flag, None, None))
+        spipe_stage_optimizer_step_returns.appendleft((not found_inf_flag, None, None))
 
-        return self._process_step_returns(spiral_stage_optimizer_step_returns)
+        return self._process_step_returns(spipe_stage_optimizer_step_returns)
 
     def _process_step_returns(self, step_rets: list):
         """Static method to reduce the return values of individual optimizer steps."""
@@ -120,7 +120,7 @@ class SpiralStageOptimizer:
         r_update_successful = all(update_successful_values)
 
         # Calculate r_grad_norm
-        # TODO (SpiralPipe) This is a temporary solution by simply averaging the grad_norms
+        # TODO (SPipe) This is a temporary solution by simply averaging the grad_norms
         valid_grad_norm_values = list(filter(lambda x: x is not None, grad_norm_values))
         r_grad_norm = (
             sum(valid_grad_norm_values) / len(grad_norm_values)
@@ -144,7 +144,7 @@ class SpiralStageOptimizer:
         return self.optimizer_list[idx]
 
 
-class SpiralStageOptimizerParamScheduler:
+class SPipeStageOptimizerParamScheduler:
 
     def __init__(self, optimizer_param_schedulers, *args, **kwargs):
         self.optimizer_param_scheduler_list = optimizer_param_schedulers

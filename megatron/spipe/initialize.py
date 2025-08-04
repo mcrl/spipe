@@ -11,12 +11,12 @@ import torch
 import spipe_helper
 
 from megatron import get_args
-from megatron.spiral.debug import spiral_print
+from megatron.spipe.debug import spipe_print
 
-SPIRAL_BACKEND = None
+SPIPE_BACKEND = None
 
 
-class SpiralBackend:
+class SPipeBackend:
     def __init__(
         self,
         ranks,
@@ -39,11 +39,11 @@ class SpiralBackend:
             alignment,
             psutil.Process().cpu_num(),
         )
-        self.thunder_cuda_manager = SpiralCUDAManager()
-        global SPIRAL_BACKEND
-        SPIRAL_BACKEND = self
+        self.thunder_cuda_manager = SPipeCUDAManager()
+        global SPIPE_BACKEND
+        SPIPE_BACKEND = self
 
-        # NOTE (SpiralPipe) Below enforces invocation of destructor for all objects in SpiralBackend when the program exits, either normally or abnormally. This is especially critical for spipe_helper.Comm, which allocates a hugh shared memory.
+        # NOTE (SPipe) Below enforces invocation of destructor for all objects in SPipeBackend when the program exits, either normally or abnormally. This is especially critical for spipe_helper.Comm, which allocates a hugh shared memory.
         atexit.register(self.__del__)
 
     def _set_numa(self):
@@ -55,12 +55,12 @@ class SpiralBackend:
             cpu, node = map(int, line.split(","))
             cpu_numa_bindings[cpu] = node
         self.numa = {cpu_numa_bindings[cpu] for cpu in psutil.Process().cpu_affinity()}
-        spiral_print(f"SpiralBackend numa nodes: {self.numa}")
+        spipe_print(f"SPipeBackend numa nodes: {self.numa}")
 
     def _set_cpu_affinity(self):
         # NOTE: StageOptimizer requires separting cores for main and optimizer threads
         affinity_cores = psutil.Process().cpu_affinity()
-        if get_args().spiral_stage_optimizer:
+        if get_args().spipe_stage_optimizer:
             curr_cpu_num = psutil.Process().cpu_num()
             hyper_cpu_num = curr_cpu_num + 32 if curr_cpu_num < 32 else curr_cpu_num - 32 # TODO: this is hardcoded for 64-core machine
             os.sched_setaffinity(0, {curr_cpu_num, hyper_cpu_num})
@@ -69,46 +69,46 @@ class SpiralBackend:
         else:
             self.cpu_affinity = affinity_cores
             self.available_cpus = affinity_cores
-        spiral_print(f"SpiralBackend cpu affinity: {self.cpu_affinity}")
+        spipe_print(f"SPipeBackend cpu affinity: {self.cpu_affinity}")
 
     def __del__(self):
-        global SPIRAL_BACKEND
-        if SPIRAL_BACKEND is not None:
-            SPIRAL_BACKEND = None
+        global SPIPE_BACKEND
+        if SPIPE_BACKEND is not None:
+            SPIPE_BACKEND = None
 
 
 def get_thunder_group():
-    global SPIRAL_BACKEND
-    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
-    return SPIRAL_BACKEND.thunder_group
+    global SPIPE_BACKEND
+    assert SPIPE_BACKEND is not None, "SPipeBackend is not initialized"
+    return SPIPE_BACKEND.thunder_group
 
 
 def get_thunder_cuda_manager():
-    global SPIRAL_BACKEND
-    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
-    return SPIRAL_BACKEND.thunder_cuda_manager
+    global SPIPE_BACKEND
+    assert SPIPE_BACKEND is not None, "SPipeBackend is not initialized"
+    return SPIPE_BACKEND.thunder_cuda_manager
 
 
 def get_available_cpus():
-    global SPIRAL_BACKEND
-    assert SPIRAL_BACKEND is not None, "SpiralBackend is not initialized"
-    return SPIRAL_BACKEND.available_cpus
+    global SPIPE_BACKEND
+    assert SPIPE_BACKEND is not None, "SPipeBackend is not initialized"
+    return SPIPE_BACKEND.available_cpus
 
 
 @dataclass(frozen=True)
-class SpiralCUDAEventQuery_t:
+class SPipeCUDAEventQuery_t:
     record_stream_name: str
     tag: Union[str, int]
 
 
-class SpiralCUDAManager:
+class SPipeCUDAManager:
     def __init__(self):
         assert (
             torch.cuda.current_device() >= 0
-        ), "SpiralCUDAManager should be initialized after torch.cuda.set_device() is called"
+        ), "SPipeCUDAManager should be initialized after torch.cuda.set_device() is called"
 
         self.__stream_dict: dict[
-            str, Tuple[torch.cuda.Stream, deque[SpiralCUDAEventHandle]]
+            str, Tuple[torch.cuda.Stream, deque[SPipeCUDAEventHandle]]
         ] = {
             "compute": (
                 torch.cuda.Stream(torch.cuda.current_device(), priority=0),
@@ -141,7 +141,7 @@ class SpiralCUDAManager:
 
     def Event(
         self, record_stream_name: str, wait_stream_name: Optional[str], *args, **kwargs
-    ) -> SpiralCUDAEventQuery_t:
+    ) -> SPipeCUDAEventQuery_t:
         assert (
             self.__stream_dict.get(record_stream_name) is not None
         ), f"Stream {record_stream_name} is not initialized"
@@ -149,24 +149,24 @@ class SpiralCUDAManager:
             assert (
                 self.__stream_dict.get(wait_stream_name) is not None
             ), f"Stream {wait_stream_name} is not initialized"
-        eventhdl = SpiralCUDAEventHandle(
+        eventhdl = SPipeCUDAEventHandle(
             self.__stream_dict.get(record_stream_name)[0],
             self.__stream_dict.get(wait_stream_name)[0] if wait_stream_name else None,
             *args,
             **kwargs,
         )
         self.__unrecorded_event_hdl_deque.append(eventhdl)
-        return SpiralCUDAEventQuery_t(
-            record_stream_name, getattr(eventhdl.event, "spiral_tag")
+        return SPipeCUDAEventQuery_t(
+            record_stream_name, getattr(eventhdl.event, "spipe_tag")
         )
 
-    def record_event(self, query: SpiralCUDAEventQuery_t) -> int:
+    def record_event(self, query: SPipeCUDAEventQuery_t) -> int:
         """Record event and return cuda_event identifier (pylong)"""
         _target_stream, _target_event_hdl_deque = self._get_stream_event_hdl_deque(
             query.record_stream_name
         )
         for eventhdl in self.__unrecorded_event_hdl_deque:
-            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+            if getattr(eventhdl.event, "spipe_tag") == query.tag:
                 assert eventhdl.record_stream == _target_stream
                 eventhdl.record()
                 self.__unrecorded_event_hdl_deque.remove(eventhdl)
@@ -174,12 +174,12 @@ class SpiralCUDAManager:
                 return eventhdl.event.cuda_event
         return -1
 
-    def wait_event(self, query: SpiralCUDAEventQuery_t, sync=False) -> int:
+    def wait_event(self, query: SPipeCUDAEventQuery_t, sync=False) -> int:
         _target_event_hdl_deque = self._get_stream_event_hdl_deque(
             query.record_stream_name
         )[1]
         for eventhdl in _target_event_hdl_deque:
-            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+            if getattr(eventhdl.event, "spipe_tag") == query.tag:
                 if sync:
                     eventhdl.synchronize()
                 else:
@@ -189,7 +189,7 @@ class SpiralCUDAManager:
                 return 0
         # Query event from completed list if not found
         for eventhdl in self.__completed_event_hdl_deque:
-            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+            if getattr(eventhdl.event, "spipe_tag") == query.tag:
                 if sync:
                     eventhdl.synchronize()
                 else:
@@ -197,16 +197,16 @@ class SpiralCUDAManager:
                 return 0
         return -1
 
-    def get_event(self, query: SpiralCUDAEventQuery_t) -> Optional[torch.cuda.Event]:
+    def get_event(self, query: SPipeCUDAEventQuery_t) -> Optional[torch.cuda.Event]:
         _target_event_hdl_deque = self._get_stream_event_hdl_deque(
             query.record_stream_name
         )[1]
         for eventhdl in _target_event_hdl_deque:
-            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+            if getattr(eventhdl.event, "spipe_tag") == query.tag:
                 return eventhdl.event
         # Query event from completed list if not found
         for eventhdl in self.__completed_event_hdl_deque:
-            if getattr(eventhdl.event, "spiral_tag") == query.tag:
+            if getattr(eventhdl.event, "spipe_tag") == query.tag:
                 return eventhdl.event
         return None
 
@@ -234,7 +234,7 @@ class SpiralCUDAManager:
             )
 
 
-class SpiralCUDAEventHandle:
+class SPipeCUDAEventHandle:
     def __init__(
         self,
         record_stream: torch.cuda.Stream,
@@ -266,8 +266,8 @@ class SpiralCUDAEventHandle:
         self.wait_stream = wait_stream
         self.pre_wait_fn = pre_wait_fn
         self.post_wait_fn = post_wait_fn
-        if not hasattr(self.event, "spiral_tag"):
-            setattr(self.event, "spiral_tag", tag)
+        if not hasattr(self.event, "spipe_tag"):
+            setattr(self.event, "spipe_tag", tag)
 
     def record(self):
         """Record the event on the record stream"""

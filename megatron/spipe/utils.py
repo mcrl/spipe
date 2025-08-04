@@ -3,16 +3,16 @@ from functools import reduce
 
 import torch
 
-def is_spiral_param(param):
+def is_spipe_param(param):
     if not torch.is_tensor(param):
         return False
-    return hasattr(param, "spiral_id")
+    return hasattr(param, "spipe_id")
 
 
-def num_spiral_params(module):
+def num_spipe_params(module):
     num_params = 0
     for param in module.parameters(recurse=True):
-        if is_spiral_param(param):
+        if is_spipe_param(param):
             num_params += 1
     return num_params
 

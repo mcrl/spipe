@@ -14,7 +14,7 @@ Shape = Union[List[int], torch.Size]
 _DEBUG_COMM = False
 
 if _DEBUG_COMM:
-    from megatron.spiral.debug import spiral_print
+    from megatron.spipe.debug import spipe_print
 
 
 def _batched_p2p_ops(
@@ -118,9 +118,9 @@ def _communicate(
     if not variable_seq_lengths:
         shape = tensor_shape
     else:
-        # TODO (SpiralPipe) implement _communicate_shape
+        # TODO (SPipe) implement _communicate_shape
         raise NotImplementedError(
-            "SpiralPipe does not support variable sequence length is not supported yet"
+            "SPipe does not support variable sequence length is not supported yet"
         )
 
     if recv_ranks:
@@ -142,8 +142,8 @@ def _communicate(
         ]
 
     if use_ring_exchange_p2p:
-        # TODO (SpiralPipe) support ring exchange
-        raise NotImplementedError("SpiralPipe does not support ring exchange yet")
+        # TODO (SPipe) support ring exchange
+        raise NotImplementedError("SPipe does not support ring exchange yet")
         # def _ring_exchange_wrapper(**kwargs):
         #     torch.distributed.ring_exchange(**kwargs)
         #     return []
@@ -186,7 +186,7 @@ def send_next_recv_prev(
     omit_send_reqs: bool = False,
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
     if _DEBUG_COMM:
-        spiral_print("snrp")
+        spipe_print("snrp")
     if timers is not None:
         timers("send_next_recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
@@ -216,7 +216,7 @@ def send_prev_recv_next(
     omit_send_reqs: bool = False,
 ) -> Tuple[torch.Tensor, Optional[List[Work]]]:
     if _DEBUG_COMM:
-        spiral_print("sprn")
+        spipe_print("sprn")
     if timers is not None:
         timers("send_next_recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
@@ -244,7 +244,7 @@ def send_next(
     omit_send_reqs: bool = False,
 ) -> Optional[Work]:
     if _DEBUG_COMM:
-        spiral_print("sn")
+        spipe_print("sn")
     if timers is not None:
         timers("send_next", log_level=2).start()
     _, reqs = _communicate(
@@ -272,7 +272,7 @@ def recv_prev(
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[Work]]:
     if _DEBUG_COMM:
-        spiral_print("rp")
+        spipe_print("rp")
     if timers is not None:
         timers("recv_prev", log_level=2).start()
     [recv], reqs = _communicate(
@@ -299,7 +299,7 @@ def send_prev(
     omit_send_reqs: bool = False,
 ) -> Optional[Work]:
     if _DEBUG_COMM:
-        spiral_print("sp")
+        spipe_print("sp")
     if timers is not None:
         timers("send_next", log_level=2).start()
     _, reqs = _communicate(
@@ -327,7 +327,7 @@ def recv_next(
     timers: Callable = None,
 ) -> Tuple[torch.Tensor, Optional[Work]]:
     if _DEBUG_COMM:
-        spiral_print("rn")
+        spipe_print("rn")
     if timers is not None:
         timers("recv_prev", log_level=2).start()
     [recv], reqs = _communicate(

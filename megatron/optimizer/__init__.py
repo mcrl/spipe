@@ -6,14 +6,14 @@ from apex.optimizers import FusedAdam as Adam
 from apex.optimizers import FusedSGD as SGD
 
 from megatron import get_args
-from megatron.spiral.init_context import SpiralParamStatus
-from megatron.spiral.utils import is_spiral_param
+from megatron.spipe.init_context import SPipeParamStatus
+from megatron.spipe.utils import is_spipe_param
 
 from .distrib_optimizer import DistributedOptimizer
 from .grad_scaler import ConstantGradScaler, DynamicGradScaler
 from .optimizer import Float16OptimizerWithFloat16Params, FP32Optimizer
-from megatron.spiral.optimizer.stage_optimizer import SpiralStageOptimizer
-from megatron.spiral.optimizer.optimizer import SpiralFloat16Optimizer, DeepSpeedFloat16Optimizer, SpiralFP32Optimizer
+from megatron.spipe.optimizer.stage_optimizer import SPipeStageOptimizer
+from megatron.spipe.optimizer.optimizer import SPipeFloat16Optimizer, DeepSpeedFloat16Optimizer, SPipeFP32Optimizer
 
 
 def get_param_groups(modules,
@@ -25,7 +25,7 @@ def get_param_groups(modules,
        scale_lr_cond is used during finetuning where head of the network requires a scaled
        version of the base learning rate.
 
-       if spiral, only the backward stages' params are considered.
+       if spipe, only the backward stages' params are considered.
     """
     args = get_args()
 
@@ -36,12 +36,12 @@ def get_param_groups(modules,
 
     for module in modules:
 
-        # NOTE (SpiralPipe) Skip module that is not bwd stage. A module with both fwd / bwd stage id is not skipped. (e.g., SpiralPipe w/o remapping)
-        if args.spiral:
-            if not hasattr(module, "spiral_backward_stage_id"):
-                warnings.warn("SpiralPipe module should have spiral_backward_stage_id attr even if it is None (refer to _post_init_method in init_context.py). Lacking it highly suggests a critical bug.")
+        # NOTE (SPipe) Skip module that is not bwd stage. A module with both fwd / bwd stage id is not skipped. (e.g., SPipe w/o remapping)
+        if args.spipe:
+            if not hasattr(module, "spipe_backward_stage_id"):
+                warnings.warn("SPipe module should have spipe_backward_stage_id attr even if it is None (refer to _post_init_method in init_context.py). Lacking it highly suggests a critical bug.")
                 continue
-            if hasattr(module, "spiral_backward_stage_id") and getattr(module, "spiral_backward_stage_id") is None:
+            if hasattr(module, "spipe_backward_stage_id") and getattr(module, "spipe_backward_stage_id") is None:
                 continue
 
         for name, param in module.named_parameters():
@@ -49,26 +49,26 @@ def get_param_groups(modules,
                 continue
 
             # TODO: This is for DeepSpeedCPUOptimizer which will be deprecated.
-            if args.spiral and not args.spiral_stage_optimizer:
-                # Only params converted to spiral param and currently placed on local CPU memory should enter,
+            if args.spipe and not args.spipe_stage_optimizer:
+                # Only params converted to spipe param and currently placed on local CPU memory should enter,
                 # as it is the necessary condition for backward stages
-                assert (is_spiral_param(param))
-                assert (param.spiral_status == SpiralParamStatus.CPU)
-                assert (param.spiral_tensor.numel() == param.spiral_numel)
-                param = param.spiral_tensor
+                assert (is_spipe_param(param))
+                assert (param.spipe_status == SPipeParamStatus.CPU)
+                assert (param.spipe_tensor.numel() == param.spipe_numel)
+                param = param.spipe_tensor
 
             if no_weight_decay_cond is not None:
-                if args.spiral:
-                    warnings.warn("no_weight_decay_cond is not supported in SpiralPipe. Consequencies are not known.")
+                if args.spipe:
+                    warnings.warn("no_weight_decay_cond is not supported in SPipe. Consequencies are not known.")
                 no_wd = no_weight_decay_cond(name, param)
             else:
                 # do not regularize biases nor Norm parameters
-                shape = param.spiral_shape if args.spiral and args.spiral_stage_optimizer else param.shape
+                shape = param.spipe_shape if args.spipe and args.spipe_stage_optimizer else param.shape
                 no_wd = name.endswith(".bias") or len(shape) == 1
 
             if scale_lr_cond is not None:
-                if args.spiral:
-                    warnings.warn("scale_lr_cond is not supported in SpiralPipe. Consequencies are not known.")
+                if args.spipe:
+                    warnings.warn("scale_lr_cond is not supported in SPipe. Consequencies are not known.")
                 scale_lr = scale_lr_cond(name, param)
             else:
                 scale_lr = False
@@ -103,8 +103,8 @@ def get_megatron_optimizer(model,
     - FP32 megatron optimizer : FP32Optimizer(FusedAdam)
     - FP16 no staged optimizer : DeepSpeedFloat16Optimizer(DeepSpeedCPUAdam)
     - FP32 no staged optimizer : FP32Optimizer(DeepSpeedCPUAdam)
-    - FP16 staged optimizer : SpiralStageOptimizer(...SpiralFloat16Optimizer(SpiralCPUAdam | SpiralGPUAdam | SpiralGPUChunkedAdam))
-    - FP16 staged optimizer : SpiralStageOptimizer(...SpiralFP32Optimizer(SpiralCPUAdam | SpiralGPUAdam | SpiralGPUChunkedAdam))
+    - FP16 staged optimizer : SPipeStageOptimizer(...SPipeFloat16Optimizer(SPipeCPUAdam | SPipeGPUAdam | SPipeGPUChunkedAdam))
+    - FP16 staged optimizer : SPipeStageOptimizer(...SPipeFP32Optimizer(SPipeCPUAdam | SPipeGPUAdam | SPipeGPUChunkedAdam))
     """
     args = get_args()
 
@@ -114,20 +114,20 @@ def get_megatron_optimizer(model,
         params_have_main_grad = True
 
     if (
-        args.spiral
-        and args.spiral_stage_optimizer
+        args.spipe
+        and args.spipe_stage_optimizer
     ):
-        if not hasattr(model, "_spiral_optimizer_entered"):
-            # NOTE (SpiralPipe) top level model[], recursively collect optimizer for each **BWD** stage. FWD stages are skipped, even though they will naturally be skipped due to logic in get_param_groups, in order to prevent optimizer with empty param group.
+        if not hasattr(model, "_spipe_optimizer_entered"):
+            # NOTE (SPipe) top level model[], recursively collect optimizer for each **BWD** stage. FWD stages are skipped, even though they will naturally be skipped due to logic in get_param_groups, in order to prevent optimizer with empty param group.
             bwd_stage_optimizers = []
-            for bwd_stage_id in range(args.spiral_backward_virtual_size):
-                # NOTE (SpiralPipe) SpiralStageOptimizer requires optimizer list to be sorted in **ascending** order of bwd stage id. SpiralPipe w/o remapping has stage models that have both fwd/bwd id and hence in opposite bwd stage order w.r.t SpiralPipe w/ remapping.
-                if args.spiral_remap:
+            for bwd_stage_id in range(args.spipe_backward_virtual_size):
+                # NOTE (SPipe) SPipeStageOptimizer requires optimizer list to be sorted in **ascending** order of bwd stage id. SPipe w/o remapping has stage models that have both fwd/bwd id and hence in opposite bwd stage order w.r.t SPipe w/ remapping.
+                if args.spipe_remap:
                     _idx_bwd_stage_id = -bwd_stage_id - 1
                 else:
                     _idx_bwd_stage_id = bwd_stage_id
                 # Attach a flag to second level modules (i.e., stage model) to stop recursive call
-                setattr(model[_idx_bwd_stage_id], "_spiral_optimizer_entered", True)
+                setattr(model[_idx_bwd_stage_id], "_spipe_optimizer_entered", True)
                 # Insert optimizer for each bwd stage
                 opt_ty = get_megatron_optimizer(
                     model[_idx_bwd_stage_id],
@@ -136,9 +136,9 @@ def get_megatron_optimizer(model,
                     lr_mult,
                 )
                 bwd_stage_optimizers.append(opt_ty)
-            return SpiralStageOptimizer(bwd_stage_optimizers)
+            return SPipeStageOptimizer(bwd_stage_optimizers)
         else:
-            # NOTE (SpiralPipe) second level model of DDP class
+            # NOTE (SPipe) second level model of DDP class
             # Wrap itself in order to work as an iterable of size 1
             # This is necessary for backward compatibility with MegatronOptimizer, as well as get_param_groups
             model = [model]
@@ -149,28 +149,28 @@ def get_megatron_optimizer(model,
                                     scale_lr_cond,
                                     lr_mult)
 
-    if args.spiral:
-        assert args.optimizer == 'adam', 'SpiralPipe only support Adam'
+    if args.spipe:
+        assert args.optimizer == 'adam', 'SPipe only support Adam'
 
-        if args.spiral_stage_optimizer:
+        if args.spipe_stage_optimizer:
             _unwrapped_model = model[0]
-            assert hasattr(_unwrapped_model, "_spiral_optimizer_entered")
-            delattr(_unwrapped_model, "_spiral_optimizer_entered")
+            assert hasattr(_unwrapped_model, "_spipe_optimizer_entered")
+            delattr(_unwrapped_model, "_spipe_optimizer_entered")
 
-            # NOTE (SpiralPipe) Spiral stage optimizer uses SpiralCPUAdam, which overlaps weight update with upstream bwd stage computation.
-            # If --spiral-heterogeneous-optimizer is enabled, apply gpu optimizer to first stage.
-            if args.spiral_heterogeneous_optimizer and _unwrapped_model.spiral_backward_stage_id == 0:
-                if args.spiral_offload_optimizer:
-                    from megatron.spiral.optimizer.gpu_chunked_adam import SpiralGPUChunkedAdam
-                    inner_opt_ty = SpiralGPUChunkedAdam
+            # NOTE (SPipe) spipe stage optimizer uses SPipeCPUAdam, which overlaps weight update with upstream bwd stage computation.
+            # If --spipe-heterogeneous-optimizer is enabled, apply gpu optimizer to first stage.
+            if args.spipe_heterogeneous_optimizer and _unwrapped_model.spipe_backward_stage_id == 0:
+                if args.spipe_offload_optimizer:
+                    from megatron.spipe.optimizer.gpu_chunked_adam import SPipeGPUChunkedAdam
+                    inner_opt_ty = SPipeGPUChunkedAdam
                 else:
-                    from megatron.spiral.optimizer.gpu_adam import SpiralGPUAdam
-                    inner_opt_ty = SpiralGPUAdam
+                    from megatron.spipe.optimizer.gpu_adam import SPipeGPUAdam
+                    inner_opt_ty = SPipeGPUAdam
             else:
-                from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
-                inner_opt_ty = SpiralCPUAdam
-                # NOTE (SpiralPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training.
-                # For SpiralPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field.
+                from megatron.spipe.optimizer.cpu_adam import SPipeCPUAdam
+                inner_opt_ty = SPipeCPUAdam
+                # NOTE (SPipe) `params` here annotates the "optimizer params". It is not always the same as the params referenced during training.
+                # For SPipe, the optimizer params are the offloaded params and hence should only have grad field, while the params referred during can have both main_grad and grad field.
                 # Hence, setting `params_have_main_grad` to True incurs explicit copy from main_grad into grad (optimizer.step() calls it), which is not necessary.
                 params_have_main_grad = False
         else:
@@ -232,13 +232,13 @@ def get_megatron_optimizer(model,
         # Megatron optimizer.
         if args.use_distributed_optimizer:
             opt_ty = DistributedOptimizer
-        elif args.spiral:
-            opt_ty = SpiralFloat16Optimizer
-            if not args.spiral_stage_optimizer:
+        elif args.spipe:
+            opt_ty = SPipeFloat16Optimizer
+            if not args.spipe_stage_optimizer:
                 opt_ty = DeepSpeedFloat16Optimizer
         else:
             opt_ty = Float16OptimizerWithFloat16Params
-        
+
         return opt_ty(optimizer,
                     args.clip_grad,
                     args.log_num_zeros_in_grad,
@@ -251,7 +251,7 @@ def get_megatron_optimizer(model,
                     model)
 
     # FP32.
-    opt_ty = SpiralFP32Optimizer if args.spiral and args.spiral_stage_optimizer else FP32Optimizer
+    opt_ty = SPipeFP32Optimizer if args.spipe and args.spipe_stage_optimizer else FP32Optimizer
     return opt_ty(optimizer, args.clip_grad,
                          args.log_num_zeros_in_grad,
                          params_have_main_grad,

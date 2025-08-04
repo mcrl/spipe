@@ -3,45 +3,45 @@ import torch
 from megatron.core import tensor_parallel
 from megatron.optimizer.optimizer import MixedPrecisionOptimizer, Float16OptimizerWithFloat16Params, FP32Optimizer
 from megatron.optimizer.optimizer import _zero_grad_group_helper
-from megatron.spiral.optimizer.cpu_adam import SpiralCPUAdam
-from megatron.spiral.utils import is_spiral_param
-from megatron.spiral.debug import spiral_report_memory
+from megatron.spipe.optimizer.cpu_adam import SPipeCPUAdam
+from megatron.spipe.utils import is_spipe_param
+from megatron.spipe.debug import spipe_report_memory
 
 
-class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
+class SPipeFloat16Optimizer(MixedPrecisionOptimizer):
 
     @torch.no_grad()
     def step(self, args, timers):
-        spiral_report_memory(f"before step")
+        spipe_report_memory(f"before step")
         self.optimizer.step()
-        spiral_report_memory(f"after step")
+        spipe_report_memory(f"after step")
 
     def sync(self, found_inf=None):
         self.optimizer.sync(found_inf)
 
     @torch.no_grad()
     def rollback(self, sync=False):
-        spiral_report_memory(f"before rollback")
-        if type(self.optimizer) == SpiralCPUAdam:
+        spipe_report_memory(f"before rollback")
+        if type(self.optimizer) == SPipeCPUAdam:
             self.optimizer.rollback(sync)
         else:
             for group in self.optimizer.param_groups:
                 for p in group['params']:
-                    if is_spiral_param(p):
+                    if is_spipe_param(p):
                         p.fetch(non_blocking=not sync)
 
             self.optimizer.rollback()
 
             for group in self.optimizer.param_groups:
                 for p in group['params']:
-                    if is_spiral_param(p):
+                    if is_spipe_param(p):
                         p.offload(non_blocking=not sync)
-        spiral_report_memory(f"after rollback")
+        spipe_report_memory(f"after rollback")
 
     def zero_grad(self, set_to_none=True):
         for group in self.optimizer.param_groups:
             _zero_grad_group_helper(group['params'], set_to_none)
-    
+
     def state_dict(self):
         return self.optimizer.state_dict()
 
@@ -49,12 +49,12 @@ class SpiralFloat16Optimizer(MixedPrecisionOptimizer):
         self.optimizer.load_state_dict(state_dict)
 
 
-class SpiralFP32Optimizer(FP32Optimizer):
+class SPipeFP32Optimizer(FP32Optimizer):
     @torch.no_grad()
     def step(self, args, timers):
-        spiral_report_memory(f"before step")
+        spipe_report_memory(f"before step")
         self.optimizer.step()
-        spiral_report_memory(f"after step")
+        spipe_report_memory(f"after step")
 
     def sync(self, found_inf=None):
         self.optimizer.sync()
@@ -93,7 +93,7 @@ class DeepSpeedFloat16Optimizer(Float16OptimizerWithFloat16Params):
             fp32_from_float16_params_this_group = []
             # For all the parameters in this group:
             for i, param in enumerate(param_group['params']):
-                # NOTE (SpiralPipe) cpu params do not need to require grad
+                # NOTE (SPipe) cpu params do not need to require grad
 
                 # float16 params:
                 if param.type() in ['torch.HalfTensor',

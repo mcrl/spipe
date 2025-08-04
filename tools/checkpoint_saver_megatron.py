@@ -22,9 +22,9 @@ def add_arguments(parser):
                        'in the input checkpoint if provided by the loader, otherwise to 1')
 
 def save_checkpoint(queue, args):
-    # TODO (SpiralPipe) add support for checkpointing
-    if args.spiral:
-        warnings.warn("SpiralPipe currently does not guarantee correct checkpointing.")
+    # TODO (SPipe) add support for checkpointing
+    if args.spipe:
+        warnings.warn("SPipe currently does not guarantee correct checkpointing.")
 
     # Search in directory above this
     sys.path.append(os.path.abspath(

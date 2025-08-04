@@ -4,10 +4,10 @@ from typing import List, Union
 import torch
 import torch.distributed as dist
 
-import megatron.spiral.build_state as sbs
+import megatron.spipe.build_state as sbs
 from megatron.core import mpu
-from megatron.spiral.build_state import bwd_phase2local_stage_phase
-from megatron.spiral.debug import spiral_print
+from megatron.spipe.build_state import bwd_phase2local_stage_phase
+from megatron.spipe.debug import spipe_print
 from .spipe_ckpt_schedule import CkptSendRecvType
 
 
@@ -45,7 +45,7 @@ def comm_ckpt(
     batch_p2p_comm: bool = False,
 ):
     if _DEBUG_CKPT_COMMUNICATION:
-        spiral_print(f"comm: {schedule}")
+        spipe_print(f"comm: {schedule}")
 
     recvs, reqs = [], []
     batch_ops = []
@@ -65,13 +65,13 @@ def comm_ckpt(
 
             if op.phase_id == 0:
                 if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(_prefix + " Phase 0 => insert None to recvs")
+                    spipe_print(_prefix + " Phase 0 => insert None to recvs")
                 recvs.append(None)
                 reqs.append(NOP_Wait)
             elif op.rank == mpu.get_pipeline_model_parallel_rank():
                 if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(_prefix + " Self recv => pop ckpt and insert to recvs")
-                # NOTE (SpiralPipe) Using the popped input tensor from original fwd stage can lead to trouble, as it contains
+                    spipe_print(_prefix + " Self recv => pop ckpt and insert to recvs")
+                # NOTE (SPipe) Using the popped input tensor from original fwd stage can lead to trouble, as it contains
                 # the computation graph constructed already. We are prone to this error when #fwd != #bwd and hence the same rank
                 # can perform fwd and bwd of the same phase. Re-computation using this tensor will lead to duplicated computation
                 # graph being constructed. So, we currently perform the original FWD in torch.no_grad() mode, and then recompute
@@ -79,7 +79,7 @@ def comm_ckpt(
                 input_ckpt_ = (
                     model[local_stage_id]
                     .module[local_phase_id]
-                    .spiral_input_tensors.popleft()
+                    .spipe_input_tensors.popleft()
                     .detach()
                     .requires_grad_()
                 )
@@ -92,13 +92,13 @@ def comm_ckpt(
 
             else:
                 if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(
+                    spipe_print(
                         _prefix + " Recv from other rank => append to recvs"
                     )
                 et = _get_empty_tensor(tensor_shape, dtype)
                 src = (
                     mpu.translate_pp_rank_to_cm_rank(op.rank)
-                    if mpu.is_spiral_cross_mapping()
+                    if mpu.is_spipe_cross_mapping()
                     else op.rank
                 )
                 if batch_p2p_comm:
@@ -107,7 +107,7 @@ def comm_ckpt(
                             dist.irecv,
                             et,
                             src,
-                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
                         )
                     )
                     reqs.append(NOP_Wait) # dummy req, will be replaced later
@@ -117,7 +117,7 @@ def comm_ckpt(
                         dist.irecv(
                             et,
                             src=src,
-                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
                         )
                     )
                 recvs.append(et)
@@ -129,23 +129,23 @@ def comm_ckpt(
 
             if op.phase_id == 0:
                 if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(_prefix + " Phase 0 => skip")
+                    spipe_print(_prefix + " Phase 0 => skip")
                 reqs.append(NOP_Wait)
             elif op.rank == mpu.get_pipeline_model_parallel_rank():
                 if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(_prefix + " Self send => skip")
+                    spipe_print(_prefix + " Self send => skip")
                 reqs.append(NOP_Wait)
             else:
                 if _DEBUG_CKPT_COMMUNICATION:
-                    spiral_print(_prefix + " Send to other rank => pop ckpt")
+                    spipe_print(_prefix + " Send to other rank => pop ckpt")
                 input_ckpt_ = (
                     model[local_stage_id]
                     .module[local_phase_id]
-                    .spiral_input_tensors.popleft()
+                    .spipe_input_tensors.popleft()
                 )
                 dst = (
                     mpu.translate_pp_rank_to_cm_rank(op.rank)
-                    if mpu.is_spiral_cross_mapping()
+                    if mpu.is_spipe_cross_mapping()
                     else op.rank
                 )
                 if batch_p2p_comm:
@@ -154,7 +154,7 @@ def comm_ckpt(
                             dist.isend,
                             input_ckpt_,
                             dst,
-                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
                         )
                     )
                     reqs.append(NOP_Wait) # dummy req, will be replaced later
@@ -164,7 +164,7 @@ def comm_ckpt(
                         dist.isend(
                             input_ckpt_,
                             dst,
-                            group=mpu.get_spiral_input_tensor_ckpt_group_ts(ts),
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
                         )
                     )
 

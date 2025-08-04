@@ -4,7 +4,7 @@ import torch
 from torch._C._distributed_c10d import Work
 
 from megatron.core import mpu
-import megatron.spiral.p2p_communication as spiral_p2p
+import megatron.spipe.p2p_communication as spipe_p2p
 
 
 # Types
@@ -40,7 +40,7 @@ def comm_activation(
         and mid < mpu.get_pipeline_model_parallel_world_size() - 1
     ) or (
         mpu.get_pipeline_model_parallel_rank() == 0
-        and fid == mpu.get_spiral_forward_virtual_size() - 1
+        and fid == mpu.get_spipe_forward_virtual_size() - 1
         and mid >= mpu.get_pipeline_model_parallel_world_size() - 1
     )
     skip_send = mpu.is_pipeline_last_stage()
@@ -48,7 +48,7 @@ def comm_activation(
     if skip_send and skip_recv:
         pass
     elif skip_send:
-        recv, reqs = spiral_p2p.recv_prev(
+        recv, reqs = spipe_p2p.recv_prev(
             tensor_shape,
             dtype,
             overlap_p2p_comm=overlap_p2p_comm,
@@ -57,7 +57,7 @@ def comm_activation(
         )
         recvs.append((recv, reqs))
     elif skip_recv:
-        spiral_p2p.send_next(
+        spipe_p2p.send_next(
             output_tensor,
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
@@ -65,7 +65,7 @@ def comm_activation(
             omit_send_reqs=omit_send_reqs,
         )
     else:
-        recv, reqs = spiral_p2p.send_next_recv_prev(
+        recv, reqs = spipe_p2p.send_next_recv_prev(
             output_tensor,
             tensor_shape,
             dtype,
@@ -107,7 +107,7 @@ def comm_activation_grad(
     if skip_send and skip_recv:
         pass
     elif skip_send:
-        recv, reqs = spiral_p2p.recv_prev(
+        recv, reqs = spipe_p2p.recv_prev(
             tensor_shape,
             dtype,
             overlap_p2p_comm=overlap_p2p_comm,
@@ -116,7 +116,7 @@ def comm_activation_grad(
         )
         recvs.append((recv, reqs))
     elif skip_recv:
-        spiral_p2p.send_next(
+        spipe_p2p.send_next(
             input_tensor_grad,
             overlap_p2p_comm=overlap_p2p_comm,
             batch_p2p_comm=batch_p2p_comm,
@@ -124,7 +124,7 @@ def comm_activation_grad(
             omit_send_reqs=omit_send_reqs,
         )
     else:
-        recv, reqs = spiral_p2p.send_next_recv_prev(
+        recv, reqs = spipe_p2p.send_next_recv_prev(
             input_tensor_grad,
             tensor_shape,
             dtype,
@@ -145,7 +145,7 @@ def fwd_pre_pipeline_init_recvs(
     timers: Callable = None,
 ):
     if mpu.get_pipeline_model_parallel_rank() != 0:
-        recv, reqs = spiral_p2p.recv_prev(
+        recv, reqs = spipe_p2p.recv_prev(
             tensor_shape,
             dtype,
             overlap_p2p_comm=overlap_p2p_comm,

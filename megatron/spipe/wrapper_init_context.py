@@ -30,7 +30,7 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
     def patch_init_and_builtins(self):
 
-        def copy_spiral_attrs_after(f: Callable) -> Callable:
+        def copy_spipe_attrs_after(f: Callable) -> Callable:
             @functools.wraps(f)
             def wrapper(module, *args, **kwargs):
                 f(module, *args, **kwargs)
@@ -41,11 +41,11 @@ class InsertPostInitMethodToModuleSubClasses(object):
 
         def _enable_class(cls):
             cls._old_init = cls.__init__
-            cls.__init__ = copy_spiral_attrs_after(cls.__init__)
+            cls.__init__ = copy_spipe_attrs_after(cls.__init__)
 
         def _init_subclass(cls, **kwargs):
             cls._old_init = cls.__init__
-            cls.__init__ = copy_spiral_attrs_after(cls.__init__)
+            cls.__init__ = copy_spipe_attrs_after(cls.__init__)
 
         # Replace .__init__() for all existing subclasses of torch.nn.Module recursively
         for subclass in get_all_subclasses(torch.nn.modules.module.Module):
@@ -77,20 +77,20 @@ class InsertPostInitMethodToModuleSubClasses(object):
             self.patched = False
 
 
-class SpiralWrapperInitContext(InsertPostInitMethodToModuleSubClasses):
+class SPipeWrapperInitContext(InsertPostInitMethodToModuleSubClasses):
 
-    SPIRAL_INFIX = "spiral"
+    SPIPE_INFIX = "spipe"
 
     def __init__(self, enabled=True):
         """A contex to enable copy of attributes from the wrapped module to the wrapper module.
-        All attributes that contain the SPIRAL_INFIX will be copied from the wrapped module to the wrapper module.
+        All attributes that contain the SPIPE_INFIX will be copied from the wrapped module to the wrapper module.
         """
         super().__init__(enabled=enabled)
 
     def _post_init_method(self, module):
         assert hasattr(module, "module"), "module must have a .module attribute"
         for name, value in getattr(module, "module").__dict__.items():
-            if self.SPIRAL_INFIX in name:
+            if self.SPIPE_INFIX in name:
                 setattr(
                     module, name, value
-                )  # copy attributes with name xx${SPIRAL_INFIX}xx to the wrapper module
+                )  # copy attributes with name xx${SPIPE_INFIX}xx to the wrapper module

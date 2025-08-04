@@ -4,14 +4,14 @@ from megatron import get_args
 
 from deepspeed.utils import logger
 from deepspeed.utils.logging import should_log_le
-from megatron.spiral import get_available_cpus
+from megatron.spipe import get_available_cpus
 
-from .cpu_adam_builder import SpiralCPUAdamBuilder
+from .cpu_adam_builder import SPipeCPUAdamBuilder
 
-from megatron.spiral.init_context import SpiralParamStatus
-from megatron.spiral.utils import is_spiral_param
+from megatron.spipe.init_context import SPipeParamStatus
+from megatron.spipe.utils import is_spipe_param
 
-class SpiralCPUAdam(torch.optim.Optimizer):
+class SPipeCPUAdam(torch.optim.Optimizer):
     optimizer_id = 0
 
     def __init__(
@@ -79,15 +79,15 @@ class SpiralCPUAdam(torch.optim.Optimizer):
             amsgrad=amsgrad,
         )
 
-        # set spiral_tensor as param_groups
+        # set spipe_tensor as param_groups
         for group in model_params:
             for param_id, p in enumerate(group["params"]):
-                assert (is_spiral_param(p))
-                assert (p.spiral_status == SpiralParamStatus.CPU)
-                assert (p.spiral_tensor.numel() == p.spiral_numel)
-                group["params"][param_id] = p.spiral_tensor
+                assert (is_spipe_param(p))
+                assert (p.spipe_status == SPipeParamStatus.CPU)
+                assert (p.spipe_tensor.numel() == p.spipe_numel)
+                group["params"][param_id] = p.spipe_tensor
 
-        super(SpiralCPUAdam, self).__init__(model_params, default_args)
+        super(SPipeCPUAdam, self).__init__(model_params, default_args)
 
         cpu_info = get_cpu_info()
         self.cpu_vendor = (
@@ -107,14 +107,14 @@ class SpiralCPUAdam(torch.optim.Optimizer):
                     continue
                 break
 
-        self.opt_id = SpiralCPUAdam.optimizer_id
-        SpiralCPUAdam.optimizer_id = SpiralCPUAdam.optimizer_id + 1
+        self.opt_id = SPipeCPUAdam.optimizer_id
+        SPipeCPUAdam.optimizer_id = SPipeCPUAdam.optimizer_id + 1
         self.adam_w_mode = adamw_mode
         self.fp32_optimizer_states = fp32_optimizer_states
         self.nparams = sum(len(pg["params"]) for pg in self.param_groups)
-        self.pool_size = get_args().spiral_stage_optimizer_pool_size
+        self.pool_size = get_args().spipe_stage_optimizer_pool_size
         self.half_precision = get_args().fp16
-        self.ds_opt_adam = SpiralCPUAdamBuilder().load()
+        self.ds_opt_adam = SPipeCPUAdamBuilder().load()
         self.ds_opt_adam.create_adam(
             self.opt_id,
             len(self.param_groups),
@@ -140,7 +140,7 @@ class SpiralCPUAdam(torch.optim.Optimizer):
         self.ds_opt_adam.destroy_adam(self.opt_id)
 
     def __setstate__(self, state):
-        super(SpiralCPUAdam, self).__setstate__(state)
+        super(SPipeCPUAdam, self).__setstate__(state)
         for group in self.param_groups:
             group.setdefault("amsgrad", False)
 

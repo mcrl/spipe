@@ -38,7 +38,7 @@ struct FetchRemoteArgs {
   size_t size;
   MPI_Aint disp;
   MPI_Win window;
-  c10::SpiralCPUAllocator* allocator;
+  c10::SPipeCPUAllocator* allocator;
   cudaEvent_t event;
   RemoteArgAllocator* _remote_allocator;
 };
@@ -185,8 +185,8 @@ public:
   Comm& operator=(Comm&&) = delete;      // move assign
   virtual ~Comm();
 
-  void SetSpiralCPUAllocator();
-  void UnsetSpiralCPUAllocator();
+  void SetSPipeCPUAllocator();
+  void UnsetSPipeCPUAllocator();
 
   void RemapLocalParamData(torch::Tensor& tensor,
                            const unsigned int param_id,
@@ -252,7 +252,7 @@ private:
   ParamDataInfo* param_mapping_tbl_ = nullptr;
   MPI_Win window_; // MPI Window for get
 
-  c10::SpiralCPUAllocator* allocator_ = nullptr;
+  c10::SPipeCPUAllocator* allocator_ = nullptr;
   at::Allocator* prev_allocator_ptr_ = nullptr;
 
   RemoteArgAllocator* remote_allocator_ = nullptr;
@@ -275,7 +275,7 @@ Comm::Comm(std::vector<int> ranks,
            const int cpu_id)
 {
   if (Comm::debug)
-    spdlog::info("Creating SpiralPipe Comm");
+    spdlog::info("Creating SPipePipe Comm");
 
   MPI_Initialized(&mpi_initialized_);
   if (!mpi_initialized_)
@@ -410,7 +410,7 @@ Comm::Comm(std::vector<int> ranks,
   assert(allocator_ ==
          nullptr); // allocator_ must be nullptr before first calling instance
   assert(kCpuBufferSize % comm_info_.intra_size_ == 0);
-  allocator_ = c10::SpiralCPUAllocator::instance(
+  allocator_ = c10::SPipeCPUAllocator::instance(
       GetBase(comm_info_.mpi_rank_),
       kCpuBufferSize / comm_info_.intra_size_ * comm_info_.intra_rank_,
       kCpuBufferSize / comm_info_.intra_size_,
@@ -449,7 +449,7 @@ Comm::Comm(std::vector<int> ranks,
 Comm::~Comm()
 {
   if (Comm::debug)
-    spdlog::info("Destroying SpiralPipe Comm");
+    spdlog::info("Destroying SPipePipe Comm");
 
   CHECK_CUDA(cudaDeviceSynchronize());
 
@@ -496,15 +496,15 @@ Comm::~Comm()
   }
 }
 
-void Comm::SetSpiralCPUAllocator()
+void Comm::SetSPipeCPUAllocator()
 {
   assert(allocator_ != nullptr); // allocator_ must be initialized before
-                                 // calling SetSpiralCPUAllocator()
+                                 // calling SetSPipeCPUAllocator()
   TORCH_CHECK(prev_allocator_ptr_ == nullptr,
               "Already within the scope of another non-default cpu allocator."
               "Cannot set another allocator.");
   if (Comm::debug)
-    spdlog::info("Setting SpiralCPUAllocator");
+    spdlog::info("Setting SPipeCPUAllocator");
 
   // Setting the priority high to make sure no other allocator gets used instead
   // of this.
@@ -512,15 +512,15 @@ void Comm::SetSpiralCPUAllocator()
   at::SetAllocator(at::DeviceType::CPU, allocator_, /*priority*/ 100);
 }
 
-void Comm::UnsetSpiralCPUAllocator()
+void Comm::UnsetSPipeCPUAllocator()
 {
   assert(allocator_ != nullptr); // allocator_ must be initialized before
-                                 // calling UnsetSpiralCPUAllocator()
+                                 // calling UnsetSPipeCPUAllocator()
   TORCH_CHECK(prev_allocator_ptr_ != nullptr,
-              "SetSpiralCPUAllocator must have been called "
-              "before UnsetSpiralCPUAllocator.");
+              "SetSPipeCPUAllocator must have been called "
+              "before UnsetSPipeCPUAllocator.");
   if (Comm::debug)
-    spdlog::info("Unsetting SpiralCPUAllocator");
+    spdlog::info("Unsetting SPipeCPUAllocator");
 
   // Setting the priority high to make sure no other allocator gets used instead
   // of this.
@@ -759,7 +759,7 @@ void Comm::AllGather(py::array_t<T>& tgt, py::array_t<T>& src) const
 }
 
 // Virtual address of allocator memory. Corrsponds to `base_` in
-// SpiralCPUAllocator
+// SPipeCPUAllocator
 inline uintptr_t Comm::GetBase(const int mpi_rank) const
 {
   assert(shared_ptr_ != nullptr);
@@ -771,12 +771,12 @@ void LazyConfigure(bool debug) { Comm::debug = debug; }
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m)
 {
   m.def("LazyConfigure", &LazyConfigure,
-        "SpiralPipeBackend LazyConfigure (C++)");
+        "SPipePipeBackend LazyConfigure (C++)");
   py::class_<Comm>(m, "Comm")
       .def(py::init<std::vector<int>, const int, const bool, const char*,
                     const size_t, const size_t, const size_t, const int>())
-      .def("SetSpiralCPUAllocator", &Comm::SetSpiralCPUAllocator)
-      .def("UnsetSpiralCPUAllocator", &Comm::UnsetSpiralCPUAllocator)
+      .def("SetSPipeCPUAllocator", &Comm::SetSPipeCPUAllocator)
+      .def("UnsetSPipeCPUAllocator", &Comm::UnsetSPipeCPUAllocator)
       .def("RemapLocalParamData", &Comm::RemapLocalParamData)
       .def("SetParamDataInfo", &Comm::SetParamDataInfo)
       .def("GetCommInfo", &Comm::GetCommInfo)

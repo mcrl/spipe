@@ -36,31 +36,31 @@ void memset_junk(void* data, size_t num) {
 
 namespace c10 {
 
-SpiralCPUAllocator* SpiralCPUAllocator::instance_ = nullptr;
+SPipeCPUAllocator* SPipeCPUAllocator::instance_ = nullptr;
 
-SpiralCPUAllocator* SpiralCPUAllocator::instance() {
+SPipeCPUAllocator* SPipeCPUAllocator::instance() {
   if (instance_ == nullptr) {
-    throw std::runtime_error("SpiralCPUAllocator instance is not created");
+    throw std::runtime_error("SPipeCPUAllocator instance is not created");
   }
 
   return instance_;
 }
 
-SpiralCPUAllocator* SpiralCPUAllocator::instance(uintptr_t base, size_t offset, size_t size, size_t align) {
+SPipeCPUAllocator* SPipeCPUAllocator::instance(uintptr_t base, size_t offset, size_t size, size_t align) {
   if (instance_ == nullptr) {
-    if (SpiralCPUAllocator::debug)
+    if (SPipeCPUAllocator::debug)
       spdlog::info("Creating new allocator instance on ptr = {} size = {} align = {}", (void*)(base + offset), size, align);
-    instance_ = new SpiralCPUAllocator();
+    instance_ = new SPipeCPUAllocator();
     instance_->lazy_init(base, offset, size, align);
   } else {
-    if (SpiralCPUAllocator::debug)
+    if (SPipeCPUAllocator::debug)
       spdlog::info("Returning existing allocator instance");
   }
 
   return instance_;
 }
 
-void SpiralCPUAllocator::lazy_init(uintptr_t base, size_t offset, size_t size, size_t align) {
+void SPipeCPUAllocator::lazy_init(uintptr_t base, size_t offset, size_t size, size_t align) {
   assert(is_aligned(base + offset, align));
   assert(is_aligned(base + offset, getpagesize()));
   base_ = base;
@@ -85,14 +85,14 @@ void SpiralCPUAllocator::lazy_init(uintptr_t base, size_t offset, size_t size, s
   headblock_ = dummy_head;
   tailblock_ = dummy_tail;
 
-  if (SpiralCPUAllocator::debug) {
+  if (SPipeCPUAllocator::debug) {
     PrintSummary_("lazy_init");
   }
 }
 
-SpiralCPUAllocator::~SpiralCPUAllocator() {
-  if (SpiralCPUAllocator::debug)
-    spdlog::info("SpiralCPUAllocator::~SpiralCPUAllocator");
+SPipeCPUAllocator::~SPipeCPUAllocator() {
+  if (SPipeCPUAllocator::debug)
+    spdlog::info("SPipeCPUAllocator::~SPipeCPUAllocator");
 
   // unpin allocator memory
   CHECK_CUDA(cudaHostUnregister((void*)(base_ + offset_)));
@@ -106,12 +106,12 @@ SpiralCPUAllocator::~SpiralCPUAllocator() {
   }
 }
 
-DataPtr SpiralCPUAllocator::allocate(size_t nbytes) {
-  void* r = const_cast<SpiralCPUAllocator*>(this)->malloc(nbytes);
+DataPtr SPipeCPUAllocator::allocate(size_t nbytes) {
+  void* r = const_cast<SPipeCPUAllocator*>(this)->malloc(nbytes);
   return { r, r, &local_raw_delete, at::Device(at::DeviceType::CPU) };
 }
 
-void* SpiralCPUAllocator::malloc(size_t nbytes) {
+void* SPipeCPUAllocator::malloc(size_t nbytes) {
   std::unique_lock<std::mutex> lck(mtx_);
 
   if (C10_UNLIKELY(0u == nbytes)) {
@@ -158,7 +158,7 @@ void* SpiralCPUAllocator::malloc(size_t nbytes) {
   memset((void*)(base_ + bestfit->offset_), 0, bestfit->sz_);
   // memset_junk((void*)(base_ + bestfit->offset_), bestfit->sz_);
 
-  if (SpiralCPUAllocator::debug) {
+  if (SPipeCPUAllocator::debug) {
     char buf[256];
     sprintf(buf, "malloc(%lx) ", nbytes);
     PrintSummary_(buf);
@@ -167,7 +167,7 @@ void* SpiralCPUAllocator::malloc(size_t nbytes) {
   return (void*)(base_ + bestfit->offset_);
 }
 
-void SpiralCPUAllocator::free(void* const ptr) {
+void SPipeCPUAllocator::free(void* const ptr) {
   std::unique_lock<std::mutex> lck(mtx_);
   
   auto it = allocblocks_.lower_bound(new Block((uintptr_t)ptr - base_, 0, nullptr, nullptr));
@@ -175,8 +175,8 @@ void SpiralCPUAllocator::free(void* const ptr) {
   if ((*it)->offset_ != (uintptr_t)ptr - base_) {
     throw std::runtime_error("Cannot find block with ptr " + std::to_string((size_t)ptr));
   } 
-  // if (SpiralCPUAllocator::debug)
-  //   spdlog::info("SpiralCPUAllocator::free found block with ptr = {}", ptr);
+  // if (SPipeCPUAllocator::debug)
+  //   spdlog::info("SPipeCPUAllocator::free found block with ptr = {}", ptr);
 
   Block* victim = *it;
   size_t nbytes = victim->sz_;
@@ -188,18 +188,18 @@ void SpiralCPUAllocator::free(void* const ptr) {
 
   allocated_ -= nbytes;
 
-  if (SpiralCPUAllocator::debug) {
+  if (SPipeCPUAllocator::debug) {
     char buf[256];
     sprintf(buf, "free(%lx) ", nbytes);
     PrintSummary_(buf);
   }
 }
 
-DeleterFnPtr SpiralCPUAllocator::raw_deleter() const {
+DeleterFnPtr SPipeCPUAllocator::raw_deleter() const {
   return &local_raw_delete;
 }
 
-void SpiralCPUAllocator::MergeLR(Block* center) {
+void SPipeCPUAllocator::MergeLR(Block* center) {
   if (center->allocated) return;
 
   Block* nxt = center->nxt_;
@@ -228,7 +228,7 @@ void SpiralCPUAllocator::MergeLR(Block* center) {
   }
 }
 
-void SpiralCPUAllocator::PrintSummary_(std::string prefix) {
+void SPipeCPUAllocator::PrintSummary_(std::string prefix) {
   printf("===== %s =====  %d alloc blocks, %d free blocks\n", prefix.c_str(), (int) allocblocks_.size(), (int) freeblocks_.size());
   Block *cur = headblock_;
   printf("Linkedlist: ");
@@ -250,34 +250,34 @@ void SpiralCPUAllocator::PrintSummary_(std::string prefix) {
   printf("\n");
 }
 
-SpiralCPUAllocator::Block::Block(size_t offset, size_t sz, Block* nxt, Block* prv)
+SPipeCPUAllocator::Block::Block(size_t offset, size_t sz, Block* nxt, Block* prv)
   : offset_(offset), sz_(sz), nxt_(nxt), prv_(prv) {}
 
-bool SpiralCPUAllocator::Block::operator== (Block& x) {
+bool SPipeCPUAllocator::Block::operator== (Block& x) {
   return offset_ == x.offset_ && sz_ == x.sz_;
 }
 
-bool SpiralCPUAllocator::Block::operator< (Block& x) {
+bool SPipeCPUAllocator::Block::operator< (Block& x) {
   if (offset_ != x.offset_)
     return offset_ < x.offset_;
   return sz_ < x.sz_;
 }
 
-std::string SpiralCPUAllocator::Block::tostring() {
+std::string SPipeCPUAllocator::Block::tostring() {
   char buf[256];
   sprintf(buf, "(%lx, %lx, %d) ", offset_, sz_, allocated);
   return std::string(buf);
 }
 
-void SpiralCPUAllocator::Block::print() {
+void SPipeCPUAllocator::Block::print() {
   std::cout << tostring() << std::endl;
 }
 
 void local_raw_delete(void* ptr) {
-  SpiralCPUAllocator* allocator = SpiralCPUAllocator::instance();
+  SPipeCPUAllocator* allocator = SPipeCPUAllocator::instance();
 
   if (allocator == nullptr) {
-    throw std::runtime_error("SpiralCPUAllocator instance is not created");
+    throw std::runtime_error("SPipeCPUAllocator instance is not created");
   }
 
   allocator->free(ptr);

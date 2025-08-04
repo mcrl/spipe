@@ -8,7 +8,7 @@ import sys
 
 global thunder_group
 
-class SpiralBackend:
+class SPipeBackend:
     def __init__(self):
         self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
@@ -21,7 +21,7 @@ class SpiralBackend:
 
     def test_borrow_tensor(self):
         fillvalue = self.rank
-        thunder_group.SetSpiralCPUAllocator()
+        thunder_group.SetSPipeCPUAllocator()
         t = torch.full((2, 2), fillvalue, dtype=torch.float, requires_grad=False, device='cpu')
         print(f"[{self.rank}] {t.data_ptr()} {t.data}")
 
@@ -40,7 +40,7 @@ class SpiralBackend:
 
 
     def test_borrow_module(self):
-        thunder_group.SetSpiralCPUAllocator()
+        thunder_group.SetSPipeCPUAllocator()
 
         m = nn.Linear(2, 2, bias=False, device='cpu' if self.rank != 0 else 'meta')
         print(f"[{self.rank}] {m.weight} ({m.weight.data_ptr()})")
@@ -63,17 +63,17 @@ class SpiralBackend:
 
     def test_offload(self):
         spipe_helper.LazyConfigure(True)
-        thunder_group.SetSpiralCPUAllocator()
+        thunder_group.SetSPipeCPUAllocator()
         tensor_ = torch.empty(10, 10, dtype=torch.float, requires_grad=False, device='cpu')
         print(tensor_)
 
-        thunder_group.UnsetSpiralCPUAllocator()
+        thunder_group.UnsetSPipeCPUAllocator()
         tensor_ = torch.empty(10, 10, dtype=torch.float, requires_grad=False, device='cpu')
         print(tensor_)
 
 
 if __name__ == '__main__':
-    sprl = SpiralBackend()
+    sprl = SPipeBackend()
 
     sprl.test_offload()
     # sprl.test_borrow_tensor()

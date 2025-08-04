@@ -9,10 +9,10 @@ from apex.multi_tensor_apply import multi_tensor_applier
 from collections import defaultdict
 
 from megatron import get_args
-from megatron.spiral.initialize import get_thunder_cuda_manager
+from megatron.spipe.initialize import get_thunder_cuda_manager
 
 
-class SpiralGPUChunkedAdam(torch.optim.Optimizer):
+class SPipeGPUChunkedAdam(torch.optim.Optimizer):
 
     """Implements Adam algorithm.
 
@@ -45,14 +45,14 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
                  capturable=False, master_weights=False):
 
         if amsgrad:
-            raise RuntimeError('SpiralGPUAdam does not support the AMSGrad variant.')
+            raise RuntimeError('SPipeGPUAdam does not support the AMSGrad variant.')
         if capturable or master_weights:
-            raise RuntimeError('SpiralGPUAdam does not support catureable or master_weights.')
+            raise RuntimeError('SPipeGPUAdam does not support catureable or master_weights.')
         # If the optimizer is capturable then LR should be a tensor (on GPU)
         lr = torch.tensor(lr, dtype=torch.float32) if capturable else lr
         defaults = dict(lr=lr, bias_correction=bias_correction,
                         betas=betas, eps=eps, weight_decay=weight_decay)
-        super(SpiralGPUChunkedAdam, self).__init__(params, defaults)
+        super(SPipeGPUChunkedAdam, self).__init__(params, defaults)
         self.adam_w_mode = 1 if adam_w_mode else 0
         self.set_grad_none = set_grad_none
 
@@ -76,7 +76,7 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
             self.multi_tensor_adam = amp_C.multi_tensor_adam
             self.multi_tensor_scale = amp_C.multi_tensor_scale
         else:
-            raise RuntimeError('SpiralGPUAdam requires cuda extensions')
+            raise RuntimeError('SPipeGPUAdam requires cuda extensions')
 
     def zero_grad(self):
         if self.set_grad_none:
@@ -84,7 +84,7 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
                 for p in group['params']:
                     p.grad = None
         else:
-            super(SpiralGPUChunkedAdam, self).zero_grad()
+            super(SPipeGPUChunkedAdam, self).zero_grad()
 
     def _unscale_grads_and_check_inf(self):
         fp32_grads = []
@@ -149,7 +149,7 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
         The remaining arguments are deprecated, and are only retained (for the moment) for error-checking purposes.
         """
         if any(p is not None for p in [grads, output_params, scale, grad_norms]):
-            raise RuntimeError('SpiralGPUAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
+            raise RuntimeError('SPipeGPUAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
         loss = None
         if closure is not None:
             loss = closure()
@@ -177,7 +177,7 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
                 if grad is None:
                     continue
                 if grad.data.is_sparse:
-                    raise RuntimeError('SpiralGPUAdam does not support sparse gradients, please consider SparseAdam instead')
+                    raise RuntimeError('SPipeGPUAdam does not support sparse gradients, please consider SparseAdam instead')
 
                 fp32_grads.append(grad.data)
 
@@ -286,7 +286,7 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
 
     def rollback(self):
         if not self.adam_w_mode:
-            raise RuntimeError("SpiralGPUAdam only supports rollback for adam_w_mode.")
+            raise RuntimeError("SPipeGPUAdam only supports rollback for adam_w_mode.")
 
         # if found_inf is True, skip rollback
         if self.half_precision and self.found_inf:
@@ -358,7 +358,7 @@ class SpiralGPUChunkedAdam(torch.optim.Optimizer):
                     event = torch.cuda.Event()
                     event.record()
                     compute_events.append(event)
-                
+
                 # Offload and free optimizer state
                 with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
                     if len(compute_events) > 0:
@@ -423,7 +423,7 @@ def rollback_adamw(
 
 def slice_tensor_list_in_chunks(tensor_list, chunk_size=0):
     sliced_tensor_list = []
-    
+
     for tensor in tensor_list:
         current_index = 0
         while current_index < tensor.numel():

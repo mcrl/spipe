@@ -9,10 +9,10 @@ from megatron.core import mpu
 from megatron.core.enums import ModelType
 from megatron.core.utils import get_model_type, get_attr_wrapped_model
 from megatron.core.pipeline_parallel import forward_step, backward_step, p2p_communication
-from megatron.spiral.initialize import get_thunder_cuda_manager
-from megatron.spiral.debug import spiral_print
-from megatron.spiral.init_context import SpiralParamStatus, set_module_spiral_status
-from megatron.spiral.utils import get_gpu_latency_list
+from megatron.spipe.initialize import get_thunder_cuda_manager
+from megatron.spipe.debug import spipe_print
+from megatron.spipe.init_context import SPipeParamStatus, set_module_spipe_status
+from megatron.spipe.utils import get_gpu_latency_list
 
 
 class PHASE(Enum):
@@ -101,15 +101,15 @@ def onefoneb_schedule(
     bwd_wait_handles = None
 
     # GPU latency event
-    log_gpu_pipeline_latency = get_args().spiral_log_gpu_pipeline_latency
+    log_gpu_pipeline_latency = get_args().spipe_log_gpu_pipeline_latency
     if log_gpu_pipeline_latency:
         forward_pass_start_event = torch.cuda.Event(enable_timing=True)
         backward_pass_end_event = torch.cuda.Event(enable_timing=True)
 
     """Offload grads and optimizer related"""
-    offload_grad_after_bwd_stage = get_args().spiral_overlap_offload_grad
+    offload_grad_after_bwd_stage = get_args().spipe_overlap_offload_grad
     optimize_after_bwd_stage = (
-        offload_grad_after_bwd_stage and get_args().spiral_stage_optimizer
+        offload_grad_after_bwd_stage and get_args().spipe_stage_optimizer
     )
     assert not optimize_after_bwd_stage, (
         "Currently, spipe 1f1b does not support optimize_after_bwd_stage,"
@@ -191,12 +191,12 @@ def onefoneb_schedule(
             next_forward_model_chunk_id = get_model_chunk_id(
                 microbatch_id + 1, forward=True
             )
-            if mpu.get_spiral_forward_virtual_rank() != next_forward_model_chunk_id:
+            if mpu.get_spipe_forward_virtual_rank() != next_forward_model_chunk_id:
                 return next_forward_model_chunk_id
         elif _PHASE == PHASE.COOLDOWN:
             # skip prefetch if at the last wave of ppsize microbatches for the backward virtual rank 0
             if (
-                mpu.get_spiral_backward_virtual_rank() == 0
+                mpu.get_spipe_backward_virtual_rank() == 0
                 and microbatch_id >= total_num_microbatches - pipeline_parallel_size
             ):
                 return -1
@@ -204,12 +204,12 @@ def onefoneb_schedule(
             next_backward_model_chunk_id = get_model_chunk_id(
                 microbatch_id + 1, forward=False
             )
-            if mpu.get_spiral_backward_virtual_rank() != next_backward_model_chunk_id:
+            if mpu.get_spipe_backward_virtual_rank() != next_backward_model_chunk_id:
                 return next_backward_model_chunk_id
         else:
             assert _PHASE == PHASE.STEADY
             if (
-                mpu.get_spiral_backward_virtual_rank() != None
+                mpu.get_spipe_backward_virtual_rank() != None
                 and microbatch_id == num_microbatches_remaining - 1
             ):
                 # if bwd microbatch id (microbatch_id) is the last steady state microbatch,
@@ -219,28 +219,28 @@ def onefoneb_schedule(
                     microbatch_id + 1, forward=False
                 )
                 if (
-                    mpu.get_spiral_backward_virtual_rank()
+                    mpu.get_spipe_backward_virtual_rank()
                     != next_backward_model_chunk_id
                 ):
                     return next_backward_model_chunk_id
             else:
                 # else (i.e., not last bwd microbatch in the steady state),
-                if mpu.get_spiral_forward_virtual_rank() != None:
+                if mpu.get_spipe_forward_virtual_rank() != None:
                     next_backward_model_chunk_id = get_model_chunk_id(
                         microbatch_id - num_warmup_microbatches, forward=False
                     )
                     if (
-                        mpu.get_spiral_forward_virtual_rank()
+                        mpu.get_spipe_forward_virtual_rank()
                         != next_backward_model_chunk_id
                     ):
                         return next_backward_model_chunk_id
                 else:
-                    assert mpu.get_spiral_backward_virtual_rank() != None
+                    assert mpu.get_spipe_backward_virtual_rank() != None
                     next_forward_model_chunk_id = get_model_chunk_id(
                         microbatch_id + 1 + num_warmup_microbatches, forward=True
                     )
                     if (
-                        mpu.get_spiral_backward_virtual_rank()
+                        mpu.get_spipe_backward_virtual_rank()
                         != next_forward_model_chunk_id
                     ):
                         return next_forward_model_chunk_id
@@ -256,7 +256,7 @@ def onefoneb_schedule(
     def should_offload_grad(microbatch_id: int) -> bool:
         """Check if this microbatch should offload grad of the stage"""
         if (not offload_grad_after_bwd_stage) or (
-            mpu.get_spiral_backward_virtual_rank() == None
+            mpu.get_spipe_backward_virtual_rank() == None
         ):
             return False
         return is_last_microbatch_for_model_chunk(microbatch_id)
@@ -429,7 +429,7 @@ def onefoneb_schedule(
         model_chunk_id = get_model_chunk_id(microbatch_id, forward=True)
         torch.cuda.nvtx.range_push(f"f[{model_chunk_id}]m[{microbatch_id}]")
         if _DEBUG_SCHEDULE:
-            spiral_print(f"fwd stage {model_chunk_id} microbatch {microbatch_id}")
+            spipe_print(f"fwd stage {model_chunk_id} microbatch {microbatch_id}")
 
         # TODO: launch param synchronization for next model chunk
 
@@ -448,15 +448,15 @@ def onefoneb_schedule(
             _prefetch_stage_id = prefetch_target_stage_id(microbatch_id)
             if _prefetch_stage_id != -1:
                 if _DEBUG_SCHEDULE:
-                    spiral_print(f" prefetch {_prefetch_stage_id}")
-                model[_prefetch_stage_id].spiral_fetch(non_blocking=True)
+                    spipe_print(f" prefetch {_prefetch_stage_id}")
+                model[_prefetch_stage_id].spipe_fetch(non_blocking=True)
                 tag = "prefetch:" + f"{_prefetch_stage_id}"
                 prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
                     tag=tag,
-                    post_wait_fn=lambda: set_module_spiral_status(
-                        model[_prefetch_stage_id], SpiralParamStatus.GPU
+                    post_wait_fn=lambda: set_module_spipe_status(
+                        model[_prefetch_stage_id], SPipeParamStatus.GPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
@@ -471,16 +471,16 @@ def onefoneb_schedule(
                     (None, None)
                 ) # recv_handle is None since receiving None
             input_tensor, fwd_wait_handles = input_tensors[
-                mpu.get_spiral_forward_virtual_rank()
+                mpu.get_spipe_forward_virtual_rank()
             ][-1] # do not pop for reuse in backward step
 
             # wait for recv input tensor
-            # NOTE (SpiralPipe) Must be done in compute stream to avoid error
+            # NOTE (SPipe) Must be done in compute stream to avoid error
             _wait_reqs(fwd_wait_handles)
 
             # forward step
             if _DEBUG_SCHEDULE:
-                spiral_print(f" call forward_step: {model_chunk_id}")
+                spipe_print(f" call forward_step: {model_chunk_id}")
             output_tensor = forward_step(
                 forward_step_func,
                 data_iterator[model_chunk_id],
@@ -510,7 +510,7 @@ def onefoneb_schedule(
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
             if should_free_stage(microbatch_id):
                 if _DEBUG_SCHEDULE:
-                    spiral_print(f" free {model_chunk_id}")
+                    spipe_print(f" free {model_chunk_id}")
 
                 # synchronize compute stream before free
                 if (
@@ -520,7 +520,7 @@ def onefoneb_schedule(
                     raise RuntimeError("wait_event failed")
 
                 # free fwd stage
-                model[model_chunk_id].spiral_free()
+                model[model_chunk_id].spipe_free()
 
                 free_curr = get_thunder_cuda_manager().Event(
                     "free",
@@ -540,7 +540,7 @@ def onefoneb_schedule(
         model_chunk_id = get_model_chunk_id(microbatch_id, forward=False)
         torch.cuda.nvtx.range_push(f"b[{model_chunk_id}]m[{microbatch_id}]")
         if _DEBUG_SCHEDULE:
-            spiral_print(f"bwd stage {model_chunk_id} microbatch {microbatch_id}")
+            spipe_print(f"bwd stage {model_chunk_id} microbatch {microbatch_id}")
 
         # TODO: launch grad synchronization (default)
 
@@ -559,15 +559,15 @@ def onefoneb_schedule(
             _prefetch_stage_id = prefetch_target_stage_id(microbatch_id)
             if _prefetch_stage_id != -1:
                 if _DEBUG_SCHEDULE:
-                    spiral_print(f" prefetch {_prefetch_stage_id}")
-                model[_prefetch_stage_id].spiral_fetch(non_blocking=True)
+                    spipe_print(f" prefetch {_prefetch_stage_id}")
+                model[_prefetch_stage_id].spipe_fetch(non_blocking=True)
                 tag = "prefetch:" + f"{_prefetch_stage_id}"
                 prefetch_next = get_thunder_cuda_manager().Event(
                     "prefetch",
                     "compute",
                     tag=tag,
-                    post_wait_fn=lambda: set_module_spiral_status(
-                        model[_prefetch_stage_id], SpiralParamStatus.GPU
+                    post_wait_fn=lambda: set_module_spipe_status(
+                        model[_prefetch_stage_id], SPipeParamStatus.GPU
                     ),
                 )
                 if get_thunder_cuda_manager().record_event(prefetch_next) == -1:
@@ -588,12 +588,12 @@ def onefoneb_schedule(
             output_tensor_grad, bwd_wait_handles = output_tensor_grads[model_chunk_id].pop(0)
 
             # wait for recv output tensor grad
-            # NOTE (SpiralPipe) Must be done in compute stream to avoid error
+            # NOTE (SPipe) Must be done in compute stream to avoid error
             _wait_reqs(bwd_wait_handles)
 
             # backward step
             if _DEBUG_SCHEDULE:
-                spiral_print(f" call backward_step: {model_chunk_id}")
+                spipe_print(f" call backward_step: {model_chunk_id}")
             input_tensor_grad = backward_step(
                 grad_scaler,
                 input_tensor,
@@ -626,7 +626,7 @@ def onefoneb_schedule(
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("free")):
             if should_free_stage(microbatch_id):
                 if _DEBUG_SCHEDULE:
-                    spiral_print(f" free {model_chunk_id}")
+                    spipe_print(f" free {model_chunk_id}")
 
                 # synchronize compute stream before free
                 if (
@@ -636,7 +636,7 @@ def onefoneb_schedule(
                     raise RuntimeError("wait_event failed")
 
                 # free bwd stage
-                model[model_chunk_id].spiral_free()
+                model[model_chunk_id].spipe_free()
 
                 free_curr = get_thunder_cuda_manager().Event(
                     "free",
@@ -653,7 +653,7 @@ def onefoneb_schedule(
         with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
             if offload_grad_after_bwd_stage and should_offload_grad(microbatch_id):
                 if _DEBUG_SCHEDULE:
-                    spiral_print(f" offload_grad {model_chunk_id}")
+                    spipe_print(f" offload_grad {model_chunk_id}")
 
                 # synchronize compute stream before offload
                 if (
@@ -662,7 +662,7 @@ def onefoneb_schedule(
                 ):
                     raise RuntimeError("wait_event failed")
 
-                # if not spiral stage optimizer, then gradient should be manually reduced
+                # if not spipe stage optimizer, then gradient should be manually reduced
                 if optimize_after_bwd_stage:
                     # TODO: implement
                     pass
@@ -671,7 +671,7 @@ def onefoneb_schedule(
 
                 # offload grads
                 # NOTE: this currently does not care about cpu-gpu hybrid optimizer
-                model[model_chunk_id].spiral_offload_grad(non_blocking=True)
+                model[model_chunk_id].spipe_offload_grad(non_blocking=True)
                 offload_grad_curr = get_thunder_cuda_manager().Event(
                     "offload",
                     None,
@@ -681,13 +681,13 @@ def onefoneb_schedule(
                     raise RuntimeError("record_event failed")
                 offload_events.append(offload_grad_curr)
 
-                # if not spiral stage optimizer, then optimizer will be executed after iteration
+                # if not spipe stage optimizer, then optimizer will be executed after iteration
                 if optimize_after_bwd_stage:
                     # TODO: Implement this
                     pass
 
-                # free bwd stage grads (spiral_free_grad is cpu job with tensor.record_stream)
-                model[model_chunk_id].spiral_free_grad()
+                # free bwd stage grads (spipe_free_grad is cpu job with tensor.record_stream)
+                model[model_chunk_id].spipe_free_grad()
         # end offload & free grad
 
         torch.cuda.nvtx.range_pop()
@@ -705,14 +705,14 @@ def onefoneb_schedule(
     # prefetch 1st fwd stage
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
         if _DEBUG_SCHEDULE:
-            spiral_print(f" prefetch {0}")
-        model[0].spiral_fetch(non_blocking=True)
+            spipe_print(f" prefetch {0}")
+        model[0].spipe_fetch(non_blocking=True)
         prefetch_f0 = get_thunder_cuda_manager().Event(
             "prefetch",
             "compute",
             tag="prefetch:0",
-            post_wait_fn=lambda: set_module_spiral_status(
-                model[0], SpiralParamStatus.GPU
+            post_wait_fn=lambda: set_module_spipe_status(
+                model[0], SPipeParamStatus.GPU
             ),
         )
         if get_thunder_cuda_manager().record_event(prefetch_f0) == -1:
@@ -726,22 +726,22 @@ def onefoneb_schedule(
     ##### warmup
     _PHASE = PHASE.WARMUP
     if _DEBUG_SCHEDULE:
-        spiral_print(f"warmup = {num_warmup_microbatches}")
+        spipe_print(f"warmup = {num_warmup_microbatches}")
 
     # Receive the first input tensor
-    mpu.set_spiral_forward_virtual_rank(0)
+    mpu.set_spipe_forward_virtual_rank(0)
     with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
         # comm under compute stream since blocking recv comm
         input_tensor = p2p_communication.recv_forward(
             tensor_shape, dtype=dtype, batch_p2p_comm=batch_p2p_comm, timers=timers
         )
         input_tensors[0].append((input_tensor, None)) # recv_handle is None since blocking comm.
-    mpu.set_spiral_forward_virtual_rank(None)
+    mpu.set_spipe_forward_virtual_rank(None)
 
     # warmup microbatches
     for k in range(num_warmup_microbatches):
         # set fwd virtual rank
-        mpu.set_spiral_forward_virtual_rank(get_model_chunk_id(k, forward=True))
+        mpu.set_spipe_forward_virtual_rank(get_model_chunk_id(k, forward=True))
 
         # run forward step
         output_tensor = forward_step_helper(k)
@@ -752,13 +752,13 @@ def onefoneb_schedule(
         # TODO: Check currently removed `deallocate_output_tensor` call
 
         # unset fwd virtual rank
-        mpu.set_spiral_forward_virtual_rank(None)
+        mpu.set_spipe_forward_virtual_rank(None)
     # end warmup microbatches
 
     ##### steady
     _PHASE = PHASE.STEADY
     if _DEBUG_SCHEDULE:
-        spiral_print(f"steady state = {num_microbatches_remaining}")
+        spipe_print(f"steady state = {num_microbatches_remaining}")
 
     # steady state microbatches
     for k in range(num_microbatches_remaining):
@@ -768,7 +768,7 @@ def onefoneb_schedule(
             forward_model_chunk_id = get_model_chunk_id(forward_k, forward=True)
 
             # set fwd virtual rank
-            mpu.set_spiral_forward_virtual_rank(forward_model_chunk_id)
+            mpu.set_spipe_forward_virtual_rank(forward_model_chunk_id)
 
             # TODO: Check currently removed `deallocate_output_tensor` call
 
@@ -779,19 +779,19 @@ def onefoneb_schedule(
             steady_forward_comm(k, forward_k, output_tensor)
 
             # unset fwd virtual rank
-            mpu.set_spiral_forward_virtual_rank(None)
+            mpu.set_spipe_forward_virtual_rank(None)
 
             # Backward pass.
             backward_k = k
             backward_model_chunk_id = get_model_chunk_id(backward_k, forward=False)
 
             # set bwd virtual rank
-            mpu.set_spiral_backward_virtual_rank(backward_model_chunk_id)
+            mpu.set_spipe_backward_virtual_rank(backward_model_chunk_id)
 
             with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
                 # wait for recv input tensor
                 if bwd_wait_handles is not None:
-                    # NOTE (SpiralPipe) Must be done in compute stream to avoid error
+                    # NOTE (SPipe) Must be done in compute stream to avoid error
                     for req in bwd_wait_handles:
                         req.wait()
             # end compute stream
@@ -803,7 +803,7 @@ def onefoneb_schedule(
             steady_backward_comm(k, backward_k, input_tensor_grad)
 
             # unset bwd virtual rank
-            mpu.set_spiral_backward_virtual_rank(None)
+            mpu.set_spipe_backward_virtual_rank(None)
 
         # TODO: Handle overlap_p2p_comm=False case
 
@@ -812,14 +812,14 @@ def onefoneb_schedule(
     ##### cooldown
     _PHASE = PHASE.COOLDOWN
     if _DEBUG_SCHEDULE:
-        spiral_print(f"cooldown = {total_num_microbatches - num_microbatches_remaining}")
+        spipe_print(f"cooldown = {total_num_microbatches - num_microbatches_remaining}")
 
     if not forward_only:
         # TODO: Handle all warmup microbatches case
 
         for k in range(num_microbatches_remaining, total_num_microbatches):
             # set bwd virtual rank
-            mpu.set_spiral_backward_virtual_rank(get_model_chunk_id(k, forward=False))
+            mpu.set_spipe_backward_virtual_rank(get_model_chunk_id(k, forward=False))
 
             # run backward step
             input_tensor_grad = backward_step_helper(k)
@@ -828,7 +828,7 @@ def onefoneb_schedule(
             cooldown_comm(k, input_tensor_grad)
 
             # unset bwd virtual rank
-            mpu.set_spiral_backward_virtual_rank(None)
+            mpu.set_spipe_backward_virtual_rank(None)
 
     # TODO: Launch any remaining grad reductions
 

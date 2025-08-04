@@ -2,7 +2,7 @@ import os
 from deepspeed.ops.op_builder import CPUAdamBuilder
 
 
-class SpiralCPUAdamBuilder(CPUAdamBuilder):
+class SPipeCPUAdamBuilder(CPUAdamBuilder):
     BUILD_VAR = "DS_BUILD_SPIPE_CPU_ADAM"
     NAME = "spipe_cpu_adam"
 
