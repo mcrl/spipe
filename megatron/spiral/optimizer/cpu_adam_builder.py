@@ -3,8 +3,8 @@ from deepspeed.ops.op_builder import CPUAdamBuilder
 
 
 class SpiralCPUAdamBuilder(CPUAdamBuilder):
-    BUILD_VAR = "DS_BUILD_SPIRAL_CPU_ADAM"
-    NAME = "spiral_cpu_adam"
+    BUILD_VAR = "DS_BUILD_SPIPE_CPU_ADAM"
+    NAME = "spipe_cpu_adam"
 
     csrc = os.path.join(os.environ["MEGATRON_PATH"], "csrc")
 
@@ -17,11 +17,11 @@ class SpiralCPUAdamBuilder(CPUAdamBuilder):
     def sources(self):
         if self.build_for_cpu:
             return [
-                os.path.join(self.csrc, "spiral_cpu_adam/cpu_adam.cpp"),
+                os.path.join(self.csrc, "spipe_cpu_adam/cpu_adam.cpp"),
             ]
 
         return [
-            os.path.join(self.csrc, "spiral_cpu_adam/cpu_adam.cpp"),
+            os.path.join(self.csrc, "spipe_cpu_adam/cpu_adam.cpp"),
             os.path.join(
                 self.csrc, "external/DeepSpeed/csrc/common/custom_cuda_kernel.cu"
             ),
@@ -42,7 +42,7 @@ class SpiralCPUAdamBuilder(CPUAdamBuilder):
 
         include_dirs=[
             os.path.join(self.csrc, 'external/spdlog/include'),
-            os.path.join(self.csrc, "spiral_cpu_adam"),
+            os.path.join(self.csrc, "spipe_cpu_adam"),
             os.path.join(self.csrc, 'common'),
             os.path.join(self.csrc, 'external/DeepSpeed/csrc/includes'),
         ]

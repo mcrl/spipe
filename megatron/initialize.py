@@ -23,7 +23,7 @@ from megatron.model.fused_bias_gelu import bias_gelu
 from megatron.spiral import SpiralBackend, get_thunder_group
 import megatron.spiral.build_state as sbs
 from megatron.spiral.debug import spiral_print
-import spiral_helper
+import spipe_helper
 
 
 def initialize_megatron(extra_args_provider=None, args_defaults={},
@@ -387,7 +387,7 @@ def _spiral_backend_init():
         torch_group = mpu.get_pipeline_model_parallel_group()
         ranks = frozenset(torch.distributed.get_process_group_ranks(torch_group))
         init_shmem = args.spiral_remap
-        spiral_helper.LazyConfigure(args.spiral_debug_backend)
+        spipe_helper.LazyConfigure(args.spiral_debug_backend)
         SpiralBackend(
             ranks,
             torch.cuda.current_device(),

@@ -2,7 +2,7 @@ import os
 
 import torch
 from torch import nn
-import spiral_helper
+import spipe_helper
 from mpi4py import MPI
 import sys
 
@@ -16,7 +16,7 @@ class SpiralBackend:
 
         ranks = [i for i in range(self.world_size)]
         global thunder_group
-        thunder_group = spiral_helper.Comm(sorted(ranks))
+        thunder_group = spipe_helper.Comm(sorted(ranks))
 
 
     def test_borrow_tensor(self):
@@ -38,7 +38,7 @@ class SpiralBackend:
 
         self.comm.Barrier()
 
-    
+
     def test_borrow_module(self):
         thunder_group.SetSpiralCPUAllocator()
 
@@ -62,8 +62,8 @@ class SpiralBackend:
 
 
     def test_offload(self):
-        spiral_helper.LazyConfigure(True)
-        thunder_group.SetSpiralCPUAllocator()    
+        spipe_helper.LazyConfigure(True)
+        thunder_group.SetSpiralCPUAllocator()
         tensor_ = torch.empty(10, 10, dtype=torch.float, requires_grad=False, device='cpu')
         print(tensor_)
 

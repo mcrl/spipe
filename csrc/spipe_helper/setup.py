@@ -8,10 +8,10 @@ srcpath = pathlib.Path(__file__).parent.absolute()
 csrc = os.path.abspath(__file__ + '/../../')
 
 setup(
-    name='spiral_helper',
+    name='spipe_helper',
     ext_modules=[
         CUDAExtension(
-            name='spiral_helper',
+            name='spipe_helper',
             sources = sorted(glob(os.path.join(srcpath, '*.cpp'))),
             include_dirs=[
                 os.path.join(csrc, 'external/spdlog/include'),

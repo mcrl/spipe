@@ -8,7 +8,7 @@ import subprocess
 
 import torch
 
-import spiral_helper
+import spipe_helper
 
 from megatron import get_args
 from megatron.spiral.debug import spiral_print
@@ -29,7 +29,7 @@ class SpiralBackend:
     ):
         self._set_numa() # NOTE: Currently does nothing but added to later pass numa ID directly to Comm
         self._set_cpu_affinity()
-        self.thunder_group = spiral_helper.Comm(
+        self.thunder_group = spipe_helper.Comm(
             sorted(ranks),
             device,
             init_shmem,
@@ -43,7 +43,7 @@ class SpiralBackend:
         global SPIRAL_BACKEND
         SPIRAL_BACKEND = self
 
-        # NOTE (SpiralPipe) Below enforces invocation of destructor for all objects in SpiralBackend when the program exits, either normally or abnormally. This is especially critical for spiral_helper.Comm, which allocates a hugh shared memory.
+        # NOTE (SpiralPipe) Below enforces invocation of destructor for all objects in SpiralBackend when the program exits, either normally or abnormally. This is especially critical for spipe_helper.Comm, which allocates a hugh shared memory.
         atexit.register(self.__del__)
 
     def _set_numa(self):
