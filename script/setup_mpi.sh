@@ -6,8 +6,6 @@ cd $SPIPE_AEC_ROOT/ucx
 ./autogen.sh
 mkdir -p build && cd build
 ../contrib/configure-release --prefix=${UCX_ROOT} --with-cuda=${CUDA_ROOT} --enable-mt && make -j`nproc` install
-export PATH="$UCX_ROOT/bin:$PATH"
-export LD_LIBRARY_PATH="$UCX_ROOT/lib:$LD_LIBRARY_PATH"
 
 # Install ompi (424151)
 cd $SPIPE_AEC_ROOT/ompi
@@ -15,5 +13,6 @@ cd $SPIPE_AEC_ROOT/ompi
 ./autogen.pl
 mkdir -p build && cd build
 ../configure --prefix=${MPI_ROOT} --with-ucx=${UCX_ROOT} --with-cuda=${CUDA_ROOT} && make -j`nproc` install
-export PATH="$MPI_ROOT/bin:$PATH"
-export LD_LIBRARY_PATH="$MPI_ROOT/lib:$LD_LIBRARY_PATH"
+
+# Fix: manually link libopen-pal for our OpenMPI versions
+ln -s $MPI_ROOT/lib/libopen-pal.so.0.0.0 $MPI_ROOT/lib/libopen-pal.so.40

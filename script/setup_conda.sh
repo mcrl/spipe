@@ -17,13 +17,13 @@ pip install -r requirements.txt
 # Install mpi4py
 MPICC=$(which mpicc) pip install --no-binary=mpi4py mpi4py --no-cache
 
-# misc
-pip install cmake ninja regex pillow pybind11 pyyaml typing-extensions six psutil nvtx py-cpuinfo einops transformers
-
 # Install DeepSpeed
 cd $SPIPE_ROOT/csrc/external/DeepSpeed
-TORCH_CUDA_ARCH_LIST="7.0;8.6" DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip install -e . --global-option="build_ext" --global-option="-j16" --no-cache -v --disable-pip-version-check
+TORCH_CUDA_ARCH_LIST="7.0;8.6" DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip install -e . --no-build-isolation --no-cache-dir -v --disable-pip-version-check
 
 # Install spiral_helper
 cd $SPIPE_ROOT/csrc/spipe_helper
 CUDA_BUILD_DIR=$CUDA_ROOT MPI_BUILD_DIR=$MPI_ROOT pip install .
+
+# misc
+pip install cmake ninja regex pillow pybind11 pyyaml typing-extensions six psutil nvtx py-cpuinfo einops transformers
