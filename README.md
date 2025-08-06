@@ -18,14 +18,16 @@ spipe/
 │  ├── spipe_helper/        #    - SHMEM+RDMA backend
 │  ├── spipe_cpu_adam/      #    - CPU optimizer
 │  ├── common/              #    - Utility functions
-│  ├── external/            #    - External libraries
+│  └── external/            #    - External libraries
 │
 ├── megatron/               # SPipe Python package
-│  ├── spipe/               #    - Pipeline schedule
+│  └── spipe/               #    - Pipeline schedule
 │
 ├── external/               # External libraries
 │
-└── examples/               # SPipe usage examples
+├── examples/               # SPipe usage examples
+├── data/                   # Data vocab, merge file
+└── scripts/                # Scripts to reproduce
 ```
 
 ## Build
