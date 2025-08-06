@@ -10,7 +10,6 @@ logs
 .clang*
 **/tmp
 log*
-*.txt
 results*
 eval*
 _test

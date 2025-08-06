@@ -28,7 +28,7 @@ Execute the following initialization scripts **once**:
 $ source spipe-aec/spipe/script/setup_env.sh
 $ source spipe-aec/spipe/script/setup_mpi.sh
 $ source spipe-aec/spipe/script/setup_conda.sh
-$ source spipe-aec/spipe/script/setup_dataset.sh
+$ source spipe-aec/spipe/script/setup_data.sh
 ```
 
 - The `setup_env.sh` sets necessary environment variables such as `SPIPE_ROOT` used in the later steps. This script should be executed before any other scripts for each shell open.
@@ -39,5 +39,6 @@ $ source spipe-aec/spipe/script/setup_dataset.sh
 ## Experiment Workflow
 
 ```
-sbatch -p spipe -N 1 ./examples/run.sh -j spipe -n llama2 -w 16 -z 2048 -s 1 -f 2 -b 6 -t 3 -l 1 -m 1 -g 16 -v 1 -u 2 -o stage
+source spipe-aec/spipe/script/setup_env.sh
+sbatch -p spipe -N 1 $SPIPE_ROOT/examples/run.sh -j spipe -n llama2 -w 16 -z 2048 -s 10 -f 2 -b 6 -t 3 -l 1 -m 1 -g 16 -v 1 -u 2 -o stage
 ```

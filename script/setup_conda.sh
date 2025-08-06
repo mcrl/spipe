@@ -2,8 +2,8 @@
 #!/bin/bash
 
 # Create conda environment
-conda create -n spipe-pact python=3.8 -y
-conda activate spipe-pact
+conda create -n $CONDA_ENV python=3.8 -y
+conda activate $CONDA_ENV
 
 # Install pytorch
 conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia -y

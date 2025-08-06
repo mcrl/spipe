@@ -24,7 +24,7 @@ done
 
 ## conda
 source ~/miniconda3/etc/profile.d/conda.sh
-conda activate pytorch-2.4-cuda-12.4-python-3.8  
+conda activate ${CONDA_ENV:-pytorch-2.4-cuda-12.4-python-3.8}
 
 # MPI
 MPIRUN=$(which mpirun)
@@ -46,9 +46,9 @@ fi
 
 # Source code
 if [[ $MEGATRON_DEEPSPEED -eq 1 ]]; then
-    export MEGATRON_PATH=${HOME}/spipe/Megatron-LM-mcrl/external/Megatron-DeepSpeed
+    export MEGATRON_PATH=${SPIPE_ROOT:-${HOME}/spipe-aec/spipe}/external/Megatron-DeepSpeed
 else
-    export MEGATRON_PATH=${HOME}/spipe/Megatron-LM-mcrl
+    export MEGATRON_PATH=${SPIPE_ROOT:-${HOME}/spipe-aec/spipe}
 fi
 FUSED_KERNEL_LOCK=${MEGATRON_PATH}/megatron/fused_kernels/build/lock
 
@@ -58,9 +58,12 @@ NSYS=$(which nsys)
 NSYS_OUTPUT=${MEGATRON_PATH}/logs/${SLURM_JOB_ID}-${SLURM_JOB_NAME}
 
 # Data and tokenizer files
-DATA_PATH=/shared/s1/lab08/junyeol/openwebtext/openwebtext_text_document
-VOCAB_FILE=/shared/s1/lab08/junyeol/megatron-deepspeed-data/gpt/gpt2-vocab.json
-MERGE_FILE=/shared/s1/lab08/junyeol/megatron-deepspeed-data/gpt/gpt2-merges.txt
+DATA_PATH=${DATA_PATH:-\
+/shared/s1/lab08/junyeol/openwebtext/openwebtext_text_document}
+VOCAB_FILE=${VOCAB_FILE:-\
+/shared/s1/lab08/junyeol/megatron-deepspeed-data/gpt/gpt2-vocab.json}
+MERGE_FILE=${MERGE_FILE:-\
+/shared/s1/lab08/junyeol/megatron-deepspeed-data/gpt/gpt2-merges.txt}
 
 # Job type and model name
 JOB_TYPE=${JOB_TYPE:="spipe"}
