@@ -11,5 +11,5 @@ logs
 **/tmp
 log*
 results*
-eval*
+_eval
 _test
