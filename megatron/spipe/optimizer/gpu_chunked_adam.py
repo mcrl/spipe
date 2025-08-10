@@ -1,0 +1,434 @@
+# Most of the code here has been copied from:
+#   https://github.com/NVIDIA/apex/blob/741bdf50825a97664db08574981962d66436d16a/apex/optimizers/fused_adam.py
+#   https://github.com/sail-sg/zero-bubble-pipeline-parallelism
+# with some modifications.
+
+import torch
+import nvtx
+from apex.multi_tensor_apply import multi_tensor_applier
+from collections import defaultdict
+
+from megatron import get_args
+from megatron.spipe.initialize import get_thunder_cuda_manager
+
+
+class SPipeGPUChunkedAdam(torch.optim.Optimizer):
+
+    """Implements Adam algorithm.
+
+    Arguments:
+        params (iterable): iterable of parameters to optimize or dicts defining
+            parameter groups.
+        lr (float, optional): learning rate. (default: 1e-3)
+        betas (Tuple[float, float], optional): coefficients used for computing
+            running averages of gradient and its square. (default: (0.9, 0.999))
+        eps (float, optional): term added to the denominator to improve
+            numerical stability. (default: 1e-8)
+        weight_decay (float, optional): weight decay (L2 penalty) (default: 0)
+        amsgrad (boolean, optional): whether to use the AMSGrad variant of this
+            algorithm from the paper `On the Convergence of Adam and Beyond`_
+            (default: False) NOT SUPPORTED in FusedAdam!
+        adam_w_mode (boolean, optional): Apply L2 regularization or weight decay
+            True for decoupled weight decay(also known as AdamW) (default: True)
+        set_grad_none (bool, optional): whether set grad to None when zero_grad()
+            method is called. (default: True)
+        capturable (bool, optional): whether to use the version of the optimizer
+            that can be used with CUDA Graphs. (default: False)
+        master_weights (bool, optional): whether to maintain FP32 master weights
+           in the optimizer with FP16 mixed precision training, currently can
+           only be used with capturable set to True. (default: False)
+    """
+
+    def __init__(self, params, lr=1e-3, bias_correction=True,
+                 betas=(0.9, 0.999), eps=1e-8, adam_w_mode=True,
+                 weight_decay=0., amsgrad=False, set_grad_none=True,
+                 capturable=False, master_weights=False):
+
+        if amsgrad:
+            raise RuntimeError('SPipeGPUAdam does not support the AMSGrad variant.')
+        if capturable or master_weights:
+            raise RuntimeError('SPipeGPUAdam does not support catureable or master_weights.')
+        # If the optimizer is capturable then LR should be a tensor (on GPU)
+        lr = torch.tensor(lr, dtype=torch.float32) if capturable else lr
+        defaults = dict(lr=lr, bias_correction=bias_correction,
+                        betas=betas, eps=eps, weight_decay=weight_decay)
+        super(SPipeGPUChunkedAdam, self).__init__(params, defaults)
+        self.adam_w_mode = 1 if adam_w_mode else 0
+        self.set_grad_none = set_grad_none
+
+        # For unscale in mixed precision
+        self.half_precision = get_args().fp16
+        self.inv_scale = 0
+        self.params_have_main_grad = True
+        self.step_event = None
+        self.found_inf = False
+
+        self.local_device = torch.cuda.current_device()
+        self.remote_device = torch.device("cpu")
+        self.gpu_state = defaultdict(dict)
+        self.cpu_state = defaultdict(dict)
+        self.numel_threshold = get_args().hidden_size * get_args().hidden_size
+
+        if multi_tensor_applier.available:
+            import amp_C
+            # Skip buffer
+            self._dummy_overflow_buf = torch.cuda.IntTensor([0])
+            self.multi_tensor_adam = amp_C.multi_tensor_adam
+            self.multi_tensor_scale = amp_C.multi_tensor_scale
+        else:
+            raise RuntimeError('SPipeGPUAdam requires cuda extensions')
+
+    def zero_grad(self):
+        if self.set_grad_none:
+            for group in self.param_groups:
+                for p in group['params']:
+                    p.grad = None
+        else:
+            super(SPipeGPUChunkedAdam, self).zero_grad()
+
+    def _unscale_grads_and_check_inf(self):
+        fp32_grads = []
+        for group in self.param_groups:
+            for p in group['params']:
+                if self.params_have_main_grad and hasattr(p, 'main_grad'):
+                    if p.main_grad is not None:
+                        p.main_grad = p.main_grad.float()
+                        fp32_grads.append(p.main_grad.data)
+                else:
+                    if p.grad is not None:
+                        p.grad = p.grad.float()
+                        fp32_grads.append(p.grad.data)
+
+        found_inf = torch.cuda.FloatTensor([0.0])
+        inv_scale = torch.cuda.FloatTensor([self.inv_scale])
+        torch._amp_foreach_non_finite_check_and_unscale_(fp32_grads, found_inf, inv_scale)
+
+        return found_inf.item() > 0
+
+    def init_cpu_state(self, idx, shape):
+        cpu_state = self.cpu_state[idx]
+        if len(cpu_state) == 0:
+            cpu_state['exp_avg'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+            cpu_state['exp_avg_sq'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+            if self.half_precision:
+                cpu_state['fp32_param'] = torch.empty(shape, device=self.remote_device, dtype=torch.float32, pin_memory=True)
+
+    @nvtx.annotate("offload_state", color="pink")
+    def offload_state(self, idx):
+        gpu_state = self.gpu_state[idx]
+        cpu_state = self.cpu_state[idx]
+        cpu_state['exp_avg'].copy_(gpu_state['exp_avg'].data, non_blocking=True)
+        cpu_state['exp_avg_sq'].copy_(gpu_state['exp_avg_sq'].data, non_blocking=True)
+        if self.half_precision:
+            cpu_state['fp32_param'].copy_(gpu_state['fp32_param'].data, non_blocking=True)
+
+    @nvtx.annotate("free_state", color="purple")
+    def free_state(self, idx):
+        gpu_state = self.gpu_state[idx]
+        gpu_state['exp_avg'] = torch.empty(0, dtype=torch.float32, device=self.local_device)
+        gpu_state['exp_avg_sq'] = torch.empty(0, dtype=torch.float32, device=self.local_device)
+        if self.half_precision:
+            gpu_state['fp32_param'] = torch.empty(0, dtype=torch.float32, device=self.local_device)
+
+    @nvtx.annotate("fetch_state", color="green")
+    def fetch_state(self, idx):
+        gpu_state = self.gpu_state[idx]
+        cpu_state = self.cpu_state[idx]
+        gpu_state['exp_avg'] = cpu_state['exp_avg'].to(device=self.local_device, non_blocking=True)
+        gpu_state['exp_avg_sq'] = cpu_state['exp_avg_sq'].to(device=self.local_device, non_blocking=True)
+        if self.half_precision:
+            gpu_state['fp32_param'] = cpu_state['fp32_param'].to(device=self.local_device, non_blocking=True)
+
+    def step(self, closure=None, grads=None, output_params=None, scale=None, grad_norms=None, grad_scaler=None):
+        """Performs a single optimization step.
+
+        Arguments:
+            closure (callable, optional): A closure that reevaluates the model
+                and returns the loss.
+
+        The remaining arguments are deprecated, and are only retained (for the moment) for error-checking purposes.
+        """
+        if any(p is not None for p in [grads, output_params, scale, grad_norms]):
+            raise RuntimeError('SPipeGPUAdam has been updated.  Simply initialize it identically to torch.optim.Adam, and call step() with no arguments.')
+        loss = None
+        if closure is not None:
+            loss = closure()
+
+        # Unscale fp32 grads and check for inf/nan
+        if self.half_precision:
+            self.found_inf = self._unscale_grads_and_check_inf()
+            if self.found_inf:
+                return loss
+
+        # Calc number of chunked parameter
+        for group in self.param_groups:
+            if not 'chunked_param_num' in group:
+                group['chunked_param_num'] = len(slice_tensor_list_in_chunks(group['params'], self.numel_threshold))
+
+        # Slice params and grads in chunks
+        for group in self.param_groups:
+            fp32_grads = []
+            for p in group['params']:
+                if self.params_have_main_grad and hasattr(p, 'main_grad'):
+                    grad = p.main_grad
+                else:
+                    grad = p.grad
+
+                if grad is None:
+                    continue
+                if grad.data.is_sparse:
+                    raise RuntimeError('SPipeGPUAdam does not support sparse gradients, please consider SparseAdam instead')
+
+                fp32_grads.append(grad.data)
+
+            group['chunked_params'] = slice_tensor_list_in_chunks(group['params'], self.numel_threshold)
+            group['chunked_grads'] = slice_tensor_list_in_chunks(fp32_grads, self.numel_threshold)
+
+        prefetch_events = []
+        compute_events = []
+        chunked_idx = -1
+
+        for group in self.param_groups:
+            if group['chunked_param_num'] == 0:
+                continue
+            bias_correction = 1 if group['bias_correction'] else 0
+            beta1, beta2 = group['betas']
+
+            # assume same step across group now to simplify things
+            # per parameter step can be easily support by making it tensor, or pass list into kernel
+            if 'step' in group:
+                group['step'] += 1
+            else:
+                group['step'] = 1
+
+            for i in range(group['chunked_param_num']):
+                chunked_idx += 1
+                gpu_state = self.gpu_state[chunked_idx]
+                p = group['chunked_params'][i]
+                g = group['chunked_grads'][i]
+
+                # Fetch optimizer state
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
+                    if not len(gpu_state) == 0:
+                        self.fetch_state(chunked_idx)
+
+                        event = torch.cuda.Event()
+                        event.record()
+                        prefetch_events.append(event)
+
+                # Parameter update
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
+                    # create lists for multi-tensor apply
+                    p_16 = []
+                    g_32, p_32, m_32, v_32 = [], [], [], []
+
+                    # State initialization
+                    if len(gpu_state) == 0:
+                        # Exponential moving average of gradient values
+                        gpu_state['exp_avg'] = torch.zeros_like(p.data).float()
+                        # Exponential moving average of squared gradient values
+                        gpu_state['exp_avg_sq'] = torch.zeros_like(p.data).float()
+                        # Copy fp16 param to fp32 param
+                        if self.half_precision:
+                            gpu_state['fp32_param'] = p.detach().clone().float()
+
+                        self.init_cpu_state(chunked_idx, p.data.shape)
+
+                    if self.half_precision:
+                        p_16.append(p.data)
+                        p_32.append(gpu_state['fp32_param'].data)
+                    else:
+                        p_32.append(p.data)
+
+                    g_32.append(g.data)
+                    m_32.append(gpu_state['exp_avg'])
+                    v_32.append(gpu_state['exp_avg_sq'])
+
+                    if len(prefetch_events) > 0:
+                        prefetch_events.pop(0).wait()
+
+                    # Parameter update
+                    multi_tensor_applier(self.multi_tensor_adam,
+                            self._dummy_overflow_buf,
+                            [g_32, p_32, m_32, v_32],
+                            group['lr'],
+                            beta1,
+                            beta2,
+                            group['eps'],
+                            group['step'],
+                            self.adam_w_mode,
+                            bias_correction,
+                            group['weight_decay'])
+
+                    # Copy fp32 params to fp16 params
+                    if self.half_precision:
+                        # Scaling with factor `1.0` is equivalent to copy.
+                        multi_tensor_applier(self.multi_tensor_scale,
+                                            self._dummy_overflow_buf,
+                                            [p_32, p_16],
+                                            1.0)
+
+                    event = torch.cuda.Event()
+                    event.record()
+                    compute_events.append(event)
+
+                # Offload and free optimizer state
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
+                    if len(compute_events) > 0:
+                            compute_events.pop(0).wait()
+                    self.offload_state(chunked_idx)
+                    self.free_state(chunked_idx)
+
+        self.step_event = torch.cuda.Event()
+        self.step_event.record()
+
+        return loss
+
+    def rollback(self):
+        if not self.adam_w_mode:
+            raise RuntimeError("SPipeGPUAdam only supports rollback for adam_w_mode.")
+
+        # if found_inf is True, skip rollback
+        if self.half_precision and self.found_inf:
+            return
+
+        prefetch_events = []
+        compute_events = []
+        chunked_idx = -1
+
+        for group in self.param_groups:
+            assert 'chunked_param_num' in group, "Rollback should be call after run optimizer.step"
+            if group['chunked_param_num'] == 0:
+                continue
+            bias_correction = 1 if group['bias_correction'] else 0
+            beta1, beta2 = group['betas']
+
+            for i in range(group['chunked_param_num']):
+                chunked_idx += 1
+                gpu_state = self.gpu_state[chunked_idx]
+                assert len(gpu_state) != 0, "Rollback should be call after run optimizer.step"
+                p = group['chunked_params'][i]
+                g = group['chunked_grads'][i]
+
+                # Fetch optimizer state
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("prefetch")):
+                    self.fetch_state(chunked_idx)
+                    event = torch.cuda.Event()
+                    event.record()
+                    prefetch_events.append(event)
+
+                # Parameter update
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("compute")):
+                    # create lists for multi-tensor apply
+                    p_16 = []
+                    g_32, p_32, m_32, v_32 = [], [], [], []
+
+                    if self.half_precision:
+                        p_16.append(p.data)
+                        p_32.append(gpu_state['fp32_param'].data)
+                    else:
+                        p_32.append(p.data)
+
+                    g_32.append(g.data)
+                    m_32.append(gpu_state['exp_avg'])
+                    v_32.append(gpu_state['exp_avg_sq'])
+
+                    if len(prefetch_events) > 0:
+                        prefetch_events.pop(0).wait()
+
+                    # Parameter update
+                    multi_tensor_rollback_adamw(
+                        g_32, p_32, m_32, v_32,
+                        group['lr'],
+                        beta1,
+                        beta2,
+                        group['eps'],
+                        group['step'],
+                        bias_correction,
+                        group['weight_decay'])
+
+                    # Copy fp32 params to fp16 params
+                    if self.half_precision:
+                        # Scaling with factor `1.0` is equivalent to copy.
+                        multi_tensor_applier(self.multi_tensor_scale,
+                                            self._dummy_overflow_buf,
+                                            [p_32, p_16],
+                                            1.0)
+
+                    event = torch.cuda.Event()
+                    event.record()
+                    compute_events.append(event)
+
+                # Offload and free optimizer state
+                with torch.cuda.stream(get_thunder_cuda_manager().Stream("offload")):
+                    if len(compute_events) > 0:
+                            compute_events.pop(0).wait()
+                    self.offload_state(chunked_idx)
+                    self.free_state(chunked_idx)
+
+            group['step'] -= 1
+
+    def sync(self, found_inf=None):
+        if self.step_event is not None:
+            self.step_event.synchronize()
+            self.step_event = None
+
+        if found_inf is not None:
+            found_inf.fill_(1.0 if self.found_inf else 0.0)
+
+
+def multi_tensor_rollback_adamw(
+    g_list, p_list, m_list, v_list,
+    lr,
+    beta1,
+    beta2,
+    eps,
+    step,
+    bias_correction,
+    weight_decay,
+):
+    beta1_correction, beta2_correction = 1.0, 1.0
+    if bias_correction == 1:
+        beta1_correction = 1 - beta1 ** step
+        beta2_correction = 1 - beta2 ** step
+    for i, p in enumerate(p_list):
+        rollback_adamw(
+            g_list[i], p_list[i], m_list[i], v_list[i],
+            lr,
+            beta1,
+            beta2,
+            beta1_correction,
+            beta2_correction,
+            eps,
+            weight_decay,
+        )
+
+
+def rollback_adamw(
+    g: torch.Tensor, p: torch.Tensor, m: torch.Tensor, v: torch.Tensor,
+    lr,
+    beta1,
+    beta2,
+    beta1_correction,
+    beta2_correction,
+    eps,
+    decay,
+):
+    update = (m / beta1_correction) / ((v / beta2_correction).sqrt() + eps)
+    update.mul_(lr)
+    p.add_(update).div_(1 - lr * decay)
+    v.addcmul_(g, g, value=beta2 - 1).div_(beta2)
+    m.add_(g, alpha=beta1 - 1).div_(beta1)
+
+
+def slice_tensor_list_in_chunks(tensor_list, chunk_size=0):
+    sliced_tensor_list = []
+
+    for tensor in tensor_list:
+        current_index = 0
+        while current_index < tensor.numel():
+            end = min(current_index + chunk_size, tensor.numel())
+            sliced_tensor_list.append(tensor.view(-1)[current_index:end])
+            current_index += chunk_size
+
+    return sliced_tensor_list

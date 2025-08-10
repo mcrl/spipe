@@ -95,7 +95,7 @@ class MegatronModule(torch.nn.Module):
                 MegatronModule.embedding_warning_printed = True
             return
 
-        if not mpu.is_spiral_remap():
+        if not mpu.is_spipe_remap():
             # Ensure that first and last stages have the same initial parameter
             # values.
             if mpu.is_rank_in_embedding_group():
@@ -104,14 +104,14 @@ class MegatronModule(torch.nn.Module):
         else:
             # Sync between prep-postp stages
             if mpu.is_rank_in_embedding_group(ignore_virtual=True):
-                # TODO (SpiralPipe) Resolve circular waiting with position embedding sync
+                # TODO (SPipe) Resolve circular waiting with position embedding sync
                 # torch.distributed.all_reduce(
-                #     self.word_embeddings_weight().spiral_tensor.data,
-                #     group=mpu.get_spiral_embedding_group_gloo(),
+                #     self.word_embeddings_weight().spipe_tensor.data,
+                #     group=mpu.get_spipe_embedding_group_gloo(),
                 # )
                 pass
 
-        if not mpu.is_spiral_remap():
+        if not mpu.is_spipe_remap():
             # Ensure that encoder(first stage) and decoder(split stage) position
             # embeddings have the same initial parameter values
             # NOTE: We don't currently support T5 with the interleaved schedule.
@@ -125,11 +125,11 @@ class MegatronModule(torch.nn.Module):
         else:
             # Sync between prep stages
             if mpu.is_rank_in_position_embedding_group() and mpu.is_pipeline_first_stage():
-                # TODO (SpiralPipe) Resolve circular waiting with word embedding sync
+                # TODO (SPipe) Resolve circular waiting with word embedding sync
                 # position_embeddings = self.language_model.embedding.position_embeddings
                 # torch.distributed.all_reduce(
-                #     position_embeddings.weight.spiral_tensor.data,
-                #     group=mpu.get_spiral_position_embedding_group_gloo(),
+                #     position_embeddings.weight.spipe_tensor.data,
+                #     group=mpu.get_spipe_position_embedding_group_gloo(),
                 # )
                 pass
 
@@ -171,11 +171,11 @@ def float16_to_fp32(val):
 
 class Float16Module(MegatronModule):
 
-    def __init__(self, module, args, spiral_disable_cast=False):
+    def __init__(self, module, args, spipe_disable_cast=False):
         """Wrap the module with float16/bfloat16 cast.
 
         Arguments:
-            spiral_disable_cast: bool, whether to disable float32 <-> float16/bfloat16 cast. SpiralPhaseList contains mutliple Float16Modules, while the `fp16/bf16 cast` is only needed at the first Float16Module in the first stage (i.e., fid/bid=0, fbp/bbp=0) and the `fp32 cast` is only needed at the last Float16Module in the last stage (i.e., fid/bid=last, fbp/bbp=last*).
+            spipe_disable_cast: bool, whether to disable float32 <-> float16/bfloat16 cast. SPipePhaseList contains mutliple Float16Modules, while the `fp16/bf16 cast` is only needed at the first Float16Module in the first stage (i.e., fid/bid=0, fbp/bbp=0) and the `fp32 cast` is only needed at the last Float16Module in the last stage (i.e., fid/bid=last, fbp/bbp=last*).
         """
         super(Float16Module, self).__init__()
 
@@ -191,20 +191,20 @@ class Float16Module(MegatronModule):
             raise Exception('should not be here')
 
         self.float16_convertor = float16_convertor
-        self.spiral_disable_cast = spiral_disable_cast
+        self.spipe_disable_cast = spipe_disable_cast
 
-        # Spiral requires additional cast of spiral_tensor
-        # Spiral remap does not require the casted tensor to be pinned because using spiral_init_context pins all spiral_tensors
-        if args.spiral:
+        # spipe requires additional cast of spipe_tensor
+        # spipe remap does not require the casted tensor to be pinned because using spipe_init_context pins all spipe_tensors
+        if args.spipe:
             self.module.apply(
                 lambda m: [
                     setattr(
                         p,
-                        "spiral_tensor",
+                        "spipe_tensor",
                         (
-                            float16_convertor(p.spiral_tensor)
-                            if args.spiral_remap
-                            else float16_convertor(p.spiral_tensor).pin_memory()
+                            float16_convertor(p.spipe_tensor)
+                            if args.spipe_remap
+                            else float16_convertor(p.spipe_tensor).pin_memory()
                         ),
                     )
                     for p in m.parameters(recurse=False)
@@ -215,10 +215,10 @@ class Float16Module(MegatronModule):
         return self.module.set_input_tensor(input_tensor)
 
     def forward(self, *inputs, **kwargs):
-        if mpu.is_pipeline_first_stage() and not self.spiral_disable_cast:
+        if mpu.is_pipeline_first_stage() and not self.spipe_disable_cast:
             inputs = fp32_to_float16(inputs, self.float16_convertor)
         outputs = self.module(*inputs, **kwargs)
-        if mpu.is_pipeline_last_stage() and not self.spiral_disable_cast:
+        if mpu.is_pipeline_last_stage() and not self.spipe_disable_cast:
             outputs = float16_to_fp32(outputs)
         return outputs
 

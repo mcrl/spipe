@@ -20,10 +20,10 @@ from megatron.checkpointing import load_args_from_checkpoint
 from megatron.global_vars import set_global_variables
 from megatron.model.transformer import bias_dropout_add_fused_train
 from megatron.model.fused_bias_gelu import bias_gelu
-from megatron.spiral import SpiralBackend, get_thunder_group
-import megatron.spiral.build_state as sbs
-from megatron.spiral.debug import spiral_print
-import spiral_helper
+from megatron.spipe import SPipeBackend, get_thunder_group
+import megatron.spipe.build_state as sbs
+from megatron.spipe.debug import spipe_print
+import spipe_helper
 
 
 def initialize_megatron(extra_args_provider=None, args_defaults={},
@@ -69,7 +69,7 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
 
     args = get_args()
     if args.lazy_mpu_init:
-        assert not args.spiral, "SpiralPipe does not support lazy mpu init"
+        assert not args.spipe, "SPipe does not support lazy mpu init"
 
         # TODO is this still a necessary option?
         args.use_cpu_initialization=True
@@ -90,12 +90,12 @@ def initialize_megatron(extra_args_provider=None, args_defaults={},
         # Compile dependencies.
         _compile_dependencies()
 
-        # Init spiral backend
-        _spiral_backend_init()
-        # Init spiral build state
-        _spiral_build_state_init()
-        # Execute spiral tests
-        _spiral_do_test()
+        # Init spipe backend
+        _spipe_backend_init()
+        # Init spipe build state
+        _spipe_build_state_init()
+        # Execute spipe tests
+        _spipe_do_test()
 
         # No continuation function
         return None
@@ -191,7 +191,7 @@ def _initialize_distributed():
         world_size=args.world_size, rank=args.rank,
         timeout=timedelta(minutes=args.distributed_timeout_minutes))
 
-    # TODO (SpiralPipe) This is a good place to do stage partitioning
+    # TODO (SPipe) This is a good place to do stage partitioning
 
     # Set the tensor model-parallel, pipeline model-parallel, and
     # data-parallel communicators.
@@ -203,12 +203,12 @@ def _initialize_distributed():
                                           args.pipeline_model_parallel_size,
                                           args.virtual_pipeline_model_parallel_size,
                                           args.pipeline_model_parallel_split_rank,
-                                          args.spiral,
-                                          args.spiral_remap,
-                                          args.spiral_forward_virtual_size,
-                                          args.spiral_backward_virtual_size,
-                                          args.spiral_cross_mapping,
-                                          args.spiral_ckpt_comm_threshold,)
+                                          args.spipe,
+                                          args.spipe_remap,
+                                          args.spipe_forward_virtual_size,
+                                          args.spipe_backward_virtual_size,
+                                          args.spipe_cross_mapping,
+                                          args.spipe_ckpt_comm_threshold,)
             if args.rank == 0:
                 print(f'> initialized tensor model parallel with size '
                       f'{mpu.get_tensor_model_parallel_world_size()}')
@@ -228,8 +228,8 @@ def _init_autoresume():
 def _set_random_seed(seed_, data_parallel_random_init=False):
     """Set random seed for reproducability."""
     rank = mpu.get_pipeline_model_parallel_rank()
-    if mpu.is_spiral_remap():
-        # NOTE (SpiralPipe) Set seed for correction check
+    if mpu.is_spipe_remap():
+        # NOTE (SPipe) Set seed for correction check
         rank = mpu.get_pipeline_model_parallel_world_size() - 1 - rank
 
     if seed_ is not None and seed_ > 0:
@@ -364,7 +364,7 @@ def _mpi_check(args):
         os.environ['MASTER_ADDR'] = master_addr
         os.environ['MASTER_PORT'] = str(master_port)
 
-        spiral_print(
+        spipe_print(
             "Discovered MPI settings of world_rank={}, local_rank={}, world_size={}, master_addr={}, master_port={}"
             .format(os.environ['RANK'],
                     os.environ['LOCAL_RANK'],
@@ -373,47 +373,47 @@ def _mpi_check(args):
                     os.environ['MASTER_PORT']))
 
 
-def _spiral_backend_init():
-    """ Initialize spiral backend """
+def _spipe_backend_init():
+    """ Initialize spipe backend """
 
     def _set_comm_info():
         thunder_group_info = get_thunder_group().GetCommInfo()
-        mpu.set_spiral_intra_rank(thunder_group_info['intra_rank'])
-        mpu.set_spiral_intra_size(thunder_group_info['intra_size'])
-        mpu.set_spiral_is_host_leader(thunder_group_info['is_host_leader'])
+        mpu.set_spipe_intra_rank(thunder_group_info['intra_rank'])
+        mpu.set_spipe_intra_size(thunder_group_info['intra_size'])
+        mpu.set_spipe_is_host_leader(thunder_group_info['is_host_leader'])
 
     args = get_args()
-    if args.spiral:
+    if args.spipe:
         torch_group = mpu.get_pipeline_model_parallel_group()
         ranks = frozenset(torch.distributed.get_process_group_ranks(torch_group))
-        init_shmem = args.spiral_remap
-        spiral_helper.LazyConfigure(args.spiral_debug_backend)
-        SpiralBackend(
+        init_shmem = args.spipe_remap
+        spipe_helper.LazyConfigure(args.spipe_debug_backend)
+        SPipeBackend(
             ranks,
             torch.cuda.current_device(),
             init_shmem,
-            args.spiral_shared_memory_name,
-            args.spiral_shared_memory_buffer_size,
-            args.spiral_shared_memory_header_size,
+            args.spipe_shared_memory_name,
+            args.spipe_shared_memory_buffer_size,
+            args.spipe_shared_memory_header_size,
             2 if (args.fp16 or args.bf16) else 4,
         )
         _set_comm_info()
 
 
-def _spiral_build_state_init():
+def _spipe_build_state_init():
     args = get_args()
-    if args.spiral:
-        sbs.initialize_spiral_build_state()
+    if args.spipe:
+        sbs.initialize_spipe_build_state()
 
 
-def _spiral_do_test():
-    # NOTE (SpiralPipe) This is a good place to do tests
-    _SPIRAL_DO_TEST = False
+def _spipe_do_test():
+    # NOTE (SPipe) This is a good place to do tests
+    _SPIPE_DO_TEST = False
 
-    if not _SPIRAL_DO_TEST:
+    if not _SPIPE_DO_TEST:
         return
 
-    from megatron.spiral.test import test_spiral_cuda_manager
-    test_spiral_cuda_manager()
+    from megatron.spipe.test import test_spipe_cuda_manager
+    test_spipe_cuda_manager()
 
     exit(0)

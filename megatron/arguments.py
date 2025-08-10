@@ -374,94 +374,94 @@ def validate_args(args, defaults={}):
                     retro_args.retro_gpt_chunk_length
                 set_retro_args(retro_args)
 
-    # SpiralPipe
-    if args.spiral:
+    # SPipe
+    if args.spipe:
         if args.standalone_embedding_stage:
             raise RuntimeError(
-                "SpiralPipe does not support standalone embedding stage")
+                "SPipe does not support standalone embedding stage")
         if args.virtual_pipeline_model_parallel_size is not None:
             raise RuntimeError(
-                "SpiralPipe does not support setting virtual pipeline")
+                "SPipe does not support setting virtual pipeline")
         if args.lazy_mpu_init:
             raise RuntimeError(
-                "SpiralPipe does not support lazy mpu init")
+                "SPipe does not support lazy mpu init")
         if args.clip_grad > 0.0:
             raise RuntimeError(
-                "SpiralPipe does not support clip_grad > 0.0, since it incurs allreduce.")
+                "SPipe does not support clip_grad > 0.0, since it incurs allreduce.")
         if args.log_num_zeros_in_grad:
             raise RuntimeError(
-                "SpiralPipe does not support log_num_zeros_in_grad, since it incurs allreduce.")
+                "SPipe does not support log_num_zeros_in_grad, since it incurs allreduce.")
         if args.attention_dropout > 0.0:
             raise RuntimeError(
-                "SpiralPipe does not support attention_dropout > 0.0, since it yields different recomputation results from original fwd results")
+                "SPipe does not support attention_dropout > 0.0, since it yields different recomputation results from original fwd results")
         if args.hidden_dropout > 0.0:
             raise RuntimeError(
-                "SpiralPipe does not support hidden_dropout > 0.0, since it yields different recomputation results from original fwd results")
+                "SPipe does not support hidden_dropout > 0.0, since it yields different recomputation results from original fwd results")
         if args.use_contiguous_buffers_in_local_ddp:
             raise RuntimeError(
-                "SpiralPipe does not support use_contiguous_buffers_in_local_ddp, just to avoid assertion in MegatronOptimizer.__init__. "
-                "This is not a limitation of SpiralPipe, but as Megatron optimizer currently does not consider offloaded optimizer. "
+                "SPipe does not support use_contiguous_buffers_in_local_ddp, just to avoid assertion in MegatronOptimizer.__init__. "
+                "This is not a limitation of SPipe, but as Megatron optimizer currently does not consider offloaded optimizer. "
                 "Specifically, it does not consider where param on GPU has `main_grad` (due to local DDP) but param on offloaded device only has `grad`. "
                 "Additionally, this also makes DDP module to allocate contiguous buffer for `grad` tensor, which incurs extra memory overhead.")
-        if args.spiral_forward_virtual_size is None:
+        if args.spipe_forward_virtual_size is None:
             raise RuntimeError(
-                "SpiralPipe requires setting forward virtual size")
-        if args.spiral_forward_virtual_size < 1:
+                "SPipe requires setting forward virtual size")
+        if args.spipe_forward_virtual_size < 1:
             raise RuntimeError(
-                "SpiralPipe requires forward virtual size > 0")
-        if args.spiral_forward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
+                "SPipe requires forward virtual size > 0")
+        if args.spipe_forward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
             raise RuntimeError(
-                "SpiralPipe requires forward virtual size <= num_layers // pipeline_model_parallel_size")
-        if args.num_layers % (args.pipeline_model_parallel_size * args.spiral_forward_virtual_size) != 0:
+                "SPipe requires forward virtual size <= num_layers // pipeline_model_parallel_size")
+        if args.num_layers % (args.pipeline_model_parallel_size * args.spipe_forward_virtual_size) != 0:
             raise RuntimeError(
-                "SpiralPipe requires num_layers to be divisible by pipeline_model_parallel_size * spiral_forward_virtual_size")
-        if args.spiral_backward_virtual_size is None:
+                "SPipe requires num_layers to be divisible by pipeline_model_parallel_size * spipe_forward_virtual_size")
+        if args.spipe_backward_virtual_size is None:
             raise RuntimeError(
-                "SpiralPipe requires setting backward virtual size")
-        if args.spiral_backward_virtual_size < 1:
+                "SPipe requires setting backward virtual size")
+        if args.spipe_backward_virtual_size < 1:
             raise RuntimeError(
-                "SpiralPipe requires backward virtual size > 0")
-        if args.spiral_backward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
+                "SPipe requires backward virtual size > 0")
+        if args.spipe_backward_virtual_size > args.num_layers // args.pipeline_model_parallel_size:
             raise RuntimeError(
-                "SpiralPipe requires backward virtual size <= num_layers // pipeline_model_parallel_size")
-        if args.num_layers % (args.pipeline_model_parallel_size * args.spiral_backward_virtual_size) != 0:
+                "SPipe requires backward virtual size <= num_layers // pipeline_model_parallel_size")
+        if args.num_layers % (args.pipeline_model_parallel_size * args.spipe_backward_virtual_size) != 0:
             raise RuntimeError(
-                "SpiralPipe requires num_layers to be divisible by pipeline_model_parallel_size * spiral_backward_virtual_size")
-        if args.spiral_remap:
-            if not args.spiral_recompute_activations:
+                "SPipe requires num_layers to be divisible by pipeline_model_parallel_size * spipe_backward_virtual_size")
+        if args.spipe_remap:
+            if not args.spipe_recompute_activations:
                 raise RuntimeError(
-                    "SpiralPipe with remapping requires spiral_recompute_activations")
+                    "SPipe with remapping requires spipe_recompute_activations")
             if args.rank == 0:
                 print(
-                    "Warning: SpiralPipe with remapping will run with full uniform (recompute num layers=1) recomputation "
+                    "Warning: SPipe with remapping will run with full uniform (recompute num layers=1) recomputation "
                     "regardless of --activation-recomputation, --recompute-granularity, --recompute-method, and --recompute-num-layers"
                 )
-        if not args.spiral_remap:
-            if args.spiral_forward_virtual_size != args.spiral_backward_virtual_size:
+        if not args.spipe_remap:
+            if args.spipe_forward_virtual_size != args.spipe_backward_virtual_size:
                 raise RuntimeError(
-                    "SpiralPipe w/o remapping requires forward and backward virtual size to be the same")
-            if args.spiral_mobius and args.spiral_recompute_activations:
+                    "SPipe w/o remapping requires forward and backward virtual size to be the same")
+            if args.spipe_mobius and args.spipe_recompute_activations:
                 if args.rank == 0:
                     print(
                         "Warning: Mobius will run with full uniform (recompute num layers=1) recomputation "
                         "regardless of --recompute-granularity, --recompute-method, and --recompute-num-layers"
                     )
-            if args.spiral_1f1b and args.spiral_recompute_activations:
+            if args.spipe_1f1b and args.spipe_recompute_activations:
                 if args.rank == 0:
                     print(
-                        "Warning: Interleaved 1f1b offload with recomputation will ignore --spiral-recompute-activations and follow configuration given by --recompute-granularity, --recompute-method, and --recompute-num-layers"
+                        "Warning: Interleaved 1f1b offload with recomputation will ignore --spipe-recompute-activations and follow configuration given by --recompute-granularity, --recompute-method, and --recompute-num-layers"
                     )
         if args.use_distributed_optimizer:
             raise RuntimeError(
-                "SpiralPipe currently does not support distributed optimizer")
-        if args.spiral_heterogeneous_optimizer:
-            assert args.spiral_stage_optimizer, "spiral-heterogeneous-optimizer should be enabled with spiral-stage-optimizer"
-        if args.spiral_offload_optimizer:
-            assert args.spiral_heterogeneous_optimizer, "spiral-offload-optimizer should be enabled with spiral-heterogeneous-optimizer"
-        if (args.spiral_remap and args.spiral_1f1b) or (args.spiral_remap and args.spiral_mobius) or (args.spiral_1f1b and args.spiral_mobius):
+                "SPipe currently does not support distributed optimizer")
+        if args.spipe_heterogeneous_optimizer:
+            assert args.spipe_stage_optimizer, "spipe-heterogeneous-optimizer should be enabled with spipe-stage-optimizer"
+        if args.spipe_offload_optimizer:
+            assert args.spipe_heterogeneous_optimizer, "spipe-offload-optimizer should be enabled with spipe-heterogeneous-optimizer"
+        if (args.spipe_remap and args.spipe_1f1b) or (args.spipe_remap and args.spipe_mobius) or (args.spipe_1f1b and args.spipe_mobius):
             raise RuntimeError(
-                "SpiralPipe does not support remapping/1f1b/mobius together")
-        if args.spiral_1f1b and not args.spiral_actv_p2p:
+                "SPipe does not support remapping/1f1b/mobius together")
+        if args.spipe_1f1b and not args.spipe_actv_p2p:
             raise RuntimeError("Interleaved 1f1b offload currently only implements p2pops-based activation communication")
 
     # GQA
@@ -1109,56 +1109,56 @@ def _add_distributed_args(parser):
                        help='(optional) IP address of node 0, will be '
                        'inferred via \'hostname -I\' if not specified.')
 
-    # SpiralPipe
-    group.add_argument('--spiral', action='store_true',
-                       help='Enable SpiralPipe')
-    group.add_argument('--spiral-forward-virtual-size', type=int, default=None,
-                       help='Number of SpiralPipe forward stages per rank')
-    group.add_argument('--spiral-backward-virtual-size', type=int, default=None,
-                       help='Number of SpiralPipe backward stages per rank')
-    group.add_argument('--spiral-remap', action='store_true',
-                       help='Enable SpiralPipe remapping.'
-                       'If turned on, --spiral-forward-virtual-size and --spiral-backward-virtual-size must be set to equal. '
+    # SPipe
+    group.add_argument('--spipe', action='store_true',
+                       help='Enable SPipe')
+    group.add_argument('--spipe-forward-virtual-size', type=int, default=None,
+                       help='Number of SPipe forward stages per rank')
+    group.add_argument('--spipe-backward-virtual-size', type=int, default=None,
+                       help='Number of SPipe backward stages per rank')
+    group.add_argument('--spipe-remap', action='store_true',
+                       help='Enable SPipe remapping.'
+                       'If turned on, --spipe-forward-virtual-size and --spipe-backward-virtual-size must be set to equal. '
                        'If turned off, the pipeline will resemble that of Mobius (ASPLOS 2023) '
                        'https://dl.acm.org/doi/abs/10.1145/3575693.3575703')
-    group.add_argument('--spiral-1f1b', action='store_true',
+    group.add_argument('--spipe-1f1b', action='store_true',
                        help='Enable interleaved 1f1B offloading')
-    group.add_argument('--spiral-mobius', action='store_true',
+    group.add_argument('--spipe-mobius', action='store_true',
                        help='Enable mobius')
-    group.add_argument('--spiral-shared-memory-name', type=str, default='/spiral',
-                       help='Shared memory name to use when --spiral-remap')
-    group.add_argument('--spiral-shared-memory-buffer-size', type=int, default=0,
-                       help='Shared memory buffer size (bytes) to use when --spiral-remap')
-    group.add_argument('--spiral-shared-memory-header-size', type=int, default=0,
-                       help='Shared memory header size (bytes) to use when --spiral-remap')
-    group.add_argument('--spiral-recompute-activations', action='store_true',
-                       help='Enable SpiralPipe activation recomputation')
-    group.add_argument('--spiral-overlap-offload-grad', action='store_true',
+    group.add_argument('--spipe-shared-memory-name', type=str, default='/spipe',
+                       help='Shared memory name to use when --spipe-remap')
+    group.add_argument('--spipe-shared-memory-buffer-size', type=int, default=0,
+                       help='Shared memory buffer size (bytes) to use when --spipe-remap')
+    group.add_argument('--spipe-shared-memory-header-size', type=int, default=0,
+                       help='Shared memory header size (bytes) to use when --spipe-remap')
+    group.add_argument('--spipe-recompute-activations', action='store_true',
+                       help='Enable SPipe activation recomputation')
+    group.add_argument('--spipe-overlap-offload-grad', action='store_true',
                        help='Overlap gradients offload with backward pass')
-    group.add_argument('--spiral-stage-optimizer', action='store_true',
-                        help='Enable SpiralPipe optimizer to operate independently per stage')
-    group.add_argument('--spiral-stage-optimizer-pool-size', type=int, default=0,
-                        help='Thread pool size per spiral stage optimizer when --spiral-stage-optimizer is enabled'
+    group.add_argument('--spipe-stage-optimizer', action='store_true',
+                        help='Enable SPipe optimizer to operate independently per stage')
+    group.add_argument('--spipe-stage-optimizer-pool-size', type=int, default=0,
+                        help='Thread pool size per spipe stage optimizer when --spipe-stage-optimizer is enabled'
                         'Default value (0) enables dynamic thread pool sizing')
-    group.add_argument('--spiral-heterogeneous-optimizer', action='store_true',
+    group.add_argument('--spipe-heterogeneous-optimizer', action='store_true',
                         help='Enable cpu-gpu heterogeneous optimizer per each stage. '
                         'Use gpu optimizer for the first stage and cpu optimizer for the others')
-    group.add_argument('--spiral-offload-optimizer', action='store_true',
+    group.add_argument('--spipe-offload-optimizer', action='store_true',
                         help='Enable offload optimizer state per chunked parameter in gpu heterogeneous optimizer.')
-    group.add_argument('--spiral-debug-backend', action='store_true',
-                       help='Enable SpiralPipe backend logging')
-    group.add_argument('--spiral-cross-mapping', action='store_true',
-                       help='Enable SpiralPipe cross-mapping')
-    group.add_argument('--spiral-sync-ckpt-communication', action='store_true',
-                        help='Disable SpiralPipe asynchronous checkpoint communication. Asynchronous '
+    group.add_argument('--spipe-debug-backend', action='store_true',
+                       help='Enable SPipe backend logging')
+    group.add_argument('--spipe-cross-mapping', action='store_true',
+                       help='Enable SPipe cross-mapping')
+    group.add_argument('--spipe-sync-ckpt-communication', action='store_true',
+                        help='Disable SPipe asynchronous checkpoint communication. Asynchronous '
                         'checkpoint communication typically improves performance by overlapping transmission')
-    group.add_argument('--spiral-actv-p2p', action='store_true',
-                        help='Enable SpiralPipe p2p activation communication')
-    group.add_argument('--spiral-ckpt-p2p', action='store_true',
-                        help='Enable SpiralPipe p2p checkpoint communication')
-    group.add_argument('--spiral-ckpt-comm-threshold', type=int, default=1,
+    group.add_argument('--spipe-actv-p2p', action='store_true',
+                        help='Enable SPipe p2p activation communication')
+    group.add_argument('--spipe-ckpt-p2p', action='store_true',
+                        help='Enable SPipe p2p checkpoint communication')
+    group.add_argument('--spipe-ckpt-comm-threshold', type=int, default=1,
                         help='Number of separate checkpoint communication communicators')
-    group.add_argument('--spiral-log-gpu-pipeline-latency', action='store_true',
+    group.add_argument('--spipe-log-gpu-pipeline-latency', action='store_true',
                         help='Log GPU pipeline latency. Measure elapsed time from first prefetch to last offload. '
                         'This is incompatible with stage, hetero, or chunked optimizer, or without overlap offload grad')
     return parser

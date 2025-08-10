@@ -19,8 +19,8 @@ from megatron.model.fused_bias_gelu import bias_gelu_impl
 from megatron.model.rotary_pos_embedding import apply_rotary_pos_emb
 from megatron.model.utils import attention_mask_func, openai_gelu, erf_gelu
 
-import megatron.spiral.build_state as sbs
-from megatron.spiral.debug import spiral_print
+import megatron.spipe.build_state as sbs
+from megatron.spipe.debug import spipe_print
 
 
 try:
@@ -1233,8 +1233,8 @@ def _get_num_layers(args, model_type, is_decoder=False):
         num_layers = args.retro_encoder_layers
     elif mpu.get_pipeline_model_parallel_world_size() > 1:
         if is_encoder_and_decoder_model:
-            assert mpu.is_spiral() is False, \
-                'SpiralPipe is not supported with encoder_and_decoder model type'
+            assert mpu.is_spipe() is False, \
+                'SPipe is not supported with encoder_and_decoder model type'
             assert args.pipeline_model_parallel_split_rank is not None
 
             # When a standalone embedding stage is used, a rank is taken from
@@ -1405,8 +1405,8 @@ class ParallelTransformer(MegatronModule):
                     self_attn_mask_type=self_attn_mask_type,
                     drop_path_rate=self.drop_path_rates[layer_number - 1])
             else:
-                assert mpu.is_spiral() is False, \
-                    'SpiralPipe is not supported with transformer engine'
+                assert mpu.is_spipe() is False, \
+                    'SPipe is not supported with transformer engine'
                 return transformer_engine.pytorch.TransformerLayer(
                     args.hidden_size,
                     args.ffn_hidden_size,
@@ -1454,50 +1454,50 @@ class ParallelTransformer(MegatronModule):
             offset = mpu.get_virtual_pipeline_model_parallel_rank() * (
                 args.num_layers // args.virtual_pipeline_model_parallel_size) + \
                 (mpu.get_pipeline_model_parallel_rank() * self.num_layers)
-        elif mpu.is_spiral():
-            if mpu.is_spiral_forward_stage():
+        elif mpu.is_spipe():
+            if mpu.is_spipe_forward_stage():
                 self.num_layers = (
                     self.num_layers
-                    // mpu.get_spiral_forward_virtual_size()
-                    // sbs.get_spiral_forward_stage_build_phase_size()
+                    // mpu.get_spipe_forward_virtual_size()
+                    // sbs.get_spipe_forward_stage_build_phase_size()
                 )
                 offset = (
-                    mpu.get_spiral_forward_virtual_rank()
+                    mpu.get_spipe_forward_virtual_rank()
                     * (
                         args.num_layers
-                        // mpu.get_spiral_forward_virtual_size()
+                        // mpu.get_spipe_forward_virtual_size()
                     )
                     + mpu.get_pipeline_model_parallel_rank()
-                    * sbs.get_spiral_forward_stage_build_phase_size()
+                    * sbs.get_spipe_forward_stage_build_phase_size()
                     * self.num_layers
-                    + sbs.get_spiral_forward_stage_build_phase()
+                    + sbs.get_spipe_forward_stage_build_phase()
                     * self.num_layers
                 )
-            elif mpu.is_spiral_backward_stage():
+            elif mpu.is_spipe_backward_stage():
                 self.num_layers = (
                     self.num_layers
-                    // mpu.get_spiral_backward_virtual_size()
-                    // sbs.get_spiral_backward_stage_build_phase_size()
+                    // mpu.get_spipe_backward_virtual_size()
+                    // sbs.get_spipe_backward_stage_build_phase_size()
                 )
                 offset = (
-                    mpu.get_spiral_backward_virtual_rank()
+                    mpu.get_spipe_backward_virtual_rank()
                     * (
                         args.num_layers
-                        // mpu.get_spiral_backward_virtual_size()
+                        // mpu.get_spipe_backward_virtual_size()
                     )
                     + (
                         mpu.get_pipeline_model_parallel_world_size()
                         - mpu.get_pipeline_model_parallel_rank()
                         - 1
                     )
-                    * sbs.get_spiral_backward_stage_build_phase_size()
+                    * sbs.get_spipe_backward_stage_build_phase_size()
                     * self.num_layers
-                    + sbs.get_spiral_backward_stage_build_phase()
+                    + sbs.get_spipe_backward_stage_build_phase()
                     * self.num_layers
                 )
             else:
                 raise Exception(
-                    "ParallelTransformer: Fail to set num_layers and offset according to SpiralPipe stage"
+                    "ParallelTransformer: Fail to set num_layers and offset according to SPipe stage"
                 )
         else:
             # Each stage gets a contiguous set of layers.

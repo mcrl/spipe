@@ -26,7 +26,7 @@ int check_gdr_support(int device_id)
     return gdr_support;
   }
 #endif
-  // TODO (SpiralPipe) Check check_gdr_support() in
+  // TODO (SPipe) Check check_gdr_support() in
   // https://github.com/NVIDIA/gdrcopy/blob/master/tests/common.cpp
   if (_DEBUG_GDR)
     printf("GPUDirect RDMA support check for CUDA version < 11.3 is currently "

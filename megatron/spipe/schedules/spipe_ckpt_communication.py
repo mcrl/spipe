@@ -1,0 +1,190 @@
+import nvtx
+from typing import List, Union
+
+import torch
+import torch.distributed as dist
+
+import megatron.spipe.build_state as sbs
+from megatron.core import mpu
+from megatron.spipe.build_state import bwd_phase2local_stage_phase
+from megatron.spipe.debug import spipe_print
+from .spipe_ckpt_schedule import CkptSendRecvType
+
+
+# Types
+Shape = Union[List[int], torch.Size]
+
+# Constants
+_DEBUG_CKPT_COMMUNICATION = False
+
+
+# Handle for self send/recv
+class NOP_Wait:
+    @staticmethod
+    def wait():
+        pass
+
+
+def _get_empty_tensor(tensor_shape: Shape, dtype: torch.dtype) -> torch.Tensor:
+    return torch.empty(
+        tensor_shape,
+        requires_grad=True,
+        device=torch.cuda.current_device(),
+        dtype=dtype,
+    )
+
+
+@nvtx.annotate("comm_ckpt", color="darkgreen")
+def comm_ckpt(
+    schedule,
+    model,
+    ckpt_recvs,
+    tensor_shape: Shape,
+    dtype: torch.dtype,
+    ts: int,
+    batch_p2p_comm: bool = False,
+):
+    if _DEBUG_CKPT_COMMUNICATION:
+        spipe_print(f"comm: {schedule}")
+
+    recvs, reqs = [], []
+    batch_ops = []
+    batch_ops_reqs_idx = []
+
+    for idx, op in enumerate(schedule):
+
+        phase_fwd_rank = sbs.get_pp_rank_for_fwd_phase(op.phase_id)
+        local_stage_id, local_phase_id = sbs.fwd_phase2local_stage_phase(op.phase_id)
+
+        _prefix = str(schedule[idx])
+
+        if op.comm_type == CkptSendRecvType.RECV:
+            assert (
+                phase_fwd_rank == op.rank
+            ), f"[RECV] phase_fwd_rank = {phase_fwd_rank}, rank = {op.rank} mismatch"
+
+            if op.phase_id == 0:
+                if _DEBUG_CKPT_COMMUNICATION:
+                    spipe_print(_prefix + " Phase 0 => insert None to recvs")
+                recvs.append(None)
+                reqs.append(NOP_Wait)
+            elif op.rank == mpu.get_pipeline_model_parallel_rank():
+                if _DEBUG_CKPT_COMMUNICATION:
+                    spipe_print(_prefix + " Self recv => pop ckpt and insert to recvs")
+                # NOTE (SPipe) Using the popped input tensor from original fwd stage can lead to trouble, as it contains
+                # the computation graph constructed already. We are prone to this error when #fwd != #bwd and hence the same rank
+                # can perform fwd and bwd of the same phase. Re-computation using this tensor will lead to duplicated computation
+                # graph being constructed. So, we currently perform the original FWD in torch.no_grad() mode, and then recompute
+                # in BWD without torch.no_grad(). Another solution may exist.
+                input_ckpt_ = (
+                    model[local_stage_id]
+                    .module[local_phase_id]
+                    .spipe_input_tensors.popleft()
+                    .detach()
+                    .requires_grad_()
+                )
+
+                assert (
+                    input_ckpt_.requires_grad
+                ), "Input ckpt must require grad before feeding to BWD"
+                recvs.append(input_ckpt_)
+                reqs.append(NOP_Wait)
+
+            else:
+                if _DEBUG_CKPT_COMMUNICATION:
+                    spipe_print(
+                        _prefix + " Recv from other rank => append to recvs"
+                    )
+                et = _get_empty_tensor(tensor_shape, dtype)
+                src = (
+                    mpu.translate_pp_rank_to_cm_rank(op.rank)
+                    if mpu.is_spipe_cross_mapping()
+                    else op.rank
+                )
+                if batch_p2p_comm:
+                    batch_ops.append(
+                        dist.P2POp(
+                            dist.irecv,
+                            et,
+                            src,
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
+                        )
+                    )
+                    reqs.append(NOP_Wait) # dummy req, will be replaced later
+                    batch_ops_reqs_idx.append(idx)
+                else:
+                    reqs.append(
+                        dist.irecv(
+                            et,
+                            src=src,
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
+                        )
+                    )
+                recvs.append(et)
+
+        elif op.comm_type == CkptSendRecvType.SEND:
+            assert (
+                phase_fwd_rank == mpu.get_pipeline_model_parallel_rank()
+            ), f"[SEND] phase_fwd_rank = {phase_fwd_rank}, self = {mpu.get_pipeline_model_parallel_rank()} mismatch"
+
+            if op.phase_id == 0:
+                if _DEBUG_CKPT_COMMUNICATION:
+                    spipe_print(_prefix + " Phase 0 => skip")
+                reqs.append(NOP_Wait)
+            elif op.rank == mpu.get_pipeline_model_parallel_rank():
+                if _DEBUG_CKPT_COMMUNICATION:
+                    spipe_print(_prefix + " Self send => skip")
+                reqs.append(NOP_Wait)
+            else:
+                if _DEBUG_CKPT_COMMUNICATION:
+                    spipe_print(_prefix + " Send to other rank => pop ckpt")
+                input_ckpt_ = (
+                    model[local_stage_id]
+                    .module[local_phase_id]
+                    .spipe_input_tensors.popleft()
+                )
+                dst = (
+                    mpu.translate_pp_rank_to_cm_rank(op.rank)
+                    if mpu.is_spipe_cross_mapping()
+                    else op.rank
+                )
+                if batch_p2p_comm:
+                    batch_ops.append(
+                        dist.P2POp(
+                            dist.isend,
+                            input_ckpt_,
+                            dst,
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
+                        )
+                    )
+                    reqs.append(NOP_Wait) # dummy req, will be replaced later
+                    batch_ops_reqs_idx.append(idx)
+                else:
+                    reqs.append(
+                        dist.isend(
+                            input_ckpt_,
+                            dst,
+                            group=mpu.get_spipe_input_tensor_ckpt_group_ts(ts),
+                        )
+                    )
+
+        else:
+            raise RuntimeError(f"Invalid comm type {op.comm_type}")
+
+    if batch_p2p_comm:
+        if len(batch_ops) > 0:
+            [batch_reqs] = dist.batch_isend_irecv(batch_ops)
+            for _idx in batch_ops_reqs_idx:
+                reqs[_idx] = batch_reqs # NOTE: this is quite shitty...
+
+    if recvs and len(recvs) > 0:
+        # zip only recv with corresponding req from same op => append to ckpt_recvs
+        for recv, (req, op) in zip(
+            recvs,
+            filter(
+                lambda x: x[1].comm_type == CkptSendRecvType.RECV,
+                zip(reqs, schedule),
+            ),
+        ):
+            bid, _ = bwd_phase2local_stage_phase(op.phase_id)
+            ckpt_recvs[bid].append((recv, [req]))

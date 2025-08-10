@@ -10,24 +10,24 @@ from typing import Optional
 from .utils import GlobalMemoryBuffer
 
 # Intra-layer model parallel group that the current rank belongs to.
-# spiral tp group gloo required for core/tensor_parallel/data.py _build_key_size_numel_dictionaries() broadcast of `sizes` in cpu, since "d2h" in the original logic of h2d -> bcast -> d2h conflicts with overlapped gradient offload of spiral due to d2h bandwidth contention
+# spipe tp group gloo required for core/tensor_parallel/data.py _build_key_size_numel_dictionaries() broadcast of `sizes` in cpu, since "d2h" in the original logic of h2d -> bcast -> d2h conflicts with overlapped gradient offload of spipe due to d2h bandwidth contention
 _TENSOR_MODEL_PARALLEL_GROUP = None
-_SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO = None
+_SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO = None
 # Inter-layer model parallel group that the current rank belongs to.
 _PIPELINE_MODEL_PARALLEL_GROUP = None
 # Model parallel group (both intra- and pipeline) that the current rank belongs to.
 _MODEL_PARALLEL_GROUP = None
 # Embedding group.
 _EMBEDDING_GROUP = None
-_SPIRAL_EMBEDDING_GROUP = None
-_SPIRAL_EMBEDDING_GROUP_GLOO = None
+_SPIPE_EMBEDDING_GROUP = None
+_SPIPE_EMBEDDING_GROUP_GLOO = None
 # Position embedding group.
 _POSITION_EMBEDDING_GROUP = None
-_SPIRAL_POSITION_EMBEDDING_GROUP = None
-_SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
-# Input tensor checkpoint group for SpiralPipe
-_SPIRAL_INPUT_TENSOR_CKPT_GROUPS = None
-_SPIRAL_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD = None
+_SPIPE_POSITION_EMBEDDING_GROUP = None
+_SPIPE_POSITION_EMBEDDING_GROUP_GLOO = None
+# Input tensor checkpoint group for SPipe
+_SPIPE_INPUT_TENSOR_CKPT_GROUPS = None
+_SPIPE_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD = None
 
 # Data parallel group that the current rank belongs to.
 _DATA_PARALLEL_GROUP = None
@@ -47,11 +47,11 @@ _MPU_PIPELINE_MODEL_PARALLEL_RANK = None
 
 # A list of ranks that have a copy of the embedding.
 _EMBEDDING_GLOBAL_RANKS = None
-_SPIRAL_EMBEDDING_GLOBAL_RANKS = None
+_SPIPE_EMBEDDING_GLOBAL_RANKS = None
 
 # A list of ranks that have a copy of the position embedding.
 _POSITION_EMBEDDING_GLOBAL_RANKS = None
-_SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None
+_SPIPE_POSITION_EMBEDDING_GLOBAL_RANKS = None
 
 # A list of global ranks for each pipeline group to ease calculation of the source
 # rank when broadcasting from the first or last pipeline stage.
@@ -64,27 +64,27 @@ _DATA_PARALLEL_GLOBAL_RANKS = None
 # Memory buffers to avoid dynamic memory allocation
 _GLOBAL_MEMORY_BUFFER = None
 
-# Whether SpiralPipe is enable or not
-_SPIRAL = None
-_SPIRAL_REMAP = None
-_SPIRAL_FORWARD_VIRTUAL_RANK = None # should set rank value only when active
-_SPIRAL_BACKWARD_VIRTUAL_RANK = None # should set rank value only when active
-_SPIRAL_FORWARD_VIRTUAL_SIZE = None
-_SPIRAL_BACKWARD_VIRTUAL_SIZE = None
+# Whether SPipe is enable or not
+_SPIPE = None
+_SPIPE_REMAP = None
+_SPIPE_FORWARD_VIRTUAL_RANK = None # should set rank value only when active
+_SPIPE_BACKWARD_VIRTUAL_RANK = None # should set rank value only when active
+_SPIPE_FORWARD_VIRTUAL_SIZE = None
+_SPIPE_BACKWARD_VIRTUAL_SIZE = None
 
-# SpiralPipe cross mapping
-# spiral cross mapping rank list: idx - cm rank, element - pp rank
-# spiral cross mapping cm rank to pp rank dict: { cm rank: pp rank }
-# spiral cross mapping pp rank to cm rank dict: { pp rank: cm rank }
-_SPIRAL_CROSS_MAPPING = None
-_SPIRAL_CROSS_MAPPING_LIST = None
-_SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
-_SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
+# SPipe cross mapping
+# spipe cross mapping rank list: idx - cm rank, element - pp rank
+# spipe cross mapping cm rank to pp rank dict: { cm rank: pp rank }
+# spipe cross mapping pp rank to cm rank dict: { pp rank: cm rank }
+_SPIPE_CROSS_MAPPING = None
+_SPIPE_CROSS_MAPPING_LIST = None
+_SPIPE_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
+_SPIPE_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
 
-# Below SpiralPipe variables are lazily set after spiral backend init using CommInfo
-_SPIRAL_INTRA_SIZE = None
-_SPIRAL_INTRA_RANK = None
-_SPIRAL_IS_HOST_LEADER = None
+# Below SPipe variables are lazily set after spipe backend init using CommInfo
+_SPIPE_INTRA_SIZE = None
+_SPIPE_INTRA_RANK = None
+_SPIPE_IS_HOST_LEADER = None
 
 
 def initialize_model_parallel(
@@ -92,12 +92,12 @@ def initialize_model_parallel(
     pipeline_model_parallel_size: int = 1,
     virtual_pipeline_model_parallel_size: Optional[int] = None,
     pipeline_model_parallel_split_rank: Optional[int] = None,
-    spiral: bool = False,
-    spiral_remap: bool = False,
-    spiral_forward_virtual_size: Optional[int] = None,
-    spiral_backward_virtual_size: Optional[int] = None,
-    spiral_cross_mapping: bool = False,
-    spiral_input_tensor_ckpt_groups_threshold: int = 1,
+    spipe: bool = False,
+    spipe_remap: bool = False,
+    spipe_forward_virtual_size: Optional[int] = None,
+    spipe_backward_virtual_size: Optional[int] = None,
+    spipe_cross_mapping: bool = False,
+    spipe_input_tensor_ckpt_groups_threshold: int = 1,
     use_fp8: bool = False,
 ) -> None:
     """Initialize model data parallel groups.
@@ -138,17 +138,17 @@ def initialize_model_parallel(
             pipeline_model_parallel_split_rank is 3, then ranks 0-2
             will be the encoder and ranks 3-7 will be the decoder.
 
-        spiral (bool, default = False):
-            Whether to use SpiralPipe.
+        spipe (bool, default = False):
+            Whether to use SPipe.
 
-        spiral_remap (bool, default = False):
-            Whether to use SpiralPipe remapping-aware parallel state.
+        spipe_remap (bool, default = False):
+            Whether to use SPipe remapping-aware parallel state.
 
-        spiral_forward_virtual_size (int, optional):
-            The number of forward virtual stages that each SpiralPipe pipeline rank will have
+        spipe_forward_virtual_size (int, optional):
+            The number of forward virtual stages that each SPipe pipeline rank will have
 
-        spiral_backward_virtual_size (int, optional):
-            The number of backward virtual stages that each SpiralPipe pipeline rank will have
+        spipe_backward_virtual_size (int, optional):
+            The number of backward virtual stages that each SPipe pipeline rank will have
 
         use_fp8 (bool, default = False):
             Construct GPU groups needed for FP8 training, namely for
@@ -198,30 +198,30 @@ def initialize_model_parallel(
         _VIRTUAL_PIPELINE_MODEL_PARALLEL_RANK = 0
         _VIRTUAL_PIPELINE_MODEL_PARALLEL_WORLD_SIZE = virtual_pipeline_model_parallel_size
 
-    if spiral:
+    if spipe:
         if virtual_pipeline_model_parallel_size is not None:
-            raise RuntimeError("virtual pipeline parallel is not compatible with SpiralPipe")
-        global _SPIRAL
-        _SPIRAL = spiral
-        global _SPIRAL_REMAP
-        _SPIRAL_REMAP = spiral_remap
-        global _SPIRAL_FORWARD_VIRTUAL_RANK
-        global _SPIRAL_BACKWARD_VIRTUAL_RANK
-        global _SPIRAL_FORWARD_VIRTUAL_SIZE
-        global _SPIRAL_BACKWARD_VIRTUAL_SIZE
-        _SPIRAL_FORWARD_VIRTUAL_RANK = None
-        _SPIRAL_BACKWARD_VIRTUAL_RANK = None
-        if spiral_forward_virtual_size is not None:
-            _SPIRAL_FORWARD_VIRTUAL_SIZE = spiral_forward_virtual_size
-        if spiral_backward_virtual_size is not None:
-            _SPIRAL_BACKWARD_VIRTUAL_SIZE = spiral_backward_virtual_size
-        global _SPIRAL_CROSS_MAPPING
-        _SPIRAL_CROSS_MAPPING = spiral_cross_mapping
+            raise RuntimeError("virtual pipeline parallel is not compatible with SPipe")
+        global _SPIPE
+        _SPIPE = spipe
+        global _SPIPE_REMAP
+        _SPIPE_REMAP = spipe_remap
+        global _SPIPE_FORWARD_VIRTUAL_RANK
+        global _SPIPE_BACKWARD_VIRTUAL_RANK
+        global _SPIPE_FORWARD_VIRTUAL_SIZE
+        global _SPIPE_BACKWARD_VIRTUAL_SIZE
+        _SPIPE_FORWARD_VIRTUAL_RANK = None
+        _SPIPE_BACKWARD_VIRTUAL_RANK = None
+        if spipe_forward_virtual_size is not None:
+            _SPIPE_FORWARD_VIRTUAL_SIZE = spipe_forward_virtual_size
+        if spipe_backward_virtual_size is not None:
+            _SPIPE_BACKWARD_VIRTUAL_SIZE = spipe_backward_virtual_size
+        global _SPIPE_CROSS_MAPPING
+        _SPIPE_CROSS_MAPPING = spipe_cross_mapping
 
     if pipeline_model_parallel_split_rank is not None:
         global _PIPELINE_MODEL_PARALLEL_SPLIT_RANK
         _PIPELINE_MODEL_PARALLEL_SPLIT_RANK = pipeline_model_parallel_split_rank
-        warnings.warn("SpiralPipe cross mapping currently does not consider pipeline_model_parallel_split_rank. Consequencies are unknown.")
+        warnings.warn("SPipe cross mapping currently does not consider pipeline_model_parallel_split_rank. Consequencies are unknown.")
 
     rank = torch.distributed.get_rank()
 
@@ -256,38 +256,38 @@ def initialize_model_parallel(
 
     # Build the tensor model-parallel groups.
     global _TENSOR_MODEL_PARALLEL_GROUP
-    global _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO
+    global _SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO
     assert _TENSOR_MODEL_PARALLEL_GROUP is None, \
         'tensor model parallel group is already initialized'
-    assert _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO is None, \
-        'spiral tensor model parallel group-gloo is already initialized'
+    assert _SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO is None, \
+        'spipe tensor model parallel group-gloo is already initialized'
     for i in range(num_tensor_model_parallel_groups):
         ranks = range(i * tensor_model_parallel_size,
                       (i + 1) * tensor_model_parallel_size)
         group = torch.distributed.new_group(ranks)
         if rank in ranks:
             _TENSOR_MODEL_PARALLEL_GROUP = group
-            if spiral:
-                _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO = torch.distributed.new_group(ranks, backend="gloo")
+            if spipe:
+                _SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO = torch.distributed.new_group(ranks, backend="gloo")
 
     # Build the pipeline model-parallel groups and embedding groups
     # (first and last rank in each pipeline model-parallel group).
-    # Also build spiral input tensor ckpt group
+    # Also build spipe input tensor ckpt group
     global _PIPELINE_MODEL_PARALLEL_GROUP
     global _PIPELINE_GLOBAL_RANKS
     assert _PIPELINE_MODEL_PARALLEL_GROUP is None, \
         'pipeline model parallel group is already initialized'
     global _EMBEDDING_GROUP
-    global _SPIRAL_EMBEDDING_GROUP
-    global _SPIRAL_EMBEDDING_GROUP_GLOO
+    global _SPIPE_EMBEDDING_GROUP
+    global _SPIPE_EMBEDDING_GROUP_GLOO
     global _EMBEDDING_GLOBAL_RANKS
-    global _SPIRAL_EMBEDDING_GLOBAL_RANKS
+    global _SPIPE_EMBEDDING_GLOBAL_RANKS
     assert _EMBEDDING_GROUP is None, 'embedding group is already initialized'
     global _POSITION_EMBEDDING_GROUP
-    global _SPIRAL_POSITION_EMBEDDING_GROUP
-    global _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO
+    global _SPIPE_POSITION_EMBEDDING_GROUP
+    global _SPIPE_POSITION_EMBEDDING_GROUP_GLOO
     global _POSITION_EMBEDDING_GLOBAL_RANKS
-    global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
+    global _SPIPE_POSITION_EMBEDDING_GLOBAL_RANKS
     assert _POSITION_EMBEDDING_GROUP is None, \
         'position embedding group is already initialized'
 
@@ -298,15 +298,15 @@ def initialize_model_parallel(
             _PIPELINE_MODEL_PARALLEL_GROUP = group
             _PIPELINE_GLOBAL_RANKS = ranks
 
-        # Setup spiral cross mapping
+        # Setup spipe cross mapping
         if rank in ranks:
-            if _SPIRAL_CROSS_MAPPING:
-                global _SPIRAL_CROSS_MAPPING_LIST
-                global _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
-                global _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
-                _SPIRAL_CROSS_MAPPING_LIST = apply_spiral_cross_mapping(list(ranks))
-                _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = {cm_rank: pp_rank for cm_rank, pp_rank in enumerate(_SPIRAL_CROSS_MAPPING_LIST)}
-                _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = {pp_rank: cm_rank for cm_rank, pp_rank in enumerate(_SPIRAL_CROSS_MAPPING_LIST)}
+            if _SPIPE_CROSS_MAPPING:
+                global _SPIPE_CROSS_MAPPING_LIST
+                global _SPIPE_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
+                global _SPIPE_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
+                _SPIPE_CROSS_MAPPING_LIST = apply_spipe_cross_mapping(list(ranks))
+                _SPIPE_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = {cm_rank: pp_rank for cm_rank, pp_rank in enumerate(_SPIPE_CROSS_MAPPING_LIST)}
+                _SPIPE_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = {pp_rank: cm_rank for cm_rank, pp_rank in enumerate(_SPIPE_CROSS_MAPPING_LIST)}
 
         # Setup embedding group (to exchange gradients between
         # first and last stages).
@@ -321,21 +321,21 @@ def initialize_model_parallel(
                 if ranks[pipeline_model_parallel_split_rank] not in position_embedding_ranks:
                     position_embedding_ranks = [ranks[0],
                                        ranks[pipeline_model_parallel_split_rank]]
-            if _SPIRAL and _SPIRAL_REMAP:
-                if _SPIRAL_CROSS_MAPPING:
-                    spiral_embedding_ranks = [_SPIRAL_CROSS_MAPPING_LIST[0], _SPIRAL_CROSS_MAPPING_LIST[-1]]
-                    spiral_position_embedding_ranks = [_SPIRAL_CROSS_MAPPING_LIST[0], _SPIRAL_CROSS_MAPPING_LIST[-1]] # since forward and backward both have a prep stage
+            if _SPIPE and _SPIPE_REMAP:
+                if _SPIPE_CROSS_MAPPING:
+                    spipe_embedding_ranks = [_SPIPE_CROSS_MAPPING_LIST[0], _SPIPE_CROSS_MAPPING_LIST[-1]]
+                    spipe_position_embedding_ranks = [_SPIPE_CROSS_MAPPING_LIST[0], _SPIPE_CROSS_MAPPING_LIST[-1]] # since forward and backward both have a prep stage
                 else:
-                    spiral_embedding_ranks = [ranks[0], ranks[-1]]
-                    spiral_position_embedding_ranks = [ranks[0], ranks[-1]] # since forward and backward both have a prep stage
+                    spipe_embedding_ranks = [ranks[0], ranks[-1]]
+                    spipe_position_embedding_ranks = [ranks[0], ranks[-1]] # since forward and backward both have a prep stage
         else:
             embedding_ranks = ranks
             position_embedding_ranks = ranks
 
-            if _SPIRAL and _SPIRAL_REMAP:
-                spiral_embedding_ranks = ranks
-                spiral_position_embedding_ranks = ranks
-                # no need to have separate control flow for spiral cross mapping
+            if _SPIPE and _SPIPE_REMAP:
+                spipe_embedding_ranks = ranks
+                spipe_position_embedding_ranks = ranks
+                # no need to have separate control flow for spipe cross mapping
 
         group = torch.distributed.new_group(embedding_ranks)
         if rank in embedding_ranks:
@@ -343,14 +343,14 @@ def initialize_model_parallel(
         if rank in ranks:
             _EMBEDDING_GLOBAL_RANKS = embedding_ranks
 
-        if _SPIRAL and _SPIRAL_REMAP:
-            group = torch.distributed.new_group(spiral_embedding_ranks)
-            group_gloo = torch.distributed.new_group(spiral_embedding_ranks, backend="gloo")
-            if rank in spiral_embedding_ranks:
-                _SPIRAL_EMBEDDING_GROUP = group
-                _SPIRAL_EMBEDDING_GROUP_GLOO = group_gloo
+        if _SPIPE and _SPIPE_REMAP:
+            group = torch.distributed.new_group(spipe_embedding_ranks)
+            group_gloo = torch.distributed.new_group(spipe_embedding_ranks, backend="gloo")
+            if rank in spipe_embedding_ranks:
+                _SPIPE_EMBEDDING_GROUP = group
+                _SPIPE_EMBEDDING_GROUP_GLOO = group_gloo
             if rank in ranks:
-                _SPIRAL_EMBEDDING_GLOBAL_RANKS = spiral_embedding_ranks
+                _SPIPE_EMBEDDING_GLOBAL_RANKS = spipe_embedding_ranks
 
         group = torch.distributed.new_group(position_embedding_ranks)
         if rank in position_embedding_ranks:
@@ -358,27 +358,27 @@ def initialize_model_parallel(
         if rank in ranks:
             _POSITION_EMBEDDING_GLOBAL_RANKS = position_embedding_ranks
 
-        if _SPIRAL and _SPIRAL_REMAP:
-            group = torch.distributed.new_group(spiral_position_embedding_ranks)
-            group_gloo = torch.distributed.new_group(spiral_position_embedding_ranks, backend="gloo")
-            if rank in spiral_position_embedding_ranks:
-                _SPIRAL_POSITION_EMBEDDING_GROUP = group
-                _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = group_gloo
+        if _SPIPE and _SPIPE_REMAP:
+            group = torch.distributed.new_group(spipe_position_embedding_ranks)
+            group_gloo = torch.distributed.new_group(spipe_position_embedding_ranks, backend="gloo")
+            if rank in spipe_position_embedding_ranks:
+                _SPIPE_POSITION_EMBEDDING_GROUP = group
+                _SPIPE_POSITION_EMBEDDING_GROUP_GLOO = group_gloo
             if rank in ranks:
-                _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = spiral_position_embedding_ranks
+                _SPIPE_POSITION_EMBEDDING_GLOBAL_RANKS = spipe_position_embedding_ranks
 
-        if _SPIRAL and _SPIRAL_REMAP:
-            global _SPIRAL_INPUT_TENSOR_CKPT_GROUPS
-            global _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD
+        if _SPIPE and _SPIPE_REMAP:
+            global _SPIPE_INPUT_TENSOR_CKPT_GROUPS
+            global _SPIPE_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD
 
-            _SPIRAL_INPUT_TENSOR_CKPT_GROUPS = []
-            _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD = spiral_input_tensor_ckpt_groups_threshold
+            _SPIPE_INPUT_TENSOR_CKPT_GROUPS = []
+            _SPIPE_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD = spipe_input_tensor_ckpt_groups_threshold
 
-            for _ in range(_SPIRAL_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD):
+            for _ in range(_SPIPE_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD):
                 group = torch.distributed.new_group(ranks)
                 if rank in ranks:
-                    _SPIRAL_INPUT_TENSOR_CKPT_GROUPS.append(group)
-                    # NOTE (SpiralPipe)
+                    _SPIPE_INPUT_TENSOR_CKPT_GROUPS.append(group)
+                    # NOTE (SPipe)
                     # Perform an entire-rank-participating collective call to init the group
                     # in order to use batch_isend_recv
                     # https://pytorch.org/docs/2.0/distributed.html#:~:text=Note%20that%20when,group%20are%20allowed.
@@ -435,11 +435,11 @@ def get_tensor_model_parallel_group():
     return _TENSOR_MODEL_PARALLEL_GROUP
 
 
-def get_spiral_tensor_model_parallel_group_gloo():
-    """Get the spiral tensor model parallel group-gloo the caller rank belongs to."""
-    assert _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO is not None, \
-        'spiral tensor model parallel group-gloo is not initialized'
-    return _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO
+def get_spipe_tensor_model_parallel_group_gloo():
+    """Get the spipe tensor model parallel group-gloo the caller rank belongs to."""
+    assert _SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO is not None, \
+        'spipe tensor model parallel group-gloo is not initialized'
+    return _SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO
 
 
 def get_pipeline_model_parallel_group():
@@ -470,18 +470,18 @@ def get_embedding_group():
     return _EMBEDDING_GROUP
 
 
-def get_spiral_embedding_group():
+def get_spipe_embedding_group():
     """Get the embedding group the caller rank belongs to."""
-    assert _SPIRAL_EMBEDDING_GROUP is not None, \
-        'spiral embedding group is not initialized'
-    return _SPIRAL_EMBEDDING_GROUP
+    assert _SPIPE_EMBEDDING_GROUP is not None, \
+        'spipe embedding group is not initialized'
+    return _SPIPE_EMBEDDING_GROUP
 
 
-def get_spiral_embedding_group_gloo():
+def get_spipe_embedding_group_gloo():
     """Get the embedding group-gloo the caller rank belongs to."""
-    assert _SPIRAL_EMBEDDING_GROUP_GLOO is not None, \
-        'spiral embedding group-gloo is not initialized'
-    return _SPIRAL_EMBEDDING_GROUP_GLOO
+    assert _SPIPE_EMBEDDING_GROUP_GLOO is not None, \
+        'spipe embedding group-gloo is not initialized'
+    return _SPIPE_EMBEDDING_GROUP_GLOO
 
 
 def get_position_embedding_group():
@@ -491,22 +491,22 @@ def get_position_embedding_group():
     return _POSITION_EMBEDDING_GROUP
 
 
-def get_spiral_position_embedding_group():
+def get_spipe_position_embedding_group():
     """Get the position embedding group the caller rank belongs to."""
-    assert _SPIRAL_POSITION_EMBEDDING_GROUP is not None, \
-        'spiral position embedding group is not initialized'
-    return _SPIRAL_POSITION_EMBEDDING_GROUP
+    assert _SPIPE_POSITION_EMBEDDING_GROUP is not None, \
+        'spipe position embedding group is not initialized'
+    return _SPIPE_POSITION_EMBEDDING_GROUP
 
 
-def get_spiral_position_embedding_group_gloo():
+def get_spipe_position_embedding_group_gloo():
     """Get the position embedding group-gloo the caller rank belongs to."""
-    assert _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO is not None, \
-        'spiral position embedding group-gloo is not initialized'
-    return _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO
+    assert _SPIPE_POSITION_EMBEDDING_GROUP_GLOO is not None, \
+        'spipe position embedding group-gloo is not initialized'
+    return _SPIPE_POSITION_EMBEDDING_GROUP_GLOO
 
 
-def get_spiral_input_tensor_ckpt_group_ts(ts):
-    return _SPIRAL_INPUT_TENSOR_CKPT_GROUPS[ts%_SPIRAL_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD]
+def get_spipe_input_tensor_ckpt_group_ts(ts):
+    return _SPIPE_INPUT_TENSOR_CKPT_GROUPS[ts%_SPIPE_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD]
 
 
 def get_amax_reduction_group():
@@ -582,18 +582,18 @@ def get_pipeline_model_parallel_rank():
         rank = _MPU_PIPELINE_MODEL_PARALLEL_RANK
     else:
         rank = torch.distributed.get_rank(group=get_pipeline_model_parallel_group())
-    if _SPIRAL_CROSS_MAPPING:
-        assert _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT is not None
-        rank = _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT[rank]
+    if _SPIPE_CROSS_MAPPING:
+        assert _SPIPE_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT is not None
+        rank = _SPIPE_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT[rank]
     return rank
 
 
 def translate_cm_rank_to_pp_rank(cm_rank):
     """Return the pp_rank of the cm_rank. Generally used to translate back before
     communication calls using pp_rank based groups"""
-    assert _SPIRAL_CROSS_MAPPING
-    assert _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT is not None
-    return _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT[cm_rank]
+    assert _SPIPE_CROSS_MAPPING
+    assert _SPIPE_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT is not None
+    return _SPIPE_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT[cm_rank]
 
 
 def get_pipeline_model_parallel_split_rank():
@@ -604,25 +604,25 @@ def get_pipeline_model_parallel_split_rank():
 
 def is_pipeline_first_stage(ignore_virtual=False):
     """Return True if in the first pipeline model-parallel stage, False otherwise."""
-    if _SPIRAL:
+    if _SPIPE:
         if ignore_virtual:
             # Only for spipe 1f1b
             return get_pipeline_model_parallel_rank() == 0
-        if _SPIRAL_REMAP:
-            # For SpiralPipe with remapping, lowest idx forward virtual stage and
+        if _SPIPE_REMAP:
+            # For SPipe with remapping, lowest idx forward virtual stage and
             # lowest idx backward virtual stage is the first stage
-            _is_forward_virtual_first_stage = get_spiral_forward_virtual_rank() == 0 and \
+            _is_forward_virtual_first_stage = get_spipe_forward_virtual_rank() == 0 and \
             get_pipeline_model_parallel_rank() == 0
-            _is_backward_virtual_first_stage = get_spiral_backward_virtual_rank() == 0 and \
+            _is_backward_virtual_first_stage = get_spipe_backward_virtual_rank() == 0 and \
             get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
             return _is_forward_virtual_first_stage or _is_backward_virtual_first_stage
         else:
             return get_pipeline_model_parallel_rank() == 0 and (
-                get_spiral_forward_virtual_rank() == 0
-                or get_spiral_backward_virtual_rank() == 0
+                get_spipe_forward_virtual_rank() == 0
+                or get_spipe_backward_virtual_rank() == 0
             )
 
-    # NOTE (SpiralPipe) below is original logic
+    # NOTE (SPipe) below is original logic
     if not ignore_virtual:
         if get_virtual_pipeline_model_parallel_world_size() is not None and \
             get_virtual_pipeline_model_parallel_rank() != 0:
@@ -632,25 +632,25 @@ def is_pipeline_first_stage(ignore_virtual=False):
 
 def is_pipeline_last_stage(ignore_virtual=False):
     """Return True if in the last pipeline model-parallel stage, False otherwise."""
-    if _SPIRAL:
+    if _SPIPE:
         if ignore_virtual:
             # Only for spipe 1f1b
             return get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
-        if _SPIRAL_REMAP:
-            # For SpiralPipe with remapping, highest idx forward virtual stage and
+        if _SPIPE_REMAP:
+            # For SPipe with remapping, highest idx forward virtual stage and
             # highest idx backward virtual stage is the last stage
-            _is_forward_virtual_last_stage = get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1 and \
+            _is_forward_virtual_last_stage = get_spipe_forward_virtual_rank() == get_spipe_forward_virtual_size() - 1 and \
             get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1
-            _is_backward_virtual_last_stage = get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1 and \
+            _is_backward_virtual_last_stage = get_spipe_backward_virtual_rank() == get_spipe_backward_virtual_size() - 1 and \
             get_pipeline_model_parallel_rank() == 0
             return _is_forward_virtual_last_stage or _is_backward_virtual_last_stage
         else:
             return get_pipeline_model_parallel_rank() == get_pipeline_model_parallel_world_size() - 1 and (
-                get_spiral_forward_virtual_rank() == get_spiral_forward_virtual_size() - 1
-                or get_spiral_backward_virtual_rank() == get_spiral_backward_virtual_size() - 1
+                get_spipe_forward_virtual_rank() == get_spipe_forward_virtual_size() - 1
+                or get_spipe_backward_virtual_rank() == get_spipe_backward_virtual_size() - 1
             )
 
-    # NOTE (SpiralPipe) below is original logic
+    # NOTE (SPipe) below is original logic
     if not ignore_virtual:
         virtual_pipeline_model_parallel_world_size = \
             get_virtual_pipeline_model_parallel_world_size()
@@ -724,85 +724,85 @@ def is_pipeline_stage_at_split():
             is_pipeline_stage_after_split(rank+1)
 
 
-def is_spiral():
-    """Return true if SpiralPipe is enabled."""
-    if _SPIRAL is None:
+def is_spipe():
+    """Return true if SPipe is enabled."""
+    if _SPIPE is None:
         return False
-    return _SPIRAL
+    return _SPIPE
 
 
-def is_spiral_remap():
-    """Return true if SpiralPipe with remapping is enabled"""
-    if _SPIRAL is None:
+def is_spipe_remap():
+    """Return true if SPipe with remapping is enabled"""
+    if _SPIPE is None:
         return False
-    if _SPIRAL_REMAP is None:
+    if _SPIPE_REMAP is None:
         return False
-    return _SPIRAL and _SPIRAL_REMAP
+    return _SPIPE and _SPIPE_REMAP
 
 
-def is_spiral_cross_mapping():
-    """Return true if SpiralPipe cross mapping is enabled"""
-    if _SPIRAL is None:
+def is_spipe_cross_mapping():
+    """Return true if SPipe cross mapping is enabled"""
+    if _SPIPE is None:
         return False
-    if _SPIRAL_CROSS_MAPPING is None:
+    if _SPIPE_CROSS_MAPPING is None:
         return False
-    return _SPIRAL and _SPIRAL_CROSS_MAPPING
+    return _SPIPE and _SPIPE_CROSS_MAPPING
 
 
-def is_spiral_forward_stage():
-    """Return true if current stage is a forward stage in SpiralPipe."""
-    if not _SPIRAL:
-        raise RuntimeError("is_spiral_forward_stage is only valid when SpiralPipe is enabled")
-    return get_spiral_forward_virtual_rank() is not None and \
-        get_spiral_backward_virtual_rank() is None
+def is_spipe_forward_stage():
+    """Return true if current stage is a forward stage in SPipe."""
+    if not _SPIPE:
+        raise RuntimeError("is_spipe_forward_stage is only valid when SPipe is enabled")
+    return get_spipe_forward_virtual_rank() is not None and \
+        get_spipe_backward_virtual_rank() is None
 
 
-def is_spiral_backward_stage():
-    """Return true if current stage is a backward stage in SpiralPipe."""
-    if not _SPIRAL:
-        raise RuntimeError("is_spiral_backward_stage is only valid when SpiralPipe is enabled")
-    return get_spiral_backward_virtual_rank() is not None and \
-        get_spiral_forward_virtual_rank() is None
+def is_spipe_backward_stage():
+    """Return true if current stage is a backward stage in SPipe."""
+    if not _SPIPE:
+        raise RuntimeError("is_spipe_backward_stage is only valid when SPipe is enabled")
+    return get_spipe_backward_virtual_rank() is not None and \
+        get_spipe_forward_virtual_rank() is None
 
 
-def get_spiral_forward_virtual_rank():
-    global _SPIRAL_FORWARD_VIRTUAL_RANK
-    return _SPIRAL_FORWARD_VIRTUAL_RANK
+def get_spipe_forward_virtual_rank():
+    global _SPIPE_FORWARD_VIRTUAL_RANK
+    return _SPIPE_FORWARD_VIRTUAL_RANK
 
 
-def set_spiral_forward_virtual_rank(rank):
-    global _SPIRAL_FORWARD_VIRTUAL_RANK
-    _SPIRAL_FORWARD_VIRTUAL_RANK = rank
+def set_spipe_forward_virtual_rank(rank):
+    global _SPIPE_FORWARD_VIRTUAL_RANK
+    _SPIPE_FORWARD_VIRTUAL_RANK = rank
 
 
-def get_spiral_backward_virtual_rank():
-    global _SPIRAL_BACKWARD_VIRTUAL_RANK
-    return _SPIRAL_BACKWARD_VIRTUAL_RANK
+def get_spipe_backward_virtual_rank():
+    global _SPIPE_BACKWARD_VIRTUAL_RANK
+    return _SPIPE_BACKWARD_VIRTUAL_RANK
 
 
-def set_spiral_backward_virtual_rank(rank):
-    global _SPIRAL_BACKWARD_VIRTUAL_RANK
-    _SPIRAL_BACKWARD_VIRTUAL_RANK = rank
+def set_spipe_backward_virtual_rank(rank):
+    global _SPIPE_BACKWARD_VIRTUAL_RANK
+    _SPIPE_BACKWARD_VIRTUAL_RANK = rank
 
 
-def get_spiral_forward_virtual_size():
-    global _SPIRAL_FORWARD_VIRTUAL_SIZE
-    return _SPIRAL_FORWARD_VIRTUAL_SIZE
+def get_spipe_forward_virtual_size():
+    global _SPIPE_FORWARD_VIRTUAL_SIZE
+    return _SPIPE_FORWARD_VIRTUAL_SIZE
 
 
-def set_spiral_forward_virtual_size(size):
-    global _SPIRAL_FORWARD_VIRTUAL_SIZE
-    _SPIRAL_FORWARD_VIRTUAL_SIZE = size
+def set_spipe_forward_virtual_size(size):
+    global _SPIPE_FORWARD_VIRTUAL_SIZE
+    _SPIPE_FORWARD_VIRTUAL_SIZE = size
 
 
-def get_spiral_backward_virtual_size():
-    global _SPIRAL_BACKWARD_VIRTUAL_SIZE
-    return _SPIRAL_BACKWARD_VIRTUAL_SIZE
+def get_spipe_backward_virtual_size():
+    global _SPIPE_BACKWARD_VIRTUAL_SIZE
+    return _SPIPE_BACKWARD_VIRTUAL_SIZE
 
 
-def set_spiral_backward_virtual_size(size):
-    global _SPIRAL_BACKWARD_VIRTUAL_SIZE
-    _SPIRAL_BACKWARD_VIRTUAL_SIZE = size
+def set_spipe_backward_virtual_size(size):
+    global _SPIPE_BACKWARD_VIRTUAL_SIZE
+    _SPIPE_BACKWARD_VIRTUAL_SIZE = size
 
 
 def get_virtual_pipeline_model_parallel_rank():
@@ -848,11 +848,11 @@ def get_data_parallel_src_rank():
 def get_pipeline_model_parallel_first_rank():
     """Return the global rank of the first process in the pipeline for the
     current pipeline model parallel group
-    NOTE (SpiralPipe) Returns `pp rank` of the first `cm rank` process
+    NOTE (SPipe) Returns `pp rank` of the first `cm rank` process
     """
-    if _SPIRAL_CROSS_MAPPING:
-        assert _SPIRAL_CROSS_MAPPING_LIST is not None
-        return _SPIRAL_CROSS_MAPPING_LIST[0]
+    if _SPIPE_CROSS_MAPPING:
+        assert _SPIPE_CROSS_MAPPING_LIST is not None
+        return _SPIPE_CROSS_MAPPING_LIST[0]
     else:
         assert _PIPELINE_GLOBAL_RANKS is not None, \
             "Pipeline parallel group is not initialized"
@@ -862,11 +862,11 @@ def get_pipeline_model_parallel_first_rank():
 def get_pipeline_model_parallel_last_rank():
     """Return the global rank of the last process in the pipeline for the
     current tensor parallel group
-    NOTE (SpiralPipe) Returns `pp rank` of the last `cm rank` process
+    NOTE (SPipe) Returns `pp rank` of the last `cm rank` process
     """
-    if _SPIRAL_CROSS_MAPPING:
-        assert _SPIRAL_CROSS_MAPPING_LIST is not None
-        return _SPIRAL_CROSS_MAPPING_LIST[-1]
+    if _SPIPE_CROSS_MAPPING:
+        assert _SPIPE_CROSS_MAPPING_LIST is not None
+        return _SPIPE_CROSS_MAPPING_LIST[-1]
     else:
         assert _PIPELINE_GLOBAL_RANKS is not None, \
             "Pipeline parallel group is not initialized"
@@ -875,13 +875,13 @@ def get_pipeline_model_parallel_last_rank():
 
 def get_pipeline_model_parallel_next_rank():
     """Return the global rank that follows the caller in the pipeline
-    NOTE (SpiralPipe) Returns `pp rank` of the next `cm rank` process
+    NOTE (SPipe) Returns `pp rank` of the next `cm rank` process
     """
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
-    if _SPIRAL_CROSS_MAPPING:
-        assert _SPIRAL_CROSS_MAPPING_LIST is not None
-        return _SPIRAL_CROSS_MAPPING_LIST[(rank_in_pipeline + 1) % world_size]
+    if _SPIPE_CROSS_MAPPING:
+        assert _SPIPE_CROSS_MAPPING_LIST is not None
+        return _SPIPE_CROSS_MAPPING_LIST[(rank_in_pipeline + 1) % world_size]
     else:
         assert _PIPELINE_GLOBAL_RANKS is not None, \
             "Pipeline parallel group is not initialized"
@@ -890,13 +890,13 @@ def get_pipeline_model_parallel_next_rank():
 
 def get_pipeline_model_parallel_prev_rank():
     """Return the global rank that preceeds the caller in the pipeline
-    NOTE (SpiralPipe) Returns `pp rank` of the previous `cm rank` process
+    NOTE (SPipe) Returns `pp rank` of the previous `cm rank` process
     """
     rank_in_pipeline = get_pipeline_model_parallel_rank()
     world_size = get_pipeline_model_parallel_world_size()
-    if _SPIRAL_CROSS_MAPPING:
-        assert _SPIRAL_CROSS_MAPPING_LIST is not None
-        return _SPIRAL_CROSS_MAPPING_LIST[(rank_in_pipeline - 1) % world_size]
+    if _SPIPE_CROSS_MAPPING:
+        assert _SPIPE_CROSS_MAPPING_LIST is not None
+        return _SPIPE_CROSS_MAPPING_LIST[(rank_in_pipeline - 1) % world_size]
     else:
         assert _PIPELINE_GLOBAL_RANKS is not None, \
             "Pipeline parallel group is not initialized"
@@ -923,29 +923,29 @@ def get_global_memory_buffer():
     assert _GLOBAL_MEMORY_BUFFER is not None, 'global memory buffer is not initialized'
     return _GLOBAL_MEMORY_BUFFER
 
-def get_spiral_intra_rank():
-    assert _SPIRAL_INTRA_RANK is not None
-    return _SPIRAL_INTRA_RANK
+def get_spipe_intra_rank():
+    assert _SPIPE_INTRA_RANK is not None
+    return _SPIPE_INTRA_RANK
 
-def set_spiral_intra_rank(rank):
-    global _SPIRAL_INTRA_RANK
-    _SPIRAL_INTRA_RANK = rank
+def set_spipe_intra_rank(rank):
+    global _SPIPE_INTRA_RANK
+    _SPIPE_INTRA_RANK = rank
 
-def get_spiral_intra_size():
-    assert _SPIRAL_INTRA_SIZE is not None
-    return _SPIRAL_INTRA_SIZE
+def get_spipe_intra_size():
+    assert _SPIPE_INTRA_SIZE is not None
+    return _SPIPE_INTRA_SIZE
 
-def set_spiral_intra_size(size):
-    global _SPIRAL_INTRA_SIZE
-    _SPIRAL_INTRA_SIZE = size
+def set_spipe_intra_size(size):
+    global _SPIPE_INTRA_SIZE
+    _SPIPE_INTRA_SIZE = size
 
-def get_spiral_is_host_leader():
-    assert _SPIRAL_IS_HOST_LEADER is not None
-    return _SPIRAL_IS_HOST_LEADER
+def get_spipe_is_host_leader():
+    assert _SPIPE_IS_HOST_LEADER is not None
+    return _SPIPE_IS_HOST_LEADER
 
-def set_spiral_is_host_leader(is_leader: bool):
-    global _SPIRAL_IS_HOST_LEADER
-    _SPIRAL_IS_HOST_LEADER = is_leader
+def set_spipe_is_host_leader(is_leader: bool):
+    global _SPIPE_IS_HOST_LEADER
+    _SPIPE_IS_HOST_LEADER = is_leader
 
 
 def destroy_model_parallel():
@@ -988,64 +988,64 @@ def destroy_model_parallel():
     global _GLOBAL_MEMORY_BUFFER
     _GLOBAL_MEMORY_BUFFER = None
 
-    # SpiralPipe
-    global _SPIRAL
-    _SPIRAL = None
-    global _SPIRAL_REMAP
-    _SPIRAL_REMAP = None
-    global _SPIRAL_FORWARD_VIRTUAL_RANK
-    _SPIRAL_FORWARD_VIRTUAL_RANK = None
-    global _SPIRAL_BACKWARD_VIRTUAL_RANK
-    _SPIRAL_BACKWARD_VIRTUAL_RANK = None
-    global _SPIRAL_FORWARD_VIRTUAL_SIZE
-    _SPIRAL_FORWARD_VIRTUAL_SIZE = None
-    global _SPIRAL_BACKWARD_VIRTUAL_SIZE
-    _SPIRAL_BACKWARD_VIRTUAL_SIZE = None
+    # SPipe
+    global _SPIPE
+    _SPIPE = None
+    global _SPIPE_REMAP
+    _SPIPE_REMAP = None
+    global _SPIPE_FORWARD_VIRTUAL_RANK
+    _SPIPE_FORWARD_VIRTUAL_RANK = None
+    global _SPIPE_BACKWARD_VIRTUAL_RANK
+    _SPIPE_BACKWARD_VIRTUAL_RANK = None
+    global _SPIPE_FORWARD_VIRTUAL_SIZE
+    _SPIPE_FORWARD_VIRTUAL_SIZE = None
+    global _SPIPE_BACKWARD_VIRTUAL_SIZE
+    _SPIPE_BACKWARD_VIRTUAL_SIZE = None
 
-    global _SPIRAL_INPUT_TENSOR_CKPT_GROUPS
-    _SPIRAL_INPUT_TENSOR_CKPT_GROUPS = None
-    global _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD
-    _SPIRAL_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD = None
+    global _SPIPE_INPUT_TENSOR_CKPT_GROUPS
+    _SPIPE_INPUT_TENSOR_CKPT_GROUPS = None
+    global _SPIPE_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD
+    _SPIPE_INPUT_TENSOR_CKPT_GROUPS_THRESHOLD = None
 
-    global _SPIRAL_INTRA_RANK
-    _SPIRAL_INTRA_RANK = None
-    global _SPIRAL_INTRA_SIZE
-    _SPIRAL_INTRA_SIZE = None
-    global _SPIRAL_IS_HOST_LEADER
-    _SPIRAL_IS_HOST_LEADER = None
+    global _SPIPE_INTRA_RANK
+    _SPIPE_INTRA_RANK = None
+    global _SPIPE_INTRA_SIZE
+    _SPIPE_INTRA_SIZE = None
+    global _SPIPE_IS_HOST_LEADER
+    _SPIPE_IS_HOST_LEADER = None
 
-    global _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO
-    _SPIRAL_TENSOR_MODEL_PARALLEL_GROUP_GLOO = None
+    global _SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO
+    _SPIPE_TENSOR_MODEL_PARALLEL_GROUP_GLOO = None
 
-    global _SPIRAL_EMBEDDING_GROUP
-    _SPIRAL_EMBEDDING_GROUP = None
-    global _SPIRAL_EMBEDDING_GROUP_GLOO
-    _SPIRAL_EMBEDDING_GROUP_GLOO = None
-    global _SPIRAL_POSITION_EMBEDDING_GROUP
-    _SPIRAL_POSITION_EMBEDDING_GROUP = None
-    global _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO
-    _SPIRAL_POSITION_EMBEDDING_GROUP_GLOO = None
-    global _SPIRAL_EMBEDDING_GLOBAL_RANKS
-    _SPIRAL_EMBEDDING_GLOBAL_RANKS = None
-    global _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS
-    _SPIRAL_POSITION_EMBEDDING_GLOBAL_RANKS = None
+    global _SPIPE_EMBEDDING_GROUP
+    _SPIPE_EMBEDDING_GROUP = None
+    global _SPIPE_EMBEDDING_GROUP_GLOO
+    _SPIPE_EMBEDDING_GROUP_GLOO = None
+    global _SPIPE_POSITION_EMBEDDING_GROUP
+    _SPIPE_POSITION_EMBEDDING_GROUP = None
+    global _SPIPE_POSITION_EMBEDDING_GROUP_GLOO
+    _SPIPE_POSITION_EMBEDDING_GROUP_GLOO = None
+    global _SPIPE_EMBEDDING_GLOBAL_RANKS
+    _SPIPE_EMBEDDING_GLOBAL_RANKS = None
+    global _SPIPE_POSITION_EMBEDDING_GLOBAL_RANKS
+    _SPIPE_POSITION_EMBEDDING_GLOBAL_RANKS = None
 
-    global _SPIRAL_CROSS_MAPPING
-    _SPIRAL_CROSS_MAPPING = None
-    global _SPIRAL_CROSS_MAPPING_LIST
-    _SPIRAL_CROSS_MAPPING_LIST = None
-    global _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
-    _SPIRAL_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
-    global _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
-    _SPIRAL_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
+    global _SPIPE_CROSS_MAPPING
+    _SPIPE_CROSS_MAPPING = None
+    global _SPIPE_CROSS_MAPPING_LIST
+    _SPIPE_CROSS_MAPPING_LIST = None
+    global _SPIPE_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT
+    _SPIPE_CROSS_MAPPING_CM_RANK_TO_PP_RANK_DICT = None
+    global _SPIPE_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT
+    _SPIPE_CROSS_MAPPING_PP_RANK_TO_CM_RANK_DICT = None
 
 
 # Cross mapping
-def apply_spiral_cross_mapping(ranks):
+def apply_spipe_cross_mapping(ranks):
     """ Converts sorted pp rank list into list whose index is cm_rank and element is pp_rank.
     Maps into pattern which elimiates inter-node fetch (when fvs==bvs) and minimizes inter-node activation comm.
 
-    TODO (SpiralPipe) currently assumes nprocs_per_node=4 and stride=2
+    TODO (SPipe) currently assumes nprocs_per_node=4 and stride=2
     """
     assert ranks == sorted(ranks), "pp rank list must be sorted before appy cross mapping"
 
