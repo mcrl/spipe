@@ -1,6 +1,6 @@
 #!/bin/bash
 
-while getopts "j:n:s:t:l:f:b:m:g:o:u:v:w:x:y:z:" opt
+while getopts "j:n:s:t:l:f:b:m:g:o:q:u:v:w:x:y:z:" opt
 do
     case "$opt" in
         j ) JOB_TYPE="$OPTARG" ;;
@@ -13,6 +13,7 @@ do
         m ) MBS="$OPTARG" ;;
         g ) GBS="$OPTARG" ;;
         o ) OPTIMIZER="$OPTARG" ;;
+        q ) BLOCK_PREFETCH="$OPTARG" ;;
         u ) OMP_NUM_THREADS="$OPTARG" ;;
         v ) ACTV_P2P="$OPTARG" ;;
         w ) INIT_LOSS_SCALE_POWER="$OPTARG" ;;
@@ -125,6 +126,12 @@ else
     SPIPE_ACTV_P2P=NO
 fi
 
+if [[ "$BLOCK_PREFETCH" == "1" ]]; then
+    SPIPE_BLOCK_PREFETCH=YES
+else
+    SPIPE_BLOCK_PREFETCH=NO
+fi
+
 # config for interleaving
 INTERLEAVE_VIRTUAL_SIZE=${FWD_STAGE:=2}
 
@@ -137,6 +144,7 @@ echo -e "SPIPE_STAGE_OPTIMIZER=${SPIPE_STAGE_OPTIMIZER}(omp=${OMP_NUM_THREADS},p
 echo -e "SPIPE_ACTV_P2P=${SPIPE_ACTV_P2P}"
 echo -e "SPIPE_CROSS_MAPPING=${SPIPE_CROSS_MAPPING}"
 echo -e "SPIPE_SYNC_CKPT_COMMUNICATION=${SPIPE_SYNC_CKPT_COMMUNICATION}"
+echo -e "SPIPE_BLOCK_PREFETCH=${SPIPE_BLOCK_PREFETCH}"
 echo -e "SPIPE_FWD=${SPIPE_FWD}\nSPIPE_BWD=${SPIPE_BWD}"
 echo -e "INTERLEAVE_VIRTUAL_SIZE=${INTERLEAVE_VIRTUAL_SIZE}"
 echo "==========================================="

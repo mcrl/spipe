@@ -33,3 +33,7 @@ fi
 if [ ${SPIPE_ACTV_P2P} == "YES" ]; then
     EXTRA_ARGS+=" --spipe-actv-p2p"
 fi
+
+if [ ${SPIPE_BLOCK_PREFETCH} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-block-prefetch"
+fi

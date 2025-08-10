@@ -18,6 +18,7 @@ from .p2p_communication import (
 from .schedule import (
     spipe_schedule,
     mobius_schedule,
+    mobius_no_prefetch_schedule,
     onefoneb_schedule,
 )
 from .optimizer.stage_optimizer import (
