@@ -36,7 +36,7 @@ source spipe-aec/spipe/scripts/setup_data.sh
 - The `setup_conda.sh` creates a conda environment and installs PyTorch and spipe dependencies.
 - The `setup_dataset.sh` downloads and preprocesses the dataset for deep learning experiments.
 
-## Evaulation
+## Evaluation
 
 ```bash
 bash eval_speedup.sh
