@@ -25,10 +25,10 @@ $ tar xf spipe-aec.tar.gz
 Execute the following initialization scripts **once**:
 
 ```bash
-$ source spipe-aec/spipe/script/setup_env.sh
-$ source spipe-aec/spipe/script/setup_mpi.sh
-$ source spipe-aec/spipe/script/setup_conda.sh
-$ source spipe-aec/spipe/script/setup_data.sh
+$ source spipe-aec/spipe/scripts/setup_env.sh
+$ source spipe-aec/spipe/scripts/setup_mpi.sh
+$ source spipe-aec/spipe/scripts/setup_conda.sh
+$ source spipe-aec/spipe/scripts/setup_data.sh
 ```
 
 - The `setup_env.sh` sets necessary environment variables such as `SPIPE_ROOT` used in the later steps. This script should be executed before any other scripts for each shell open.

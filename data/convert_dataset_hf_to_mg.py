@@ -1,17 +1,6 @@
-import torch
 import argparse
-from datasets import load_dataset, load_from_disk
-import pyarrow as pa
+from datasets import load_dataset
 import time
-from torch.utils.data import DataLoader
-from tqdm import tqdm
-from itertools import chain
-from transformers import (
-  AutoTokenizer,
-)
-import sys, os
-import torch.multiprocessing
-import itertools
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--dataset_name", type=str)
@@ -23,7 +12,7 @@ parser.add_argument("--output", type=str)
 args = parser.parse_args()
 
 st = time.time()
-raw_datasets = load_dataset(args.dataset_name, args.dataset_config, cache_dir=args.cache_dir, num_proc=args.preprocessing_num_workers)
+raw_datasets = load_dataset(args.dataset_name, args.dataset_config, cache_dir=args.cache_dir, num_proc=args.preprocessing_num_workers, trust_remote_code=True)
 elapsed = time.time() - st
 print(f'load_dataset Elapsed time: {elapsed} seconds')
 
