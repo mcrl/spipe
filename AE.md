@@ -3,7 +3,7 @@
 This document provides instructions for obtaining the artifact, performing necessary preprocessing, and executing experiments using the provided scripts.
 
 ```python
-git clone --branch PACT-AE --recurse-submodules https://github.com/mcrl/spipe.git
+git clone --recurse-submodules https://github.com/mcrl/spipe.git
 ```
 
 ## Prerequisites
@@ -25,10 +25,10 @@ $ tar xf spipe-aec.tar.gz
 Execute the following initialization scripts **once**:
 
 ```bash
-$ source spipe-aec/spipe/scripts/setup_env.sh
-$ source spipe-aec/spipe/scripts/setup_mpi.sh
-$ source spipe-aec/spipe/scripts/setup_conda.sh
-$ source spipe-aec/spipe/scripts/setup_data.sh
+source spipe-aec/spipe/scripts/setup_env.sh
+source spipe-aec/spipe/scripts/setup_mpi.sh
+source spipe-aec/spipe/scripts/setup_conda.sh
+source spipe-aec/spipe/scripts/setup_data.sh
 ```
 
 - The `setup_env.sh` sets necessary environment variables such as `SPIPE_ROOT` used in the later steps. This script should be executed before any other scripts for each shell open.
@@ -36,9 +36,18 @@ $ source spipe-aec/spipe/scripts/setup_data.sh
 - The `setup_conda.sh` creates a conda environment and installs PyTorch and spipe dependencies.
 - The `setup_dataset.sh` downloads and preprocesses the dataset for deep learning experiments.
 
-## Experiment Workflow
+## Evaluation
 
+```bash
+bash eval_speedup.sh
+bash eval_batch_scaling.sh
+bash eval_optimizations.sh
 ```
-source spipe-aec/spipe/script/setup_env.sh
-sbatch -p spipe -N 1 $SPIPE_ROOT/examples/run.sh -j spipe -n llama2 -w 16 -z 2048 -s 10 -f 2 -b 6 -t 3 -l 1 -m 1 -g 16 -v 1 -u 2 -o stage
-```
+
+- The `eval_speedup.sh` evaluates speedup between DeepSpeed, Mobius, Megatron, and SPipe.
+- The `eval_batch_scaling.sh` evaluates scaling of micro-batch size and mini-batch size for SPipe.
+- The `eval_optimizations.sh` evaluates impact of adding system optimizations to SPipe.
+
+## Expectation
+
+TBD

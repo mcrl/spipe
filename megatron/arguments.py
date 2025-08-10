@@ -463,6 +463,8 @@ def validate_args(args, defaults={}):
                 "SPipe does not support remapping/1f1b/mobius together")
         if args.spipe_1f1b and not args.spipe_actv_p2p:
             raise RuntimeError("Interleaved 1f1b offload currently only implements p2pops-based activation communication")
+        if args.spipe_block_prefetch and not args.spipe_mobius:
+            raise RuntimeError("Block prefetch is currently only implemented in Mobius for PACT'25 AE purpose")
 
     # GQA
     if args.num_key_value_heads is None:
@@ -1161,6 +1163,8 @@ def _add_distributed_args(parser):
     group.add_argument('--spipe-log-gpu-pipeline-latency', action='store_true',
                         help='Log GPU pipeline latency. Measure elapsed time from first prefetch to last offload. '
                         'This is incompatible with stage, hetero, or chunked optimizer, or without overlap offload grad')
+    group.add_argument('--spipe-block-prefetch', action='store_true',
+                        help='Enable SPipe block prefetching')
     return parser
 
 

@@ -20,3 +20,7 @@ if [ ${SPIPE_STAGE_OPTIMIZER} == "YES" ]; then
     --spipe-stage-optimizer \
     --spipe-stage-optimizer-pool-size $SPIPE_STAGE_OPTIMIZER_POOL_SIZE"
 fi
+
+if [ ${SPIPE_BLOCK_PREFETCH} == "YES" ]; then
+    EXTRA_ARGS+=" --spipe-block-prefetch"
+fi
