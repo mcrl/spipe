@@ -49,5 +49,18 @@ bash eval_optimizations.sh
 - The `eval_optimizations.sh` evaluates impact of adding system optimizations to SPipe.
 
 ## Expectation
+The scripts we provide are based on the Slurm environment. When execute the training scripts, log files named `slurm-<jobId>.out` are generated for each job.
 
-TBD
+By executing the script below in the directory where these output files are located, you can extract each job’s configuration and elapsed time based on the log outputs.
+
+```bash
+bash $SPIPE_ROOT/scripts/result_extract.sh
+```
+
+After running the above script, an `actual.csv` file will be created under the `/results` directory. We provide an `expected.csv` file that contains the experimental results from our paper.
+
+Using the script below, you can compare the two result files and calculate the error between them.
+
+```bash
+bash $SPIPE_ROOT/scripts/result_compare.sh
+```
