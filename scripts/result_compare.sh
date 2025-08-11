@@ -4,7 +4,7 @@ expected_file="${SPIPE_ROOT:-.}/results/expected.csv"
 actual_file="${SPIPE_ROOT:-.}/results/actual.csv"
 output_file="${SPIPE_ROOT:-.}/results/compare.csv"
 
-echo "name,cluster,model_size,mubs,mbs,nnode,seq,expected_elapsed_ms,actual_elapsed_ms,error_percent" > "$output_file"
+echo "jobid,name,cluster,model_size,mubs,mbs,nnode,seq,expected_elapsed_ms,actual_elapsed_ms,error_percent" > "$output_file"
 
 declare -A exp_elapsed
 
@@ -29,5 +29,5 @@ while IFS=, read -r jobid name cluster model_size mubs mbs nnode seq tflops elap
         error_percent=""
     fi
 
-    echo "$name,$cluster,$model_size,$mubs,$mbs,$nnode,$seq,$exp_val,$elapsed,${error_percent}%" >> "$output_file"
+    echo "$jobid,$name,$cluster,$model_size,$mubs,$mbs,$nnode,$seq,$exp_val,$elapsed,${error_percent}%" >> "$output_file"
 done < "$actual_file"
