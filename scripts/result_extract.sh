@@ -1,6 +1,6 @@
 #!/bin/bash
 
-output_file=${SPIPE_ROOT:-.}/results/actual_result.csv
+output_file=${SPIPE_ROOT:-.}/results/actual.csv
 
 echo "jobid,name,cluster,model_size,mubs,mbs,nnode,seq,tflops,elapsed_time_ms,gpu_latency" > "$output_file"
 

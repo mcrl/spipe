@@ -1,8 +1,8 @@
 #!/bin/bash
 
-expected_file="${SPIPE_ROOT:-.}/results/expected_result.csv"
-actual_file="${SPIPE_ROOT:-.}/results/actual_result.csv"
-output_file="${SPIPE_ROOT:-.}/results/compare_result.csv"
+expected_file="${SPIPE_ROOT:-.}/results/expected.csv"
+actual_file="${SPIPE_ROOT:-.}/results/actual.csv"
+output_file="${SPIPE_ROOT:-.}/results/compare.csv"
 
 echo "name,cluster,model_size,mubs,mbs,nnode,seq,expected_elapsed_ms,actual_elapsed_ms,error_percent" > "$output_file"
 
