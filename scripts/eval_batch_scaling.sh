@@ -1,6 +1,6 @@
 #!/bin/bash
 
-RUN=./examples/run.sh
+RUN=${SPIPE_ROOT:-.}/examples/run.sh
 TRAIN_ITER=2
 LOG_ITER=2
 PARTITION=spipe-v100
