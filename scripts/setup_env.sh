@@ -8,7 +8,7 @@ export MPI_ROOT=$SPIPE_AEC_ROOT/ompi/build
 export PATH="$MPI_ROOT/bin:$UCX_ROOT/bin:$PATH"
 export LD_LIBRARY_PATH="$MPI_ROOT/lib:$UCX_ROOT/lib:$LD_LIBRARY_PATH"
 
-export CONDA_ENV=spipe-v7
+export CONDA_ENV=spipe-pact
 conda activate $CONDA_ENV
 
 export DATA_PATH=$SPIPE_AEC_ROOT/workspace/datasets/openwebtext_text_document
