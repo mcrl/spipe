@@ -69,8 +69,6 @@ fi
 # Remove newline
 EXEC_CMD=$(echo "$EXEC_CMD" | tr '\n' ' ')
 
-echo "$EXEC_CMD"
-
 # Run script
 mpirun --bind-to none --report-bindings -npernode $GPUS_PER_NODE -host $HOSTS $MPI_OPTIONS -x OMP_NUM_THREADS=$OMP_NUM_THREADS \
     bash -c "${EXEC_CMD}"
