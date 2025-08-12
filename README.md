@@ -35,13 +35,12 @@ spipe/
 
 ### Dependencies
 - Python 3.8
-- UCX
-- ompi
+- UCX 1.14.1
+- Open MPI 4.1.0
 - CUDA 12.4
 - cuDNN 8.5.0
-- nv_peer_mem
 
-Setting these up is detailed in [PREREQUISITES](./Prerequisites.md).
+Setting these up is detailed in [PREREQUISITES](./PREREQUISITES.md).
 
 ### Clone project
 ```bash
