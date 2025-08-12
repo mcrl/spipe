@@ -9,7 +9,7 @@ This document provides instructions for obtaining the artifact, performing neces
 
 ## Download Artifact Package
 
-The artifact package includes the spipe source code along with compatible versions of UCX, OpenMPI, and APEX.
+The artifact package includes the spipe source code along with compatible versions of UCX, OpenMPI, and Apex.
 
 ```shell
 $ wget https://github.com/mcrl/spipe/releases/download/spipe-aec/spipe-aec.tar.gz
@@ -27,10 +27,10 @@ source spipe-aec/spipe/scripts/setup_conda.sh
 source spipe-aec/spipe/scripts/setup_data.sh
 ```
 
-- The `setup_env.sh` sets necessary environment variables such as `SPIPE_ROOT` used in the later steps. This script should be executed before any other scripts for each shell open.
+- The `setup_env.sh` sets necessary environment variables. Recommended to also set the shell profile to prevent running this script for every new shell session.
 - The `setup_mpi.sh` installs UCX and cuda-aware MPI.
 - The `setup_conda.sh` creates a conda environment and installs PyTorch and spipe dependencies.
-- The `setup_dataset.sh` downloads and preprocesses the dataset for deep learning experiments.
+- The `setup_data.sh` downloads and preprocesses the dataset for deep learning experiments.
 
 ## Evaluation
 
@@ -46,8 +46,8 @@ bash $SPIPE_ROOT/scripts/eval_optimizations.sh
 - The `eval_batch_scaling.sh` evaluates scaling of micro-batch size and mini-batch size for SPipe.
 - The `eval_optimizations.sh` evaluates impact of adding system optimizations to SPipe.
 
-Our experiment defaults to the V100 cluster.
-For the RTX3090 cluster experiment in Figure 10 of the paper, please execute it with the settings below.
+Our scripts defaults to the Cluster V100.
+For the Cluster RTX 3090 experiment in Figure 10 of the paper, please execute it with the settings below.
 (It is recommended to separate the conda environment of the V100 cluster and the RTX3090 cluster.)
 
 ```bash

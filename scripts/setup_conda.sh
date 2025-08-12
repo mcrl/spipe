@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # Create conda environment
+source ~/miniconda3/etc/profile.d/conda.sh
 conda create -n $CONDA_ENV python=3.8 -y
 conda activate $CONDA_ENV
 
@@ -9,7 +10,6 @@ conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvi
 
 # Install apex
 cd $SPIPE_AEC_ROOT/apex
-## git clone https://github.com/NVIDIA/apex && cd apex && git checkout 741bdf5
 CUDA_HOME=$CUDA_ROOT TORCH_CUDA_ARCH_LIST="7.0;8.6" pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings "--build-option=--cpp_ext" --config-settings "--build-option=--cuda_ext" ./
 pip install -r requirements.txt
 
