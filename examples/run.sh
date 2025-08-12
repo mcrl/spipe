@@ -5,7 +5,7 @@
 #SBATCH --mem=0
 #SBATCH --exclusive
 #SBATCH --gres=gpu:4
-#SBATCH --output=slurm-%j-%x.out
+#SBATCH --output=results/slurm-%j-%x.out
 
 ulimit -v unlimited
 
