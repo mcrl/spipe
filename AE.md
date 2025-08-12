@@ -38,15 +38,26 @@ source spipe-aec/spipe/scripts/setup_data.sh
 
 ## Evaluation
 
+Before run the scripts, execute the `setup_env.sh` to set the environment variables.
+
 ```bash
-bash eval_speedup.sh
-bash eval_batch_scaling.sh
-bash eval_optimizations.sh
+bash $SPIPE_ROOT/scripts/eval_speedup.sh
+bash $SPIPE_ROOT/scripts/eval_batch_scaling.sh
+bash $SPIPE_ROOT/scripts/eval_optimizations.sh
 ```
 
-- The `eval_speedup.sh` evaluates speedup between DeepSpeed, Mobius, Megatron, and SPipe.
+- The `eval_speedup.sh` evaluates speedup between DeepSpeed, Mobius, Megatron, and SPipe. 
 - The `eval_batch_scaling.sh` evaluates scaling of micro-batch size and mini-batch size for SPipe.
 - The `eval_optimizations.sh` evaluates impact of adding system optimizations to SPipe.
+
+Our experiment defaults to the V100 cluster.
+For the RTX3090 cluster experiment in Figure 10 of the paper, please execute it with the settings below.
+(It is recommended to separate the conda environment of the V100 cluster and the RTX3090 cluster.)
+
+```bash
+conda activate spipe-pact-3090
+PARTITION=spipe-3090 bash $SPIPE_ROOT/scripts/eval_speedup.sh
+```
 
 ## Expectation
 The scripts we provide are based on the Slurm environment. When execute the training scripts, log files named `slurm-<jobId>.out` are generated for each job.
