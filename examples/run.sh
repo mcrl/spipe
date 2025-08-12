@@ -58,7 +58,13 @@ if [ ${NSYS_ENABLE} == "YES" ]; then
 fi
 
 # Configure numactl
-EXEC_CMD="numactl --cpunodebind \$((3 - \$OMPI_COMM_WORLD_LOCAL_RANK)) --membind \$((3 - \$OMPI_COMM_WORLD_LOCAL_RANK)) ${EXEC_CMD}"
+# Check the partition name and configure numactl accordingly
+if [ "$SLURM_JOB_PARTITION" == "spipe-3090" ]; then
+    EXEC_CMD="numactl --cpunodebind \$((OMPI_COMM_WORLD_LOCAL_RANK / 2)) --membind \$((OMPI_COMM_WORLD_LOCAL_RANK / 2)) ${EXEC_CMD}"
+else
+    EXEC_CMD="numactl --cpunodebind \$((3 - \$OMPI_COMM_WORLD_LOCAL_RANK)) --membind \$((3 - \$OMPI_COMM_WORLD_LOCAL_RANK)) ${EXEC_CMD}"
+fi
+
 
 # Remove newline
 EXEC_CMD=$(echo "$EXEC_CMD" | tr '\n' ' ')
