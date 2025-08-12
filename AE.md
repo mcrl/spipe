@@ -2,10 +2,6 @@
 
 This document provides instructions for obtaining the artifact, performing necessary preprocessing, and executing experiments using the provided scripts.
 
-```python
-git clone --recurse-submodules https://github.com/mcrl/spipe.git
-```
-
 ## Prerequisites
 
 - CUDA 12.4

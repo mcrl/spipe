@@ -27,16 +27,70 @@ spipe/
 │
 ├── examples/               # SPipe usage examples
 ├── data/                   # Data vocab, merge file
-└── scripts/                # Scripts to reproduce
+├── scripts/                # Scripts to reproduce AE
+└── results/                # Execution log files
 ```
 
 ## Build
 
-TBD
+### Dependencies
+- Python 3.8
+- UCX
+- ompi
+- CUDA 12.4
+- cuDNN 8.5.0
+- nv_peer_mem
+
+Setting these up is detailed in [PREREQUISITES](./Prerequisites.md).
+
+### Clone project
+```bash
+git clone --recurse-submodules https://github.com/mcrl/spipe.git
+```
+
+### Environment variables
+Set environment variables in bash profile:
+```bash
+export SPIPE_ROOT=/path/to/spipe
+export CUDA_ROOT=/path/to/cuda
+export UCX_ROOT=/path/to/ucx/installation
+export MPI_ROOT=/path/to/ompi/installation
+export SPIPE_CONDA=<conda_env>
+
+export PATH="$CUDA_ROOT/bin:$MPI_ROOT/bin:$UCX_ROOT/bin:$PATH"
+export LD_LIBRARY_PATH="$CUDA_ROOT/lib64:$MPI_ROOT/lib:$UCX_ROOT/lib:$LD_LIBRARY_PATH"
+```
+
+### Essential installation
+```bash
+# conda
+conda create -n $SPIPE_CONDA python=3.8
+conda activate $SPIPE_CONDA
+
+# PyTorch 12.4
+conda install pytorch torchvision torchaudio pytorch-cuda=12.4 -c pytorch -c nvidia
+
+# Apex 741bdf5
+git clone https://github.com/NVIDIA/apex && cd apex && git checkout 741bdf5
+CUDA_HOME=$CUDA_ROOT TORCH_CUDA_ARCH_LIST="<cuda;arch;list>" pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --global-option="--cpp_ext" --global-option="--cuda_ext" ./
+pip install -r requirements.txt
+
+# mpi4py
+MPICC=/path/to/mpicc python -m pip install mpi4py --no-cache
+
+# submodule DeepSpeed (checkout 5f631ab & cherry-pick a4cd550)
+cd $SPIPE_ROOT/csrc/external/DeepSpeed && TORCH_CUDA_ARCH_LIST="<cuda;arch;list>" DS_BUILD_CPU_ADAM=1 DS_BUILD_UTILS=1 pip install -e . --global-option="build_ext" --global-option="-j16" --no-cache -v --disable-pip-version-check
+
+# misc
+pip install cmake ninja regex pillow pybind11 pyyaml typing-extensions six psutil nvtx py-cpuinfo einops transformers
+
+# spipe_helper
+cd $SPIPE_ROOT/csrc/spipe_helper && CUDA_BUILD_DIR=$CUDA_ROOT MPI_BUILD_DIR=$MPI_ROOT pip install .
+```
 
 ## Examples
 
-We provide working examples for running SPipe in the [`examples/`](/examples) directory.
+TBD
 
 ## Artifact Evaluation
 
