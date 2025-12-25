@@ -1,4 +1,4 @@
-# SPipe
+# SPipe [[Paper]](https://doi.org/10.1109/PACT65351.2025.00014)
 
 Hybrid GPU and CPU Pipeline for Training LLMs under Memory Pressure
 
@@ -93,7 +93,7 @@ TBD
 
 ## Artifact Evaluation
 
-See [Artifact Evaluation](./AE.md) for the details to reproduce the results in the [paper]().
+See [Artifact Evaluation](./AE.md) for the details to reproduce the results in the [paper](https://doi.org/10.1109/PACT65351.2025.00014).
 
 ## References
 If you find SPipe relevant to your research, please consider citing:
@@ -101,7 +101,7 @@ If you find SPipe relevant to your research, please consider citing:
 @inproceedings{spipe-pact25,
     title = {{SPipe}: Hybrid {GPU} and {CPU} Pipeline for Training {LLMs} under Memory Pressure},
     author = {Ryu, Junyeol and Jeong, Yujin and Park, Daeyoung and Kim, Jinpyo and Kim, Heehoon and Lee, Jaejin},
-    booktitle = {Proceedings of the 34th ACM/IEEE/IFIP International Conference on Parallel Architectures and Compilation Techniques},
+    booktitle = {Proceedings of the 34th International Conference on Parallel Architectures and Compilation Techniques (PACT)},
     year = {2025},
 }
 ```
